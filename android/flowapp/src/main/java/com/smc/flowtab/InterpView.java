@@ -28,7 +28,12 @@ public final class InterpView extends View {
     private static final String[] BAR_COL = {"#FF9500", "#00C853", "#FF1F1F", "#E2574C", "#6B7A82", "#4E5C64", "#2979FF"};
     private static final String[] TXT_DARK = {"#FFB84D", "#2BE86B", "#FF5A5A", "#F0857C", "#9AAAB2", "#6B7A82", "#7FB2FF"};
     private static final String[] MOVE_DARK = {"#FF5A5A", "#7A828C", "#2BE86B"};
+    private static final String[] TXT_LIGHT = {"#A85C00", "#00822F", "#C40D0D", "#A8382F", "#5A666D", "#6B7A82", "#0B4FA8"};
+    private static final String[] MOVE_LIGHT = {"#C40D0D", "#77808A", "#00822F"};
     private static final int ST_FORMING = 4;
+    public boolean dark = true;
+
+    public void setDark(boolean dark) { this.dark = dark; setBackgroundColor(Color.parseColor(dark ? "#141414" : "#ffffff")); invalidate(); }
     public String title = "INTERPRETATION  ·  one row per cycle";
 
     public InterpView(Context ctx, FlowModel model) {
@@ -61,10 +66,11 @@ public final class InterpView extends View {
     @Override protected void onDraw(Canvas c) {
         float d = getResources().getDisplayMetrics().density;
         int w = getWidth(), h = getHeight();
-        int dim = Color.parseColor("#6f7a82"), det = Color.parseColor("#8FA0A8");
-        pText.setTypeface(Typeface.DEFAULT_BOLD); pText.setTextSize(fTitle); pText.setColor(Color.parseColor("#7d8492"));
+        int dim = Color.parseColor(dark ? "#6f7a82" : "#8a8a8a"), det = Color.parseColor(dark ? "#8FA0A8" : "#666666");
+        String[] txtPal = dark ? TXT_DARK : TXT_LIGHT, mvPal = dark ? MOVE_DARK : MOVE_LIGHT;
+        pText.setTypeface(Typeface.DEFAULT_BOLD); pText.setTextSize(fTitle); pText.setColor(Color.parseColor(dark ? "#7d8492" : "#9a9a9a"));
         c.drawText(title, PAD, 15 * d, pText);
-        pFill.setColor(Color.parseColor("#2a3138"));
+        pFill.setColor(Color.parseColor(dark ? "#2a3138" : "#dddddd"));
         c.drawRect(PAD, 20 * d, w - PAD, 21 * d, pFill);
         c.save();
         c.clipRect(0, 21 * d, w, h);
@@ -91,15 +97,15 @@ public final class InterpView extends View {
             c.drawText(r.head, x + 12 * d, y + 14 * d, pText);
             String tag = r.forming ? "forming" : ((r.strong || r.st == ST_FORMING || "-".equals(r.name)) ? "" : "weak");
             if (!tag.isEmpty()) {
-                pText.setColor(r.forming ? Color.parseColor(TXT_DARK[col]) : dim);
+                pText.setColor(r.forming ? Color.parseColor(txtPal[col]) : dim);
                 c.drawText(tag, w - PAD - pText.measureText(tag), y + 14 * d, pText);
             }
-            int tc = Color.parseColor(TXT_DARK[col]);
+            int tc = Color.parseColor(txtPal[col]);
             if (!r.strong) tc = (tc & 0x00ffffff) | (165 << 24);
             pText.setTypeface(Typeface.DEFAULT_BOLD); pText.setTextSize(fName); pText.setColor(tc);
             c.drawText(r.name, x + 12 * d, y + 30 * d, pText);
             float nameW = pText.measureText(r.name);
-            int mvc = Color.parseColor(MOVE_DARK[Math.max(0, Math.min(2, r.mvSign + 1))]);
+            int mvc = Color.parseColor(mvPal[Math.max(0, Math.min(2, r.mvSign + 1))]);
             if (r.mvWord != null && !r.mvWord.isEmpty()) {
                 pText.setTypeface(Typeface.DEFAULT_BOLD); pText.setTextSize(fMove); pText.setColor(mvc);
                 c.drawText(r.mvWord, x + 12 * d + nameW + GAP, y + 30 * d, pText);
@@ -114,7 +120,7 @@ public final class InterpView extends View {
                 pText.setColor(dim); c.drawText(r.d2a, x + 12 * d, y + 72 * d, pText);
                 if (r.d2b != null && !r.d2b.isEmpty()) c.drawText(r.d2b, x + 12 * d + pText.measureText(r.d2a) + GAP, y + 72 * d, pText);
             }
-            pFill.setColor(Color.parseColor("#20262b"));
+            pFill.setColor(Color.parseColor(dark ? "#20262b" : "#eeeeee"));
             c.drawRect(x, y + ROW_H - 5 * d, w - PAD, y + ROW_H - 4 * d, pFill);
         }
         c.restore();

@@ -287,6 +287,7 @@ class State:
     rev_hist = -1
     iimp_id = None; interp_id = None; liq_sig = None; tko_id = None
     hlh_out = None; hlh_t = 0.0; hlh_xm = None; hlh_pics = {}
+    bw = True                 # the tablet's Chart Style: the HLH labels are built for a white or a dark ground
     bp_sig = None
     view = None; follow = True
     last_live = 0.0
@@ -490,7 +491,7 @@ def tick_hlh(now):
         S.hlh_xm = _hlh.IdentityXMap()
     pxa = w.__dict__.get("_px_arr")
     bars = None if (pxa is None or np.size(pxa[0]) == 0) else (pxa[0], pxa[1], pxa[2], pxa[3], pxa[4], pxa[5])
-    out = st.build("tab", S.hlh_xm, bloc, True, week_on, now, badges=bdg, tables=tab, poc_runs=pcr, bars=bars)
+    out = st.build("tab", S.hlh_xm, bloc, not S.bw, week_on, now, badges=bdg, tables=tab, poc_runs=pcr, bars=bars)
     if out is S.hlh_out:
         return
     S.hlh_out = out
@@ -591,10 +592,24 @@ def on_cmd(c):
         key = str(c.get("k", "")); v = bool(c.get("v", True))
         if key == "lines":
             w.menu.flow_cross_on.setChecked(v)
+        elif key == "bw":
+            S.bw = v; S.hlh_out = None
         else:
             cb = w.menu.layer_checks.get({"hlh": "m10_hlh", "bigplayer": "m10_bigplayer", "takeover": "cyc_takeover"}.get(key, ""))
             if cb is not None and cb.isChecked() != v:
                 cb.setChecked(v)
+    elif k == "shot":                                          # debug: the offscreen window as the terminal draws it
+        try:
+            w.grab().save(str(c.get("path", "engine_shot.png")))
+            send({"t": "shot", "ok": True})
+        except Exception as ex:
+            send({"t": "shot", "ok": False, "err": str(ex)})
+    elif k == "series":                                        # debug: the terminal's own flow series for a range
+        try:
+            t_, b_, s_ = w._flow.series(float(c["x0"]), float(c["x1"]), float(w._flow_win), int(c.get("max_pts", 4000)))
+            send({"t": "series", "x": b64(t_, "<f8"), "buy": b64(b_), "sell": b64(s_), "bin": float(w._flow.bin)})
+        except Exception as ex:
+            send({"t": "series", "err": str(ex)})
     elif k == "explain":
         L = w.__dict__.get("_iimp_last")
         kx = float(c.get("k", 0))

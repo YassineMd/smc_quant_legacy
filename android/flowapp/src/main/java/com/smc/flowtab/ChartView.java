@@ -44,6 +44,13 @@ public final class ChartView extends View {
     // toggles (the hamburger's)
     public boolean showPrice = true, showFlow = true, showLiq = true, showIimp = true, showLines = true, showTakeover = true;
     public boolean showHlh = false, showBp = false;
+    public boolean bw = true;                       // Chart Style "Simple BW": white canvas, black ink, black / white candles
+    private int cBg, cFg, cTitle, cGuide, cSep, cMid, cInk;
+
+    private void theme() {
+        if (bw) { cBg = Color.WHITE; cFg = Color.BLACK; cTitle = Color.parseColor("#303030"); cGuide = Color.BLACK; cSep = Color.parseColor("#d0d0d0"); cMid = Color.BLACK; cInk = Color.BLACK; }
+        else { cBg = BG; cFg = FG; cTitle = TITLE; cGuide = GUIDE; cSep = Color.parseColor("#2a2f36"); cMid = Color.parseColor("#8a8a8a"); cInk = FG; }
+    }
     public PriceTools tools;                        // the drawing toolbar + Market Position on the PRICE pane
     private float pxTop, pxHgt;                     // the PRICE pane's plot rect (for the tools' map)
     private double pxYl, pxYh;
@@ -124,6 +131,9 @@ public final class ChartView extends View {
             @Override public int dec() { synchronized (M.lock) { return M.dec; } }
             @Override public double now() { return M.nowEngine(); }
             @Override public double live() { synchronized (M.lock) { return M.livePx; } }
+            @Override public float viewRight() { return getWidth(); }
+            @Override public int tzOff() { synchronized (M.lock) { return M.tzOff; } }
+            @Override public boolean bw() { return bw; }
         }, events);
     }
 
@@ -245,7 +255,8 @@ public final class ChartView extends View {
 
     private void drawFrame(Canvas c) {
         layoutPanes();
-        c.drawColor(BG);
+        theme();
+        c.drawColor(cBg);
         double now = M.nowEngine();
         if (follow) { double span = vx1 - vx0; vx1 = now; vx0 = now - span; }
         // snapshot what every pane needs, under the lock, then draw without it
@@ -273,7 +284,7 @@ public final class ChartView extends View {
         if (showLines) drawCycleLines(c, s);
         drawTimeAxis(c);
         if (!s.connected) {
-            pt.setTextSize(13 * d); pt.setColor(TITLE); pt.setTypeface(Typeface.MONOSPACE);
+            pt.setTextSize(13 * d); pt.setColor(cTitle); pt.setTypeface(Typeface.MONOSPACE);
             c.drawText("connecting to the engine (adb reverse tcp:8766)...", 12 * d, getHeight() - TAXIS_H - 8 * d, pt);
         }
     }
@@ -291,9 +302,9 @@ public final class ChartView extends View {
     }
 
     private void title(Canvas c, RectF r, String txt) {
-        pt.setTypeface(Typeface.MONOSPACE); pt.setTextSize(11 * d); pt.setColor(TITLE);
+        pt.setTypeface(Typeface.MONOSPACE); pt.setTextSize(11 * d); pt.setColor(cTitle);
         c.drawText(txt, r.left + 6 * d, r.top + 12 * d, pt);
-        pf.setColor(Color.parseColor("#2a2f36"));
+        pf.setColor(cSep);
         c.drawRect(r.left, r.top, r.right + AXIS_W, r.top + 1, pf);
     }
 
@@ -308,7 +319,7 @@ public final class ChartView extends View {
         double range = hi - lo; if (range <= 0) return;
         double px = range / r.height();
         double step = niceStep(px * 42 * d);
-        pt.setTypeface(Typeface.MONOSPACE); pt.setTextSize(10 * d); pt.setColor(FG);
+        pt.setTypeface(Typeface.MONOSPACE); pt.setTextSize(10 * d); pt.setColor(cFg);
         for (double v = Math.ceil(lo / step) * step; v <= hi; v += step) {
             float y = (float) (r.bottom - (v - lo) / range * r.height());
             if (y < r.top + 6 * d || y > r.bottom - 2 * d) continue;
@@ -381,7 +392,7 @@ public final class ChartView extends View {
         // the live price line + pill
         if (!Double.isNaN(s.livePx)) {
             float y = (float) (top + (yh - s.livePx) / (yh - yl) * hgt);
-            pl.setColor(Color.parseColor("#e8eaed")); pl.setStrokeWidth(1.2f * d); pl.setPathEffect(new DashPathEffect(new float[]{4 * d, 4 * d}, 0));
+            pl.setColor(bw ? Color.BLACK : Color.parseColor("#e8eaed")); pl.setStrokeWidth(1.2f * d); pl.setPathEffect(new DashPathEffect(new float[]{4 * d, 4 * d}, 0));
             c.drawLine(r.left, y, plotR, y, pl); pl.setPathEffect(null);
             c.restore();
             boolean up = s.livePx >= fo;
@@ -401,7 +412,7 @@ public final class ChartView extends View {
         }
         // price axis
         double range = yh - yl; double step = niceStep(range / hgt * 34 * d);
-        pt.setTypeface(Typeface.MONOSPACE); pt.setTextSize(10 * d); pt.setColor(FG);
+        pt.setTypeface(Typeface.MONOSPACE); pt.setTextSize(10 * d); pt.setColor(cFg);
         for (double v = Math.ceil(yl / step) * step; v <= yh; v += step) {
             float y = (float) (top + (yh - v) / range * hgt);
             if (!Double.isNaN(s.livePx) && Math.abs(y - (float) (top + (yh - s.livePx) / range * hgt)) < 16 * d) continue;
@@ -514,7 +525,7 @@ public final class ChartView extends View {
             labels.add(new float[]{x, mid, (float) q[3]});
         }
         if (labels.size() > s.bpLmax) labels = labels.subList(labels.size() - s.bpLmax, labels.size());
-        pt.setTypeface(Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)); pt.setTextSize(10.5f * d); pt.setColor(Color.WHITE);
+        pt.setTypeface(Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)); pt.setTextSize(10.5f * d); pt.setColor(bw ? Color.BLACK : Color.WHITE);
         for (float[] l : labels) { String t = fmtUsdBp(l[2]); c.drawText(t, l[0] - pt.measureText(t) / 2, l[1] + 4 * d, pt); }
         pt.setTypeface(Typeface.MONOSPACE);
     }
@@ -527,6 +538,7 @@ public final class ChartView extends View {
         if (col == C_AB_BUY && !down) { col = -1; hiWick = BAR_COL[C_AB_BUY]; }
         else if (col == C_AB_SELL && !(cl > o)) { col = -1; loWick = BAR_COL[C_AB_SELL]; }
         if (col == C_BRK_BUY || col == C_BRK_SELL || col == C_AB_BUY || col == C_AB_SELL) { fill = BAR_COL[col]; pen = fill; }
+        else if (bw) { fill = down ? Color.BLACK : Color.WHITE; pen = Color.BLACK; }
         else { fill = down ? RED : TEAL; pen = Color.parseColor("#9aa4ae"); }
         pl.setStrokeWidth(1 * d); pl.setColor(pen);
         c.drawLine(xm, yhh, xm, Math.min(yo, yc), pl); c.drawLine(xm, Math.max(yo, yc), xm, yll, pl);
@@ -585,12 +597,13 @@ public final class ChartView extends View {
         double ylo = -room, yhi = yt; double range = yhi - ylo;
         float zeroY = (float) (top + (yhi - 0) / range * hgt);
         c.save(); c.clipRect(r.left, top, r.right, r.bottom);
-        pl.setColor(Color.parseColor("#3a3f46")); pl.setStrokeWidth(1 * d); c.drawLine(r.left, zeroY, plotR, zeroY, pl);
+        pl.setColor(cSep); pl.setStrokeWidth(1 * d); c.drawLine(r.left, zeroY, plotR, zeroY, pl);
         for (int side = 0; side < 2; side++) {
             float[] v = side == 0 ? b : sl;
             path.reset();
             for (int i = 0; i < t.length; i++) {
-                float x = xPx(s.binBase + t[i]); float y = (float) (top + (yhi - v[i]) / range * hgt);
+                // ⚠ (double): binBase is a long and t a float -- their sum was a FLOAT, 128 s steps at 1.79e9
+                float x = xPx((double) s.binBase + (double) t[i]); float y = (float) (top + (yhi - v[i]) / range * hgt);
                 if (i == 0) path.moveTo(x, y); else path.lineTo(x, y);
             }
             pl.setColor(side == 0 ? TEAL : RED); pl.setStrokeWidth(2 * d); pl.setStrokeCap(Paint.Cap.ROUND); pl.setStrokeJoin(Paint.Join.ROUND);
@@ -630,7 +643,7 @@ public final class ChartView extends View {
         pt.setTypeface(Typeface.MONOSPACE); pt.setTextSize(11 * d); pt.setFakeBoldText(true);
         float w = pt.measureText(txt) + 10 * d, hh = 16 * d;
         RectF pill = above ? new RectF(xr - w, y - hh - 2 * d, xr, y - 2 * d) : new RectF(xr - w, y + 2 * d, xr, y + hh + 2 * d);
-        pf.setColor(Color.parseColor("#1c2128")); c.drawRoundRect(pill, 4 * d, 4 * d, pf);
+        if (!bw) { pf.setColor(Color.parseColor("#1c2128")); c.drawRoundRect(pill, 4 * d, 4 * d, pf); }
         pt.setColor(col); c.drawText(txt, pill.left + 5 * d, pill.bottom - 4 * d, pt);
         pt.setFakeBoldText(false);
     }
@@ -699,9 +712,9 @@ public final class ChartView extends View {
         float zeroY = (float) (top + (yhi) / range * hgt);
         c.save(); c.clipRect(r.left, top, r.right, r.bottom);
         // guides: the imbalance terciles, dashed; the midline solid
-        pl.setColor(GUIDE); pl.setStrokeWidth(1 * d); pl.setPathEffect(new DashPathEffect(new float[]{5 * d, 5 * d}, 0));
+        pl.setColor(cGuide); pl.setStrokeWidth(1 * d); pl.setPathEffect(new DashPathEffect(new float[]{5 * d, 5 * d}, 0));
         for (double g : new double[]{Math.log(0.76) / LN2, Math.log(1.37) / LN2}) { float y = (float) (top + (yhi - g) / range * hgt); c.drawLine(r.left, y, plotR, y, pl); }
-        pl.setPathEffect(null); pl.setColor(Color.parseColor("#8a8a8a")); c.drawLine(r.left, zeroY, plotR, zeroY, pl);
+        pl.setPathEffect(null); pl.setColor(cMid); c.drawLine(r.left, zeroY, plotR, zeroY, pl);
         if (s.iN > 0) {
             int last = s.iN - 1;
             if (lines) {
@@ -743,15 +756,16 @@ public final class ChartView extends View {
                     float y0 = (float) (top + (yhi - Math.max(0, v)) / range * hgt), y1 = (float) (top + (yhi - Math.min(0, v)) / range * hgt);
                     if (y1 - y0 < 1) y1 = y0 + 1;
                     if (fillA > 0) { pf.setColor((hx & 0x00ffffff) | (fillA << 24)); c.drawRect(x0, y0, x1, y1, pf); }
-                    pl.setColor((hx & 0x00ffffff) | (penA << 24)); pl.setStrokeWidth((good ? 1.0f : 1.4f) * d); c.drawRect(x0, y0, x1, y1, pl);
+                    int penCol = (bw && fillA == 0) ? Color.BLACK : hx;                 // a hollow bar on white reads in ink
+                    pl.setColor((penCol & 0x00ffffff) | (penA << 24)); pl.setStrokeWidth((good ? 1.0f : 1.4f) * d); c.drawRect(x0, y0, x1, y1, pl);
                     // the wall dot past the tip, the "handed it back" cap across it
                     float xm = 0.5f * (x0 + x1); float tipY = v >= 0 ? y0 : y1;
                     if (!form && s.iWall[i] > -900) {
                         float dy = (float) (pad / range * hgt);
-                        if (s.iWall[i] >= 1.06) { pf.setColor(FG); c.drawCircle(xm, v >= 0 ? tipY - dy : tipY + dy, 3 * d, pf); }
-                        else if (s.iWall[i] <= 0.94 && s.iWall[i] > 0) { pl.setColor(FG); pl.setStrokeWidth(1.2f * d); c.drawCircle(xm, v >= 0 ? tipY - dy : tipY + dy, 3 * d, pl); }
+                        if (s.iWall[i] >= 1.06) { pf.setColor(cInk); c.drawCircle(xm, v >= 0 ? tipY - dy : tipY + dy, 3 * d, pf); }
+                        else if (s.iWall[i] <= 0.94 && s.iWall[i] > 0) { pl.setColor(cInk); pl.setStrokeWidth(1.2f * d); c.drawCircle(xm, v >= 0 ? tipY - dy : tipY + dy, 3 * d, pl); }
                     }
-                    if (!form && s.iKept[i] > -900 && s.iKept[i] <= 0.375) { pl.setColor(FG); pl.setStrokeWidth(2.5f * d); c.drawLine(x0, tipY, x1, tipY, pl); }
+                    if (!form && s.iKept[i] > -900 && s.iKept[i] <= 0.375) { pl.setColor(cInk); pl.setStrokeWidth(2.5f * d); c.drawLine(x0, tipY, x1, tipY, pl); }
                 }
             }
             // the selected bar
@@ -759,10 +773,10 @@ public final class ChartView extends View {
                 int k = nearest(s.iX0, selT);
                 if (k >= 0 && Math.abs(s.iX0[k] - selT) < 1.0) {
                     float x0 = xPx(s.iX0[k]), x1 = xPx(s.iX1[k]);
-                    pf.setColor(Color.argb(26, 255, 255, 255)); c.drawRect(x0, top, x1, r.bottom, pf);
+                    pf.setColor(bw ? Color.argb(26, 0, 0, 0) : Color.argb(26, 255, 255, 255)); c.drawRect(x0, top, x1, r.bottom, pf);
                     double v = s.iV[k];
                     float y0 = (float) (top + (yhi - Math.max(0, v)) / range * hgt), y1 = (float) (top + (yhi - Math.min(0, v)) / range * hgt);
-                    pl.setColor(Color.WHITE); pl.setStrokeWidth(2 * d); c.drawRect(x0, y0, x1, Math.max(y1, y0 + 1), pl);
+                    pl.setColor(cInk); pl.setStrokeWidth(2 * d); c.drawRect(x0, y0, x1, Math.max(y1, y0 + 1), pl);
                 }
             }
             // the readout, bottom right
@@ -776,7 +790,7 @@ public final class ChartView extends View {
         }
         c.restore();
         // the axis: mirrored multiples in None / Delta, signed in Buyer / Seller / Lines
-        pt.setTypeface(Typeface.MONOSPACE); pt.setTextSize(10 * d); pt.setColor(FG);
+        pt.setTypeface(Typeface.MONOSPACE); pt.setTextSize(10 * d); pt.setColor(cFg);
         double stp = lim <= 1.5 ? 0.5 : (lim <= 3 ? 1 : 2);
         for (double v = -Math.floor(lim / stp) * stp; v <= lim + 1e-9; v += stp) {
             float y = (float) (top + (yhi - v) / range * hgt);
@@ -866,12 +880,12 @@ public final class ChartView extends View {
 
     // ------------------------------------------------------------------ the clock axis
     private void drawTimeAxis(Canvas c) {
-        pf.setColor(Color.parseColor("#2a2f36")); c.drawRect(0, timeY, getWidth(), timeY + 1, pf);
+        pf.setColor(cSep); c.drawRect(0, timeY, getWidth(), timeY + 1, pf);
         double span = vx1 - vx0; if (span <= 0) return;
         double[] steps = {60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 21600, 43200};
         double step = steps[steps.length - 1];
         for (double st : steps) { if (st / span * plotR >= 90 * d) { step = st; break; } }
-        pt.setTypeface(Typeface.MONOSPACE); pt.setTextSize(10.5f * d); pt.setColor(FG);
+        pt.setTypeface(Typeface.MONOSPACE); pt.setTextSize(10.5f * d); pt.setColor(cFg);
         int tz; synchronized (M.lock) { tz = M.tzOff; }
         Calendar cal = tz == Integer.MIN_VALUE ? Calendar.getInstance() : Calendar.getInstance(new java.util.SimpleTimeZone(tz * 1000, "PC"));
         for (double t = Math.ceil(vx0 / step) * step; t <= vx1; t += step) {
@@ -881,7 +895,7 @@ public final class ChartView extends View {
             if (step >= 43200) lab = String.format(Locale.US, "%02d/%02d %s", cal.get(Calendar.DAY_OF_MONTH), cal.get(Calendar.MONTH) + 1, lab);
             float w = pt.measureText(lab);
             c.drawText(lab, x - w / 2, timeY + 15 * d, pt);
-            pf.setColor(Color.parseColor("#3a3f46")); c.drawRect(x, timeY, x + 1, timeY + 4 * d, pf);
+            pf.setColor(cSep); c.drawRect(x, timeY, x + 1, timeY + 4 * d, pf);
         }
     }
 

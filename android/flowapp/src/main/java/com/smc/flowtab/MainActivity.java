@@ -31,6 +31,9 @@ public final class MainActivity extends Activity implements EngineClient.Listene
     private SharedPreferences prefs;
     private double pendingExplain = Double.NaN;
     private AlertDialog explainDlg;
+    private Button paperBtn;                  // the Paper LIVE ledger, next to the hamburger, only with Market Position on
+    private FrameLayout root;
+    private boolean bw = true;
     private View popupAnchor;                 // a 1x1 view moved under the I x I dropdown button so the menu drops from it
     private static final String[] MODES = {"None", "Buyer", "Seller", "Delta", "Lines Buyer/Seller"};
 
@@ -54,13 +57,14 @@ public final class MainActivity extends Activity implements EngineClient.Listene
         });
         chart.tools.showMarket = prefs.getBoolean("market", true);
         chart.tools.showBar = prefs.getBoolean("drawbar", true);
+        bw = prefs.getBoolean("bw", true);
         interp.setVisibility(prefs.getBoolean("interp", true) ? View.VISIBLE : View.GONE);
 
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.addView(chart, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.74f));
         row.addView(interp, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.26f));
-        FrameLayout root = new FrameLayout(this);
+        root = new FrameLayout(this);
         root.setBackgroundColor(Color.parseColor("#141414"));
         root.addView(row, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         Button menu = new Button(this);
@@ -72,6 +76,15 @@ public final class MainActivity extends Activity implements EngineClient.Listene
         FrameLayout.LayoutParams mp = new FrameLayout.LayoutParams(sz, sz, Gravity.TOP | Gravity.END);
         mp.setMargins(0, (int) Ui.dp(this, 6), (int) Ui.dp(this, 6), 0);
         root.addView(menu, mp);
+        paperBtn = new Button(this);
+        paperBtn.setText("\ud83d\udcc4");
+        paperBtn.setTextSize(16);
+        paperBtn.setBackgroundColor(Color.parseColor("#20242c"));
+        FrameLayout.LayoutParams pp = new FrameLayout.LayoutParams(sz, sz, Gravity.TOP | Gravity.END);
+        pp.setMargins(0, (int) Ui.dp(this, 6), (int) Ui.dp(this, 6) + sz + (int) Ui.dp(this, 6), 0);
+        root.addView(paperBtn, pp);
+        paperBtn.setOnClickListener(v -> showPaper());
+        applyStyle();
         popupAnchor = new View(this);
         root.addView(popupAnchor, new FrameLayout.LayoutParams(1, 1, Gravity.TOP | Gravity.START));
         menu.setOnClickListener(v -> showMenu());
@@ -88,6 +101,58 @@ public final class MainActivity extends Activity implements EngineClient.Listene
         feed.sendToggle("takeover", chart.showTakeover);
         feed.sendToggle("hlh", chart.showHlh);
         feed.sendToggle("bigplayer", chart.showBp);
+        feed.sendToggle("bw", bw);
+    }
+
+    /** Chart Style + which top-right buttons show: Simple BW themes every pane, the feed and the ground. */
+    private void applyStyle() {
+        chart.bw = bw; interp.setDark(!bw);
+        root.setBackgroundColor(Color.parseColor(bw ? "#ffffff" : "#141414"));
+        paperBtn.setVisibility(chart.tools.showMarket ? View.VISIBLE : View.GONE);
+        chart.dataChanged();
+    }
+
+    /** The Paper LIVE panel: title, balance, Clear, one line per closed trade (newest first). */
+    private void showPaper() {
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setBackgroundColor(Color.parseColor("#141a22"));
+        int p = (int) Ui.dp(this, 10);
+        LinearLayout head = new LinearLayout(this);
+        head.setOrientation(LinearLayout.HORIZONTAL);
+        head.setPadding(p, p, p, p);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        TextView title = new TextView(this);
+        title.setText("Paper \u2014 LIVE"); title.setTextColor(Color.parseColor("#dcdcdc")); title.setTextSize(15); title.setTypeface(null, android.graphics.Typeface.BOLD);
+        TextView bal = new TextView(this);
+        bal.setText(String.format(java.util.Locale.US, "%,.0f$", chart.tools.balance)); bal.setTextColor(Color.parseColor("#9aa0a6")); bal.setTextSize(14);
+        bal.setPadding(p, 0, p, 0);
+        Button clear = new Button(this);
+        clear.setText("Clear"); clear.setTextSize(12); clear.setTextColor(Color.parseColor("#dcdcdc")); clear.setBackgroundColor(Color.parseColor("#2a3140"));
+        head.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        head.addView(bal); head.addView(clear);
+        col.addView(head);
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        list.setPadding(p, 0, p, p);
+        java.util.List<String[]> rows = new java.util.ArrayList<>(chart.tools.ledger);
+        if (rows.isEmpty()) {
+            TextView tv = new TextView(this); tv.setText("no closed paper trades yet"); tv.setTextColor(Color.parseColor("#6f7a82")); tv.setTextSize(13); tv.setTypeface(android.graphics.Typeface.MONOSPACE);
+            list.addView(tv);
+        }
+        for (String[] r : rows) {
+            TextView tv = new TextView(this);
+            tv.setText(r[0]); tv.setTextColor(Color.parseColor(r[1])); tv.setTextSize(13); tv.setTypeface(android.graphics.Typeface.MONOSPACE);
+            tv.setPadding(0, (int) Ui.dp(this, 3), 0, (int) Ui.dp(this, 3));
+            list.addView(tv);
+        }
+        ScrollView sv = new ScrollView(this);
+        sv.addView(list);
+        col.addView(sv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, (int) Ui.dp(this, 420)));
+        AlertDialog dlg = new AlertDialog.Builder(this).setView(col).create();
+        clear.setOnClickListener(v -> { chart.tools.clearPaper(); dlg.dismiss(); showPaper(); });
+        dlg.show();
+        if (dlg.getWindow() != null) dlg.getWindow().setLayout((int) Ui.dp(this, 640), ViewGroup.LayoutParams.WRAP_CONTENT);
     }
 
     @Override protected void onDestroy() {
@@ -170,13 +235,15 @@ public final class MainActivity extends Activity implements EngineClient.Listene
         toggle(col, "Interest × Impact", "iimp", chart.showIimp, v -> chart.showIimp = v);
         toggle(col, "Interpretation", "interp", interp.getVisibility() == View.VISIBLE, v -> interp.setVisibility(v && chart.getFullscreen() < 0 ? View.VISIBLE : View.GONE));
         section(col, "Sub-widgets");
-        toggle(col, "Market Position  (BUY / SELL)", "market", chart.tools.showMarket, v -> chart.tools.showMarket = v);
+        toggle(col, "Market Position  (BUY / SELL)", "market", chart.tools.showMarket, v -> { chart.tools.showMarket = v; applyStyle(); });
         toggle(col, "Drawing toolbar", "drawbar", chart.tools.showBar, v -> { chart.tools.showBar = v; if (!v) chart.tools.tool = null; });
         section(col, "Indicator");
         toggle(col, "Big Player", "bigplayer", chart.showBp, v -> { chart.showBp = v; feed.sendToggle("bigplayer", v); });
         toggle(col, "HLH Volume Profile", "hlh", chart.showHlh, v -> { chart.showHlh = v; feed.sendToggle("hlh", v); });
         section(col, "Indicator  ›  Cycle Chart");
         toggle(col, "Takeover ▲▼  (one side owns the cycle)", "takeover", chart.showTakeover, v -> { chart.showTakeover = v; feed.sendToggle("takeover", v); });
+        section(col, "Chart Style");
+        toggle(col, "Simple BW", "bw", bw, v -> { bw = v; applyStyle(); feed.sendToggle("bw", v); });
         ScrollView sv = new ScrollView(this);
         sv.addView(col);
         AlertDialog dlg = new AlertDialog.Builder(this).setView(sv).create();

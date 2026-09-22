@@ -25,6 +25,7 @@ public final class PriceTools {
     public interface Map {
         float xPx(double t); float yPx(double p); double xVal(float px); double yVal(float py);
         RectF pane(); float plotRight(); double tick(); int dec(); double now(); double live();
+        float viewRight(); int tzOff(); boolean bw();
     }
     public interface Events { void toast(String msg); void changed(); }
 
@@ -46,6 +47,7 @@ public final class PriceTools {
     public String tool = null;                       // null | "trend" | "select"
     final List<Trend> trends = new ArrayList<>();
     final List<Bracket> brackets = new ArrayList<>();
+    final List<String[]> ledger = new ArrayList<>();       // [text, colour] newest first -- the Paper LIVE panel
     private int selected = -1;
     // in-progress touch
     private int mode = 0;                            // 0 none, 1 drawing a trend, 2 dragging a trend end, 3 moving a trend, 4 dragging a bracket line
@@ -72,6 +74,8 @@ public final class PriceTools {
                 JSONArray a = ts.getJSONArray(i); Trend t = new Trend();
                 t.x0 = a.getDouble(0); t.y0 = a.getDouble(1); t.x1 = a.getDouble(2); t.y1 = a.getDouble(3); trends.add(t);
             }
+            JSONArray lg = o.optJSONArray("ledger");
+            if (lg != null) for (int i = 0; i < lg.length(); i++) { JSONArray a = lg.getJSONArray(i); ledger.add(new String[]{a.getString(0), a.getString(1)}); }
             JSONArray bs = o.optJSONArray("brackets");
             if (bs != null) for (int i = 0; i < bs.length(); i++) {
                 JSONObject b = bs.getJSONObject(i); Bracket k = new Bracket();
@@ -99,6 +103,9 @@ public final class PriceTools {
                 bs.put(b);
             }
             o.put("brackets", bs);
+            JSONArray lg = new JSONArray();
+            for (String[] e : ledger) { JSONArray a = new JSONArray(); a.put(e[0]); a.put(e[1]); lg.put(a); }
+            o.put("ledger", lg);
             prefs.edit().putString("tools", o.toString()).apply();
         } catch (Exception ignored) { }
         ev.changed();
@@ -154,6 +161,7 @@ public final class PriceTools {
             if (slHit || tpHit) {
                 double exit = slHit ? k.stop : k.target;
                 double[] r = livePnl(k.pos, exit); balance += r[0];
+                record(k, exit, slHit ? "SL" : "TP", r[0], r[1]);
                 ev.toast(String.format(Locale.US, "%s %s at %." + m.dec() + "f: %+,.0f$ (%+.2f%%)  balance %,.0f$", slHit ? "SL" : "TP", k.kind, exit, r[0], r[1], balance));
                 brackets.remove(i); changed = true;
             }
@@ -162,6 +170,26 @@ public final class PriceTools {
     }
 
     public void deleteAll() { trends.clear(); selected = -1; live = null; mode = 0; save(); }
+
+    /** One CLOSED paper trade in the ledger, the terminal's line: entry date-time (the PC's zone), win / loss,
+     * L / S, the reason, the signed price % in favour, the net $ and % on margin, the balance. */
+    private void record(Bracket k, double exit, String reason, double net, double pct) {
+        int side = k.side(); boolean win = net >= 0;
+        double pctPx = k.entry != 0 ? (exit - k.entry) / k.entry * side * 100 : 0;
+        String stamp;
+        if (Double.isNaN(k.entryTs)) stamp = new java.text.SimpleDateFormat("HH:mm:ss", Locale.US).format(new java.util.Date());
+        else {
+            java.util.Calendar cal = java.util.Calendar.getInstance(m.tzOff() == Integer.MIN_VALUE ? java.util.TimeZone.getDefault() : new java.util.SimpleTimeZone(m.tzOff() * 1000, "PC"));
+            cal.setTimeInMillis((long) (k.entryTs * 1000));
+            stamp = String.format(Locale.US, "%d/%d/%02d - %02d:%02d", cal.get(java.util.Calendar.DAY_OF_MONTH), cal.get(java.util.Calendar.MONTH) + 1, cal.get(java.util.Calendar.YEAR) % 100, cal.get(java.util.Calendar.HOUR_OF_DAY), cal.get(java.util.Calendar.MINUTE));
+        }
+        String txt = String.format(Locale.US, "%s  %s %s %s  %+.2f%%  %+,.0f$ (%+.1f%%)  bal %,.0f$", stamp, win ? "\u2705" : "\u274c", side > 0 ? "L" : "S", reason, pctPx, net, pct, balance);
+        ledger.add(0, new String[]{txt, win ? "#27ae60" : "#e74c3c"});
+        while (ledger.size() > 300) ledger.remove(ledger.size() - 1);
+    }
+
+    /** The panel's Clear: the LIVE paper account back to its start balance and the list wiped. */
+    public void clearPaper() { balance = START_BALANCE; ledger.clear(); save(); }
 
     public int count() { return trends.size() + brackets.size(); }
 
@@ -191,6 +219,7 @@ public final class PriceTools {
                     Bracket k = brackets.get(i);
                     if ("ACTIVE".equals(k.state) && k.pos != null && !Double.isNaN(k.lastPx)) {
                         double[] r = livePnl(k.pos, k.lastPx); balance += r[0];
+                        record(k, k.lastPx, "\u00d7", r[0], r[1]);
                         ev.toast(String.format(Locale.US, "closed %s at %." + m.dec() + "f: %+,.0f$ (%+.2f%%)", k.kind, k.lastPx, r[0], r[1]));
                     } else ev.toast("order cancelled");
                     brackets.remove(i); save();
@@ -296,14 +325,15 @@ public final class PriceTools {
         RectF r = m.pane(); float pr = m.plotRight();
         c.save(); c.clipRect(r.left, r.top, pr, r.bottom);
         // trend lines: the terminal's default style (white, 2 px) and the always-positive % at the second point
+        int trendCol = m.bw() ? Color.BLACK : C_TREND;
         pl.setStrokeWidth(2 * d * 0.75f); pt.setTextSize(11 * d);
         for (int i = 0; i < trends.size() + (this.live != null ? 1 : 0); i++) {
             Trend t = i < trends.size() ? trends.get(i) : this.live;
             if (t == null) continue;
             float x0 = m.xPx(t.x0), y0 = m.yPx(t.y0), x1 = m.xPx(t.x1), y1 = m.yPx(t.y1);
-            pl.setColor(C_TREND); c.drawLine(x0, y0, x1, y1, pl);
+            pl.setColor(trendCol); c.drawLine(x0, y0, x1, y1, pl);
             double pct = t.y0 != 0 ? Math.abs(t.y1 - t.y0) / t.y0 * 100 : 0;
-            pt.setColor(C_TREND); c.drawText(String.format(Locale.US, "%.2f%%", pct), x1 + 6 * d, y1 + 4 * d, pt);
+            pt.setColor(trendCol); c.drawText(String.format(Locale.US, "%.2f%%", pct), x1 + 6 * d, y1 + 4 * d, pt);
             if (i == selected) {
                 pf.setColor(Color.parseColor("#3498db")); pl.setColor(Color.WHITE); pl.setStrokeWidth(1 * d);
                 c.drawCircle(x0, y0, 6 * d, pf); c.drawCircle(x0, y0, 6 * d, pl); c.drawCircle(x1, y1, 6 * d, pf); c.drawCircle(x1, y1, 6 * d, pl);
@@ -359,13 +389,13 @@ public final class PriceTools {
             }
         } else for (RectF b : barBtn) b.setEmpty();
         if (showMarket) {
-            float w = 62 * d, h = 28 * d, x = r.left + 6 * d, y = r.bottom - h - 6 * d;
-            buyBtn.set(x, y, x + w, y + h); sellBtn.set(x + w + 6 * d, y, x + 2 * w + 6 * d, y + h);
+            float w = 70 * d, h = 28 * d, y = r.bottom - h - 6 * d, xr = m.viewRight() - 6 * d;
+            sellBtn.set(xr - w, y, xr, y + h); buyBtn.set(xr - 2 * w - 6 * d, y, xr - w - 6 * d, y + h);
             pf.setColor(Color.parseColor("#1e8f5a")); c.drawRoundRect(buyBtn, 4 * d, 4 * d, pf);
             pf.setColor(Color.parseColor("#b63a3a")); c.drawRoundRect(sellBtn, 4 * d, 4 * d, pf);
             pt.setColor(Color.WHITE); pt.setTextSize(12 * d);
-            c.drawText("BUY", buyBtn.left + (w - pt.measureText("BUY")) / 2, y + 19 * d, pt);
-            c.drawText("SELL", sellBtn.left + (w - pt.measureText("SELL")) / 2, y + 19 * d, pt);
+            c.drawText("▲ BUY", buyBtn.left + (w - pt.measureText("▲ BUY")) / 2, y + 19 * d, pt);
+            c.drawText("▼ SELL", sellBtn.left + (w - pt.measureText("▼ SELL")) / 2, y + 19 * d, pt);
         } else { buyBtn.setEmpty(); sellBtn.setEmpty(); }
         pt.setFakeBoldText(false);
     }
