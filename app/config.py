@@ -471,19 +471,22 @@ IIMP_LINES_MODE = "Lines Buyer/Seller"
 IIMP_INT_MODE = "Lines Interest"    # the INTEREST half ALONE, both sides, SMOOTHED (user 2026-09-22). The pane's
                                 # other modes all carry impact in them somewhere; this one answers only "how hot
                                 # is each side against its own recent normal", with the per-cycle noise taken out.
-IIMP_INT_SMOOTH_N = 20          # the trailing mean's window, in CYCLES, and its OWN knob -- deliberately not the
-                                # cycle lookback. The lookback picks the BASELINE each cycle's interest is divided
-                                # by; this picks how many of those ratios are averaged for display. Tying them
-                                # would move the smoothing every time the user changed the baseline, which are two
-                                # different questions. Averaged in LOG space (a geometric mean), so 0.5x and 2x
-                                # pull on it equally -- an arithmetic mean of ratios is biased upward.
+IIMP_SMOOTH_N = 20              # DEFAULT trailing-mean window for both line modes, in CYCLES, and its OWN knob
+                                # -- deliberately not the cycle lookback. The lookback picks the BASELINE each
+                                # cycle's reading is divided by; this picks how many of those are averaged for
+                                # display. Tying them would move the smoothing every time the user changed the
+                                # baseline, which are two different questions. Averaged in LOG space (a geometric
+                                # mean), so 0.5x and 2x pull on it equally -- an arithmetic mean of ratios is
+                                # biased upward. LIVE value: the slider left of the pane's dropdown (user
+                                # 2026-09-22), persisted as "iimp_smooth"; this is only where it starts.
+IIMP_SMOOTH_MIN = 1             # 1 = no smoothing at all, the raw per-cycle reading. ⚠ _iimp_smooth() clamps its
+IIMP_SMOOTH_MAX = 30            # min_n to the window for exactly this: a window of 1 can never hold 3 samples,
+                                # and without the clamp the whole series comes back NaN and the pane goes blank.
 IIMP_IMP_MODE = "Lines Impact"      # the IMPACT half alone, both sides, smoothed (user 2026-09-22)
-IIMP_IMP_SMOOTH_N = 20          # same window as the interest lines, its own knob for the same reason.
-                                # ⚠ COUNTED IN LED CYCLES, not in cycles: impact only exists for the side
-                                # that LED, so each side's mean runs over the last N cycles THAT SIDE led and
-                                # HOLDS its value across the ones it did not. The user was asked and chose this
-                                # over counting a non-led cycle as 1x -- that shape (one side pinned to 1x every
-                                # cycle, a sawtooth) is the one they rejected on 2026-09-22.
+# ⚠ In Lines Impact the same window is COUNTED IN LED CYCLES, not in cycles: impact only exists for the side
+# that LED, so each side's mean runs over the last N cycles THAT SIDE led and HOLDS its value across the ones it
+# did not. The user was asked and chose this over counting a non-led cycle as 1x -- that shape (one side pinned
+# to 1x every cycle, a sawtooth) is the one they rejected on 2026-09-22.
 IIMP_LINES_W = 1.8              # width of the two lines, px (the forming stretch is drawn at IIMP_FORM_PEN_A)
 # --- BREAKOUT BADGE on the PRICE pane (user 2026-09-21: "add a badge on the breakout candles where the candle side is
 # above x1 interestximpact and its opposite is below x1 -- for example we have a breakout buy candle and the

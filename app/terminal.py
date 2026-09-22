@@ -1952,6 +1952,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._iimp_plot = None         # INTEREST x IMPACT pane (Flow mode): one bar per cycle, who leads + did it convert
         self._iimp_vb = None
         self._iimp_mode = str(config.IIMP_MODE)   # the top-right dropdown: None | Buyer | Seller | Delta
+        self._iimp_smn = int(config.IIMP_SMOOTH_N)   # the smoothing slider beside it (the two LINE modes only)
+        self._iimp_slider = None
+        self._iimp_smlab = None
         self._iimp_combo = None
         self._iimp_items = None        # six BarGraphItems: (buy, sell, contradicted) x (converted, did not)
         self._iimp_dots = None         # (wall, open road) ScatterPlotItems
@@ -10949,6 +10952,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 "fratio_mode": str(getattr(self, "_fratio_mode", config.FRATIO_MODE)),   # its top-right dropdown
                 "iimp_on": bool(getattr(self, "_iimp_on", config.IIMP_PANE_ON)),
                 "iimp_mode": str(getattr(self, "_iimp_mode", config.IIMP_MODE)),   # its top-right dropdown
+                "iimp_smooth": int(self._iimp_smooth_n()),                         # ... and the slider beside it
                 "flow_pane_on": bool(getattr(self, "_flow_pane_on", config.FLOW_PANE_ON)),
                 "hlh_merge_span": str(getattr(self, "_hlh_merge_span", config.HLH_MERGE_SPAN)),
                 "interp_on": bool(getattr(self, "_interp_on", config.INTERP_PANE_ON)),
@@ -11098,6 +11102,21 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _icb.blockSignals(False)
             except (RuntimeError, ValueError):
                 self._iimp_combo = None
+        # the smoothing SLIDER: clamped on the way in, so an old or hand-edited file cannot blank the pane
+        self._iimp_smn = max(int(config.IIMP_SMOOTH_MIN),
+                             min(int(config.IIMP_SMOOTH_MAX),
+                                 int(s.get("iimp_smooth", config.IIMP_SMOOTH_N) or config.IIMP_SMOOTH_N)))
+        _isl = self.__dict__.get("_iimp_slider")
+        if _isl is not None:
+            try:
+                _isl.blockSignals(True)
+                _isl.setValue(self._iimp_smooth_n())
+                _isl.blockSignals(False)
+                if self._iimp_smlab is not None:
+                    self._iimp_smlab.setText("%d" % self._iimp_smooth_n())
+                    self._iimp_smlab.adjustSize()
+            except RuntimeError:
+                self._iimp_slider = None; self._iimp_smlab = None
         self._flow_pane_on = bool(s.get("flow_pane_on", s.get("flow_lines_on", config.FLOW_PANE_ON)))
         _sp = str(s.get("hlh_merge_span", config.HLH_MERGE_SPAN) or config.HLH_MERGE_SPAN)
         self._hlh_merge_span = _sp if _sp in tuple(str(v) for v in config.HLH_MERGE_SPAN_CHOICES) else str(config.HLH_MERGE_SPAN)
@@ -18101,7 +18120,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             self._fratio_tag = None; self._fratio_time_tag = None; self._fratio_title = None
             self._fratio_bdg = None
             self._iimp_plot = None; self._iimp_vb = None; self._iimp_items = None; self._iimp_dots = None
-            self._iimp_combo = None
+            self._iimp_combo = None; self._iimp_slider = None; self._iimp_smlab = None
             self._iimp_form = None; self._iimp_keep = None
             self._iimp_lines = None; self._iimp_lines_form = None; self._iimp_lines_has = False
             self._iimp_guides = None; self._iimp_sig = None; self._iimp_sized = False; self._iimp_proxy = None
@@ -21717,11 +21736,37 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                       "how far each side's push reached against what that side usually reaches for the same "
                       "effort in the same time. Impact only exists for the side that LED a cycle, so each line "
                       "is the mean of its OWN last %d cycles as the leader and holds flat across the cycles it "
-                      "did not lead." % (int(config.IIMP_INT_SMOOTH_N), int(config.IIMP_IMP_SMOOTH_N)))
+                      "did not lead. The SLIDER to the left sets that window for both, %d-%d cycles."
+                      % (int(config.IIMP_SMOOTH_N), int(config.IIMP_SMOOTH_N),
+                         int(config.IIMP_SMOOTH_MIN), int(config.IIMP_SMOOTH_MAX)))
         cb.setCursor(QtCore.Qt.PointingHandCursor)
         cb.currentIndexChanged.connect(self._on_iimp_mode_changed)
         cb.raise_(); cb.show()
         self._iimp_combo = cb
+        # THE SMOOTHING SLIDER (user 2026-09-22), LEFT of the dropdown and shown only in the two line modes --
+        # it means nothing to a bar mode, and a dead control beside a live one is worse than no control.
+        sl = QtWidgets.QSlider(QtCore.Qt.Horizontal, pw)
+        sl.setMinimum(int(config.IIMP_SMOOTH_MIN)); sl.setMaximum(int(config.IIMP_SMOOTH_MAX))
+        sl.setValue(self._iimp_smooth_n())
+        sl.setFixedWidth(96); sl.setFixedHeight(16)
+        sl.setStyleSheet(
+            "QSlider::groove:horizontal{ height:3px; background:#3a4150; border-radius:2px; }"
+            " QSlider::handle:horizontal{ width:9px; margin:-4px 0; background:#dcdcdc; border-radius:2px; }"
+            " QSlider::sub-page:horizontal{ background:#7a828e; border-radius:2px; }")
+        sl.setToolTip("How many cycles the two lines are averaged over (%d-%d). At %d there is no smoothing at "
+                      "all -- the raw per-cycle reading. In Lines Impact it counts each side's own LED cycles."
+                      % (int(config.IIMP_SMOOTH_MIN), int(config.IIMP_SMOOTH_MAX), int(config.IIMP_SMOOTH_MIN)))
+        sl.setCursor(QtCore.Qt.PointingHandCursor)
+        sl.valueChanged.connect(self._on_iimp_smooth_changed)
+        sl.sliderReleased.connect(self._on_iimp_smooth_released)
+        lb = QtWidgets.QLabel("%d" % self._iimp_smooth_n(), pw)
+        lb.setStyleSheet("QLabel{ color:#dcdcdc; background:transparent; font:bold 10px 'Consolas'; }")
+        lb.adjustSize()
+        self._iimp_slider = sl; self._iimp_smlab = lb
+        _on = self._iimp_smooth_wanted()
+        sl.setVisible(_on); lb.setVisible(_on)
+        if _on:
+            sl.raise_(); lb.raise_()
         pw.scene().sigMouseClicked.connect(self._on_iimp_clicked)
         self._iimp_plot = pw
         self._iimp_vb = vb
@@ -21731,6 +21776,47 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         sp.addWidget(pw)
         pw.setMinimumHeight(60)
         return pw
+
+    def _iimp_smooth_n(self) -> int:
+        """The trailing-mean window the two line modes use right now -- the slider's value, clamped."""
+        return max(int(config.IIMP_SMOOTH_MIN),
+                   min(int(config.IIMP_SMOOTH_MAX), int(getattr(self, "_iimp_smn", config.IIMP_SMOOTH_N))))
+
+    def _iimp_smooth_wanted(self) -> bool:
+        """Is a mode up that the slider means anything to?"""
+        return str(self.__dict__.get("_iimp_mode", "None")) in (str(config.IIMP_INT_MODE),
+                                                                str(config.IIMP_IMP_MODE))
+
+    def _on_iimp_smooth_changed(self, v: int) -> None:
+        """The slider moved: re-lay from the read already in hand, no store read, and persist it."""
+        v = max(int(config.IIMP_SMOOTH_MIN), min(int(config.IIMP_SMOOTH_MAX), int(v)))
+        if v == int(getattr(self, "_iimp_smn", config.IIMP_SMOOTH_N)):
+            return
+        self._iimp_smn = v
+        if self._iimp_smlab is not None:
+            try:
+                self._iimp_smlab.setText("%d" % v)
+                self._iimp_smlab.adjustSize()
+            except RuntimeError:
+                self._iimp_smlab = None
+        self._iimp_sig = None
+        self._iimp_ytop = 0.0                # a longer mean is a flatter series: let the y range refit
+        self._iimp_position_combo()          # the label's width changes with the digits
+        self._iimp_draw(time.time())
+        # the redraw is ~2 ms and wants to run on every step of the drag; the settings FILE does not. While the
+        # handle is down the save waits for sliderReleased.
+        if not self._loading_ui:
+            try:
+                _down = self._iimp_slider is not None and self._iimp_slider.isSliderDown()
+            except RuntimeError:
+                _down = False
+            if not _down:
+                self._save_ui_state()
+
+    def _on_iimp_smooth_released(self) -> None:
+        """The handle came up after a drag: persist the value the redraws have already been using."""
+        if not self._loading_ui:
+            self._save_ui_state()
 
     def _iimp_tick_text(self, v, fmt="%.2g") -> str:
         """The axis / tag text for a bar height `v` (log2). MIRRORED in None and Delta -- both halves read a
@@ -21757,10 +21843,25 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             right = int(pw.mapFromScene(vb.sceneBoundingRect().topRight()).x())
             if right <= cb.width():
                 right = int(pw.width() - pw.getAxis("right").width())
-            cb.move(max(0, right - cb.width() - 6), 4)
+            _cx = max(0, right - cb.width() - 6)
+            cb.move(_cx, 4)
             cb.raise_()
+            # the slider and its number sit LEFT of the dropdown, in that order, on the same baseline
+            sl = self.__dict__.get("_iimp_slider")
+            lb = self.__dict__.get("_iimp_smlab")
+            if sl is not None and lb is not None:
+                _on = self._iimp_smooth_wanted()
+                sl.setVisible(_on); lb.setVisible(_on)
+                if _on:
+                    lb.adjustSize()
+                    _lx = max(0, _cx - lb.width() - 8)
+                    lb.move(_lx, 6)
+                    sl.move(max(0, _lx - sl.width() - 6), 6)
+                    sl.raise_(); lb.raise_()
         except RuntimeError:
             self._iimp_combo = None
+            self._iimp_slider = None
+            self._iimp_smlab = None
 
     def _on_iimp_mode_changed(self, idx: int) -> None:
         """Dropdown changed -> re-lay every bar from the read already in hand (no store read), refit Y, persist."""
@@ -21768,6 +21869,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         self._iimp_mode = _modes[idx] if 0 <= idx < len(_modes) else _modes[0]
         self._iimp_sig = None
         self._iimp_ytop = 0.0                                # a different series has a different scale
+        self._iimp_position_combo()                          # the slider belongs to the two line modes only
         self._iimp_draw(time.time())
         if not self._loading_ui:
             self._save_ui_state()
@@ -22083,7 +22185,9 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         k = np.arange(1, int(idx.size) + 1)
         lo = np.maximum(0, k - max(1, int(n_win)))
         cnt = (k - lo).astype(np.float64)
-        enough = cnt >= float(max(1, int(min_n)))
+        # ⚠ min_n is CLAMPED TO THE WINDOW: the slider goes down to 1, and requiring 3 samples of a 1-cycle
+        # window is unsatisfiable -- the series would come back all-NaN and the pane blank.
+        enough = cnt >= float(max(1, min(int(min_n), max(1, int(n_win)))))
         out[idx[enough]] = ((cs[k] - cs[lo]) / cnt)[enough]
         return out
 
@@ -22252,7 +22356,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         # without it a quiet stretch would freeze the live bar until the next trade
         _age = int(now - float(t[-1])) if bool(form_all[-1]) else 0
         sig = (int(t.size), int(keep.sum()), round(float(t[-1]), 2), int(self._flow_win), n_lb, _age,
-               str(self.__dict__.get("_iimp_mode", "None")),
+               str(self.__dict__.get("_iimp_mode", "None")), self._iimp_smooth_n(),
                round(float(np.nan_to_num(imb[keep][-1] if keep.any() else 0.0)), 4),
                round(float(np.nan_to_num(score[keep][-1] if keep.any() else 0.0)), 4))
         if sig == self._iimp_sig:
@@ -22323,7 +22427,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         # LINES INTEREST (user 2026-09-22: "two lines that show the interest alone, smooth it over the last 20
         # bars"). The INTEREST half on its own: each side's aggressive $ per second over the median of its own
         # previous N cycles, which is `ar_b` / `ar_s` BEFORE the impact term that `_lb` / `_ls` add -- through a
-        # trailing mean of IIMP_INT_SMOOTH_N cycles. Built over the WHOLE read so a pan cannot move a point, and
+        # trailing mean of the SLIDER's cycles. Built over the WHOLE read so a pan cannot move a point, and
         # only when the mode asks for it: two cumsums are cheap, but not free on every frame of every other mode.
         _int = _mode == str(config.IIMP_INT_MODE)
         # LINES IMPACT (user 2026-09-22). The other half, on the same treatment. ⚠ IMPACT ONLY EXISTS FOR THE
@@ -22338,11 +22442,11 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             with np.errstate(divide="ignore", invalid="ignore"):
                 _ib = np.where(_rated_all, np.log2(np.maximum(ar_b, 1e-12)), np.nan)
                 _is = np.where(_rated_all, np.log2(np.maximum(ar_s, 1e-12)), np.nan)
-            _sm_n = int(config.IIMP_INT_SMOOTH_N)
+            _sm_n = self._iimp_smooth_n()
             _sm_b = self._iimp_smooth(_ib, _rated_all, _sm_n, n_mn)
             _sm_s = self._iimp_smooth(_is, _rated_all, _sm_n, n_mn)
         elif _imp:
-            _sm_n = int(config.IIMP_IMP_SMOOTH_N)
+            _sm_n = self._iimp_smooth_n()
             _sm_b = self._iimp_hold(self._iimp_smooth(_scl_all, _rated_all & lead_buy, _sm_n, n_mn))
             _sm_s = self._iimp_hold(self._iimp_smooth(_scl_all, _rated_all & ~lead_buy, _sm_n, n_mn))
         if not _any_lines and self.__dict__.get("_iimp_lines_has") and self._iimp_lines is not None:
@@ -22538,8 +22642,8 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             elif _sm_b is not None:
                 _smb, _sms = _sm_b[keep][_k], _sm_s[keep][_k]
                 _mode_txt = "  ·  %s  ·  buyers %s  ·  sellers %s" % (
-                    ("interest, %d-cycle mean" % int(config.IIMP_INT_SMOOTH_N)) if _int
-                    else ("impact, mean of each side's last %d LED cycles" % int(config.IIMP_IMP_SMOOTH_N)),
+                    ("interest, %d-cycle mean" % _sm_n) if _int
+                    else ("impact, mean of each side's last %d LED cycles" % _sm_n),
                     "-" if not np.isfinite(_smb) else "%.2gx" % (2.0 ** float(_smb)),
                     "-" if not np.isfinite(_sms) else "%.2gx" % (2.0 ** float(_sms)))
             self._iimp_read.setText("B %s / S %s  ·  %s %.2gx  ·  impact %.2gx  ·  wall %s  ·  kept %s%s%s%s" % (
@@ -22981,12 +23085,12 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                             "averaged over its OWN last %d cycles AS THE LEADER and holds that value across the "
                             "cycles it did not lead, because a side that led nothing moved nothing. This is how "
                             "well each side has been CONVERTING its pushes, not how hard it has been pushing."
-                            % (_L % "Lines", _f(_imb[k]), _f(_ims[k]), int(config.IIMP_IMP_SMOOTH_N)))
+                            % (_L % "Lines", _f(_imb[k]), _f(_ims[k]), self._iimp_smooth_n()))
             else:
                 rows.append("%s: the two lines are the INTEREST alone, averaged over the last %d cycles -- buyers "
                             "%s, sellers %s. No impact in either one: this is how hot each side has been against "
                             "its own recent normal, not what it did to price."
-                            % (_L % "Lines", int(config.IIMP_INT_SMOOTH_N), _f(_imb[k]), _f(_ims[k])))
+                            % (_L % "Lines", self._iimp_smooth_n(), _f(_imb[k]), _f(_ims[k])))
         if contra:
             rows.append("%s: <span style='color:%s'>orange</span>, because price went the OTHER way -- it "
                         "finished %+d ticks while the %s led the interest."
