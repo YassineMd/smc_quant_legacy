@@ -235,7 +235,6 @@ public final class ChartView extends View {
             @Override public boolean onScale(ScaleGestureDetector sd) {
                 float minSpan = 40 * d;
                 double fx = (sd.getPreviousSpanX() > minSpan && sd.getCurrentSpanX() > minSpan) ? Math.max(0.2, Math.min(5.0, sd.getPreviousSpanX() / sd.getCurrentSpanX())) : 1.0;
-                double fy = (sd.getPreviousSpanY() > minSpan && sd.getCurrentSpanY() > minSpan) ? Math.max(0.2, Math.min(5.0, sd.getPreviousSpanY() / sd.getCurrentSpanY())) : 1.0;
                 if (fx != 1.0) {
                     double span = vx1 - vx0;
                     double ns = Math.max(30.0, Math.min(72 * 3600.0, span * fx));
@@ -243,13 +242,7 @@ public final class ChartView extends View {
                     double frac = (focal - vx0) / span;
                     vx0 = focal - frac * ns; vx1 = vx0 + ns;
                 }
-                int p = paneAt(Math.min(sd.getFocusX(), plotR - 1), sd.getFocusY());
-                if (fy != 1.0 && p >= 0) {
-                    takeManual(p);
-                    float top = pane[p].top + TITLE_H, hgt = Math.max(1f, pane[p].bottom - top);
-                    double yv = yHi[p] - (sd.getFocusY() - top) / hgt * (yHi[p] - yLo[p]);
-                    yLo[p] = yv - (yv - yLo[p]) * fy; yHi[p] = yv + (yHi[p] - yv) * fy;
-                }
+                // y is never pinched (user 2026-09-22): a drag pans it, the axis drag scales it
                 afterPan(); return true;
             }
         });
@@ -788,6 +781,11 @@ public final class ChartView extends View {
             }
             pl.setColor(side == 0 ? TEAL : RED); pl.setStrokeWidth(2 * d); pl.setStrokeCap(Paint.Cap.ROUND); pl.setStrokeJoin(Paint.Join.ROUND);
             c.drawPath(path, pl);
+            if (t.length > 0) {                                   // the dashed rule from the last point to the axis (as LIMIT ORDERS)
+                float xl = xPx((double) s.binBase + (double) t[t.length - 1]); float yl = (float) (top + (yhi - v[v.length - 1]) / range * hgt);
+                pl.setStrokeWidth(1 * d); pl.setPathEffect(new DashPathEffect(new float[]{4 * d, 6 * d}, 0));
+                c.drawLine(xl, yl, plotR, yl, pl); pl.setPathEffect(null);
+            }
         }
         // the cycle badges under the zero line: how far PRICE went, coloured by the outcome for the side that owned the cycle
         if (showLines && s.n > 0) {
