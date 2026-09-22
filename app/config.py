@@ -525,6 +525,13 @@ LIMP_DOM_SPREAD = 0.3           # 0 switches the bands off entirely
 LIMP_DOM_GAIN = 0.3             # how far the LEADING side must have climbed inside the band to brighten it
 LIMP_DOM_ALPHA = 38             # the tint, out of 255. Low on purpose: it sits UNDER the two lines and the
 LIMP_DOM_ALPHA_HI = 95          # guides, and the pane's job is still the lines. HI is the gained-into band.
+# The BRIGHT band gets its own pair of colours, picked by the user from two swatches (2026-09-23), rather
+# than the pane's teal / red at a higher alpha. They are far more saturated than IIMP_BUY_COL / SELL_COL, so
+# a gained-into band separates from an ordinary one by HUE as well as by weight.
+# ⚠ The red swatch arrived as a lossy WebP and samples #FF000D; that is encoder drift from pure red, which
+# is what is used here. The green swatch was exact and carried its own label, #66FF00.
+LIMP_DOM_BRIGHT_BUY = "#66FF00"
+LIMP_DOM_BRIGHT_SELL = "#FF0000"
 # --- BREAKOUT BADGE on the PRICE pane (user 2026-09-21: "add a badge on the breakout candles where the candle side is
 # above x1 interestximpact and its opposite is below x1 -- for example we have a breakout buy candle and the
 # interestximpact line buy is above x1 and interestximpact line sell is below x1"). A BREAKOUT BUY candle gets a GREEN

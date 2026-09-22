@@ -22832,9 +22832,12 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             # a run reads as one block with no seam and needs no run-splitting bookkeeping at all. Four items
             # rather than one with a per-bar brush list, which the profiler has punished this family for once.
             _dom = []
-            for _c in (config.IIMP_BUY_COL, config.IIMP_SELL_COL):
-                _q = QtGui.QColor(_c)
-                for _a in (int(config.LIMP_DOM_ALPHA), int(config.LIMP_DOM_ALPHA_HI)):
+            # (dim colour, bright colour) per side. The BRIGHT pair is the user's own swatches, not the
+            # pane's teal / red at more alpha: a band the leader CLIMBED into differs in HUE as well.
+            for _cd, _ch in ((config.IIMP_BUY_COL, config.LIMP_DOM_BRIGHT_BUY),
+                             (config.IIMP_SELL_COL, config.LIMP_DOM_BRIGHT_SELL)):
+                for _c, _a in ((_cd, int(config.LIMP_DOM_ALPHA)), (_ch, int(config.LIMP_DOM_ALPHA_HI))):
+                    _q = QtGui.QColor(_c)
                     _bi = pg.BarGraphItem(x0=[], x1=[], y0=[], height=[],
                                           brush=pg.mkBrush(_q.red(), _q.green(), _q.blue(), _a),
                                           pen=pg.mkPen(None))

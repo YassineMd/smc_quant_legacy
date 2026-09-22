@@ -250,6 +250,8 @@ public final class ChartView extends View {
     private boolean framePending = false;
     private final Runnable heartbeat = new Runnable() { @Override public void run() { if (follow) invalidate(); h.postDelayed(this, 250); } };
     private static final int TEAL = Color.parseColor("#26a69a"), RED = Color.parseColor("#ef5350"), ORANGE = Color.parseColor("#ff9f43");
+    // LINES IMPACT, the bands the leader CLIMBED into: the user's own swatches (2026-09-23)
+    private static final int DOM_HI_BUY = Color.parseColor("#66FF00"), DOM_HI_SELL = Color.parseColor("#FF0000");
     private static final int WALL_COL = Color.parseColor("#dcdcdc"), KEEP_COL = Color.parseColor("#3a4150");   // IIMP_WALL_COL / IIMP_KEEP_COL
     private static final int BG = Color.parseColor("#141414"), FG = Color.parseColor("#dcdcdc"), TITLE = Color.parseColor("#7d8492");
     private static final int WEAK = Color.parseColor("#8a919c"), GUIDE = Color.parseColor("#9aa4b2");
@@ -1263,7 +1265,9 @@ public final class ChartView extends View {
                 if (sd == 0) continue;
                 boolean bright = L.dgain != null && i < L.dgain.length && L.dgain[i] > -900f
                         && L.dgain[i] >= (float) L.gain;
-                int col = sd > 0 ? TEAL : RED;
+                // the BRIGHT band is the user's own pair (#66FF00 / #FF0000), not teal / red at more alpha:
+                // a band the leader CLIMBED into differs in HUE as well as in weight
+                int col = bright ? (sd > 0 ? DOM_HI_BUY : DOM_HI_SELL) : (sd > 0 ? TEAL : RED);
                 pf.setColor(Color.argb(bright ? 95 : 38, Color.red(col), Color.green(col), Color.blue(col)));
                 float bx0 = xPx(L.x0[i]), bx1 = xPx(L.x1[i]);
                 if (bx1 < r.left || bx0 > plotR) continue;
