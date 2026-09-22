@@ -65,6 +65,29 @@ New token: edit `--auth` in `/etc/systemd/system/smcflow.service` (`sudo systemc
 restart smcflow`), put the same value in `android/local.properties`, rebuild and reinstall the app. A new IP (only
 if the reserved address is ever released): `flow.vmhost` in `local.properties`, rebuild, reinstall.
 
+
+## ⚠ The box needs swap (learned the hard way, 2026-09-22)
+
+Hours after it was created the VM WEDGED: the engine stopped accepting TCP (the tablet saw
+`SocketTimeoutException ... after 6000ms`, not a refusal), SSH hung, and the guest agent logged
+`DeadlineExceeded` / `CRASHED` plugin health checks. There was NO oom-kill in the serial console — the box
+was thrashing, not out of memory. Cause: an e2-small (2 GB) running a whole offscreen terminal with no swap,
+while `smcflow.service` carries `MemoryMax=1700M`; a cgroup that reaches its limit with nowhere to page
+reclaims hard instead of failing fast. Recovery was `gcloud compute instances reset smc-flow-eu` (both units
+are `enabled` + `Restart=always`, and the engine keeps no durable state — it works off a temp copy of
+`data/terminal_ui.json`), then:
+
+```
+sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile
+sudo /sbin/mkswap /swapfile && sudo /sbin/swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+echo 'vm.swappiness=10' | sudo tee /etc/sysctl.d/99-swap.conf
+```
+
+(`swapon`/`mkswap` live in `/sbin` and are NOT on the login PATH — use the absolute paths.) This is the same
+safety net the daemon box has had since 2026-08-24. After it: 1,101 MB used, 2 GB swap free, disk 64%,
+tablet redrawing at 8-9 ms a frame. If it wedges again the next step is fewer layers on the engine (HLH and
+Big Player are the heavy ones) or e2-medium.
 ## Known limits
 
 - The engine pings the client every 10 s from a thread of its own, because its GUI thread can stall for tens of
