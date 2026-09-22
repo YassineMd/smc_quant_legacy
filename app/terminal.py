@@ -22703,6 +22703,13 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                            "sbuy": _sc["buy"], "ssell": _sc["sell"],
                            "nbuy": _scn["buy"], "nsell": _scn["sell"],
                            "liib": _lb, "liis": _ls, "mode": _mode,
+                           # ⚠ `liib` / `liis` are the RAW per-cycle pair and MUST stay raw: the PRICE pane's
+                           # Takeover badge and the Buyer / Seller / Delta readouts are all built on them. The
+                           # pair the LINES mode draws is smoothed by the slider and is its own key -- without
+                           # it the tablet drew the raw values for ever and its slider did nothing (2026-09-23).
+                           "lyb": (_sm_b[keep] if _sm_b is not None else _lb),
+                           "lys": (_sm_s[keep] if _sm_s is not None else _ls),
+                           "smn": int(_sm_n),
                            "pliib": _plb[keep], "pliis": _pls[keep],      # the previous bar's, NaN across a break
                            "vac": _vac[keep], "vac_on": _vac_on,          # +1 / -1 a VACUUM buy / sell (see above)
                            "quiet": _qui[keep]}                           # +1 / -1 a QUIET cycle that went up / down

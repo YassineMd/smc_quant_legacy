@@ -469,6 +469,7 @@ public final class ChartView extends View {
             s.tkBuy = M.tkBuy; s.tkSell = M.tkSell; s.tkForm = M.tkForm;
             s.mode = M.iimpMode; s.iN = M.iN; s.iX0 = M.iX0; s.iX1 = M.iX1; s.iV = M.iV; s.iMult = M.iMult; s.iScore = M.iScore; s.iWall = M.iWall; s.iKept = M.iKept;
             s.iSbuy = M.iSbuy; s.iSsell = M.iSsell; s.iLiib = M.iLiib; s.iLiis = M.iLiis; s.iUp = M.iUp; s.iContra = M.iContra; s.iGood = M.iGood; s.iForm = M.iForm;
+            s.iLyb = M.iLyb; s.iLys = M.iLys;
             s.connected = M.connected;
             s.cint = M.cint; s.cimp = M.cimp;
             s.hlhOn = M.hlhOn && showHlh; s.hlhNote = M.hlhNote; s.hlhPics = M.hlhPics; s.hlhLabels = M.hlhLabels; s.hlhDashes = M.hlhDashes;
@@ -513,7 +514,7 @@ public final class ChartView extends View {
         double livePx, win, tick; int formCol, dec;
         double[] lqX; float[] lqB, lqA;
         double[] tkBuy, tkSell, tkForm;
-        String mode; int iN; double[] iX0, iX1; float[] iV, iMult, iScore, iWall, iKept, iSbuy, iSsell, iLiib, iLiis; byte[] iUp, iContra, iGood, iForm;
+        String mode; int iN; double[] iX0, iX1; float[] iV, iMult, iScore, iWall, iKept, iSbuy, iSsell, iLiib, iLiis, iLyb, iLys; byte[] iUp, iContra, iGood, iForm;
         boolean connected;
         FlowModel.Lines cint, cimp;
         boolean hlhOn; String hlhNote; List<FlowModel.HlhPic> hlhPics; List<FlowModel.HlhLabel> hlhLabels; List<FlowModel.HlhDash> hlhDashes;
@@ -951,7 +952,7 @@ public final class ChartView extends View {
         double lim;
         {
             float[] fit;
-            if (lines && s.iN > 0) { fit = new float[2 * s.iN]; for (int i = 0; i < s.iN; i++) { fit[i] = (float) Math.abs(Math.max(-clip, Math.min(clip, s.iLiib[i]))); fit[s.iN + i] = (float) Math.abs(Math.max(-clip, Math.min(clip, s.iLiis[i]))); } }
+            if (lines && s.iN > 0) { fit = new float[2 * s.iN]; for (int i = 0; i < s.iN; i++) { fit[i] = (float) Math.abs(Math.max(-clip, Math.min(clip, s.iLyb[i]))); fit[s.iN + i] = (float) Math.abs(Math.max(-clip, Math.min(clip, s.iLys[i]))); } }
             else if (s.iN > 0) { fit = new float[s.iN]; for (int i = 0; i < s.iN; i++) fit[i] = Math.abs(s.iV[i]); }
             else fit = new float[0];
             if (fit.length > 0) {
@@ -975,7 +976,9 @@ public final class ChartView extends View {
             int last = s.iN - 1;
             if (lines) {
                 for (int side = 0; side < 2; side++) {
-                    float[] v = side == 0 ? s.iLiib : s.iLiis; int col = side == 0 ? TEAL : RED;
+                    // ⚠ the SMOOTHED pair, not the raw one: the raw one is what the Takeover badge and the
+                    // bar readouts use, and drawing it here made this pane's slider do nothing (2026-09-23)
+                    float[] v = side == 0 ? s.iLyb : s.iLys; int col = side == 0 ? TEAL : RED;
                     path.reset(); boolean pen = false; float px = 0, py = 0;
                     for (int i = 0; i < s.iN; i++) {
                         if (s.iForm[i] != 0) continue;

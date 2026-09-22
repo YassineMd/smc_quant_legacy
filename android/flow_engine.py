@@ -521,7 +521,8 @@ def tick_iimp():
     m = {"t": "iimp", "mode": str(L.get("mode", "None")), "n": n}
     for k in ("x0", "x1"):
         m[k] = b64(L[k], "<f8")
-    for k in ("v", "mult", "score", "wall", "reach", "mv", "arb", "ars", "kept", "sbuy", "ssell", "liib", "liis", "pliib", "pliis"):
+    m["smn"] = int(L.get("smn", 1))
+    for k in ("v", "mult", "score", "wall", "reach", "mv", "arb", "ars", "kept", "sbuy", "ssell", "liib", "liis", "pliib", "pliis", "lyb", "lys"):
         m[k] = b64(np.nan_to_num(np.asarray(L.get(k, np.full(n, np.nan)), dtype=np.float64), nan=-999.0))
     for k in ("up", "contra", "good", "form"):
         m[k] = b64(np.asarray(L[k], dtype=bool), "u1")
