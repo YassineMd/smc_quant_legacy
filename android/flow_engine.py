@@ -35,10 +35,11 @@ WIRE (newline-delimited JSON; arrays are base64 of little-endian float32 unless 
   <- tog     {k, v}                                                         k: lines | hlh | bigplayer | takeover
   <- explain {k}                                                            k = the cycle's start (x0)
 Exit codes: 2 = no daemon."""
-import os, sys, time, json, shutil, tempfile, socket, threading, queue, base64, argparse, traceback, math
+import os, sys, time, json, shutil, tempfile, socket, threading, queue, base64, argparse, traceback, math, zlib
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("QT_QPA_FONTDIR", "C:/Windows/Fonts")
+if sys.platform.startswith("win"):
+    os.environ.setdefault("QT_QPA_FONTDIR", "C:/Windows/Fonts")
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 sys.path.insert(0, REPO)
@@ -46,9 +47,19 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--listen", default="127.0.0.1")
 ap.add_argument("--port", type=int, default=8766)
 ap.add_argument("--tick-ms", type=int, default=250, help="how often the panes are read out")
+ap.add_argument("--auth", default=None, help="require this token in the client's first line ({t:auth, k, z})")
+ap.add_argument("--compress", action="store_true", help="offer a zlib downstream (the client opts in with z=1)")
+ap.add_argument("--debug", action="store_true", help="enable the shot / series / refetch / bfstate commands")
+ap.add_argument("--lean", action="store_true", help="RAM caps for a small VM (bucket scrollback, chart cache)")
+ap.add_argument("--no-tunnel", action="store_true", help="never start an SSH tunnel: wait for the daemon port instead")
 ARGS = ap.parse_args()
 
 from app import config                                        # noqa: E402
+if ARGS.lean:
+    # the tablet reads the FLOW panes only: the bucket scrollback and the candle-chart cache the offscreen window
+    # would fill anyway are the bulk of the terminal's RAM (1.85 GB private on the PC, measured 2026-09-22)
+    config.CLOSED_BUCKETS_CAP = 400
+    config.CHART_CACHE_CAP = 400
 TMP = tempfile.mkdtemp(prefix="flowengine_")
 _ui = os.path.join(REPO, "data", "terminal_ui.json")
 if os.path.exists(_ui):
@@ -153,8 +164,10 @@ def b64(a, dt="<f4"):
 
 # ------------------------------------------------------------------ the socket side (plain threads, no Qt)
 class Client:
-    def __init__(self, sock, addr):
+    def __init__(self, sock, addr, comp=None, initial=b""):
         self.sock = sock; self.addr = addr
+        self.comp = comp                  # a zlib stream once the client opted in (see serve())
+        self._initial = initial           # what arrived in the same packet as the auth line (the tablet's "hi")
         self.out = queue.Queue(maxsize=400)
         self.alive = True
         self.ready = False                                    # said "hi"
@@ -162,7 +175,7 @@ class Client:
         threading.Thread(target=self._writer, daemon=True).start()
 
     def _reader(self):
-        buf = b""
+        buf = self._initial
         try:
             while self.alive:
                 chunk = self.sock.recv(65536)
@@ -187,6 +200,8 @@ class Client:
                 m = self.out.get()
                 if m is None:
                     break
+                if self.comp is not None:
+                    m = self.comp.compress(m) + self.comp.flush(zlib.Z_SYNC_FLUSH)
                 self.sock.sendall(m)
         except Exception:
             pass
@@ -225,20 +240,49 @@ def serve():
     while True:
         s, a = srv.accept()
         s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        comp = None; rest = b""
+        if ARGS.auth:
+            # the FIRST line must be {"t":"auth","k":<token>,"z":1} within 6 s, else the socket goes (the DOM
+            # bridge's handshake); z=1 opts into ONE zlib stream for everything the engine sends after it
+            try:
+                s.settimeout(6.0); buf = b""
+                while b"\n" not in buf:
+                    d = s.recv(4096)
+                    if not d or len(buf) > 4096:
+                        raise OSError("auth eof")
+                    buf += d
+                line, rest = buf.split(b"\n", 1)
+                m = json.loads(line)
+                if m.get("t") != "auth" or str(m.get("k", "")) != ARGS.auth:
+                    raise OSError("bad auth")
+                if ARGS.compress and m.get("z"):
+                    comp = zlib.compressobj(6)
+                s.settimeout(None)
+            except Exception as ex:
+                log("refused %s: %s" % (a[0], ex))
+                try:
+                    s.close()
+                except Exception:
+                    pass
+                continue
         old = CLIENT[0]
         if old is not None:
             old.close()
-        CLIENT[0] = Client(s, a)
-        log("tablet connected from %s" % (a,))
+        cl = Client(s, a, comp, rest)
+        CLIENT[0] = cl
+        log("tablet connected from %s%s" % (a, ", zlib" if comp else ""))
 
 
 # ------------------------------------------------------------------ the window
 tunnel = _term.SSHTunnelManager()
 if not _term._ipc_port_open():
-    log("no tunnel on %s:%s -- opening one" % (config.IPC_HOST, config.IPC_PORT))
-    tunnel.ensure()
+    if ARGS.no_tunnel:
+        log("waiting for the daemon port %s:%s (a tunnel service owns it)" % (config.IPC_HOST, config.IPC_PORT))
+    else:
+        log("no tunnel on %s:%s -- opening one" % (config.IPC_HOST, config.IPC_PORT))
+        tunnel.ensure()
     _tw = time.time()
-    while not _term._ipc_port_open() and time.time() - _tw < 60.0:
+    while not _term._ipc_port_open() and time.time() - _tw < (600.0 if ARGS.no_tunnel else 60.0):
         time.sleep(1.0)
 w = MinimalTerminalWindow("5m"); w._rr_persist_save = lambda tf: None
 w.resize(1600, 1000); w.show()
@@ -349,7 +393,13 @@ def tick_bins(force=False):
         lo, hi = (r0, r1) if full else (r0 - base, r1 - base)
         send({"t": "bins", "base": base + lo, "n": hi - lo, "full": full, "buy": b64(cur[1][lo:hi]), "sell": b64(cur[2][lo:hi]),
               "px": b64(cur[3][lo:hi]), "pxh": b64(cur[4][lo:hi]), "pxl": b64(cur[5][lo:hi])})
-    S.bins_sent = (base, cur[1].copy(), cur[2].copy(), cur[3].copy(), cur[4].copy(), cur[5].copy())
+    if full or prev is None or int(prev[0]) != base or prev[1].size != n:
+        S.bins_sent = (base, cur[1].copy(), cur[2].copy(), cur[3].copy(), cur[4].copy(), cur[5].copy())
+    else:
+        for r0, r1 in ranges:                                # same base and size: patch the sent copies in place
+            lo, hi = r0 - base, r1 - base
+            for k in range(1, 6):
+                prev[k][lo:hi] = cur[k][lo:hi]
 
 
 def tick_cycles(now, force=False):
@@ -598,23 +648,23 @@ def on_cmd(c):
             cb = w.menu.layer_checks.get({"hlh": "m10_hlh", "bigplayer": "m10_bigplayer", "takeover": "cyc_takeover"}.get(key, ""))
             if cb is not None and cb.isChecked() != v:
                 cb.setChecked(v)
-    elif k == "shot":                                          # debug: the offscreen window as the terminal draws it
+    elif k == "shot" and ARGS.debug:                                          # debug: the offscreen window as the terminal draws it
         try:
             w.grab().save(str(c.get("path", "engine_shot.png")))
             send({"t": "shot", "ok": True})
         except Exception as ex:
             send({"t": "shot", "ok": False, "err": str(ex)})
-    elif k == "series":                                        # debug: the terminal's own flow series for a range
+    elif k == "series" and ARGS.debug:                                        # debug: the terminal's own flow series for a range
         try:
             t_, b_, s_ = w._flow.series(float(c["x0"]), float(c["x1"]), float(w._flow_win), int(c.get("max_pts", 4000)))
             send({"t": "series", "x": b64(t_, "<f8"), "buy": b64(b_), "sell": b64(s_), "bin": float(w._flow.bin)})
         except Exception as ex:
             send({"t": "series", "err": str(ex)})
-    elif k == "refetch":                                       # debug: ask the daemon for a window again (idempotence)
+    elif k == "refetch" and ARGS.debug:                                       # debug: ask the daemon for a window again (idempotence)
         w._flow_bf_queue.insert(0, (float(c["x0"]), float(c["x1"])))
         w._flow_bf_t = 0.0
         send({"t": "refetch", "ok": True})
-    elif k == "bfstate":                                       # debug: the backfill pump's queue / in-flight chunk
+    elif k == "bfstate" and ARGS.debug:                                       # debug: the backfill pump's queue / in-flight chunk
         _q = [[float(a), float(b)] for a, b in (w._flow_bf_queue or [])]
         _i = w.__dict__.get("_flow_bf_inflight")
         send({"t": "bfstate", "queue": _q, "inflight": [float(_i[0]), float(_i[1])] if _i else None,
