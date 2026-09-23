@@ -247,6 +247,7 @@ public final class ChartView extends View {
             slY0 = new float[PANE_N], slY1 = new float[PANE_N];
     private int slDrag = -1;
     public boolean showCint = false, showCimp = false;
+    public boolean showDomPrice = true;     // LINES IMPACT's areas on the PRICE chart (menu toggle, user 2026-09-23)
     // paints
     private final Paint pl = new Paint(Paint.ANTI_ALIAS_FLAG), pf = new Paint(Paint.ANTI_ALIAS_FLAG), pt = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path path = new Path(), path2 = new Path(), path3 = new Path();
@@ -609,7 +610,7 @@ public final class ChartView extends View {
         // LINES IMPACT's areas, behind everything else on the price chart (user 2026-09-23): a box around the area's
         // own candles, not the pane's full height. They come with the engine's LINES IMPACT data, which flows
         // whether or not that pane is shown here.
-        drawDomBoxes(c, s, r.left, top, hgt, yl, yh, forming, fh, fl);
+        if (showDomPrice) drawDomBoxes(c, s, r.left, top, hgt, yl, yh, forming, fh, fl);
         if (s.hlhOn) drawHlh(c, s, r, top, hgt, yl, yh);
         for (int i = i0; i < i1; i++) {
             boolean isForm = i == last && forming;
