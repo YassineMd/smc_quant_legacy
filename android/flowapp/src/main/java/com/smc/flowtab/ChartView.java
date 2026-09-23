@@ -1203,6 +1203,11 @@ public final class ChartView extends View {
         else if (crossPane == PANE_IIMP) {
             boolean signed = "Buyer".equals(s.mode) || "Seller".equals(s.mode) || "Lines Buyer/Seller".equals(s.mode);
             vt = fmtMult(Math.pow(2, signed ? v : Math.abs(v)));
+        } else if (crossPane == PANE_CINT || crossPane == PANE_CIMP) {
+            // ⚠ both LINES panes are SIGNED log2 MULTIPLES, like the axis they draw. Without this they fell
+            // through to the dollar branch below and the badge read "$1.2M" over a 1.2x line (user 2026-09-23).
+            // Any pane added here has to declare its units or it silently inherits dollars.
+            vt = fmtMult(Math.pow(2, v));
         } else vt = (v < 0 ? "-" : "") + usdShort(Math.abs(v));
         tagBadge(c, plotR, crossY, vt, 1.0f, 0.5f);
         // the CLOCK badge at the bottom of the hovered pane
