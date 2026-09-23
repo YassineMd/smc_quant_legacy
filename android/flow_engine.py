@@ -647,7 +647,12 @@ def tick_hlh(now):
         S.hlh_xm = _hlh.IdentityXMap()
     pxa = w.__dict__.get("_px_arr")
     bars = None if (pxa is None or np.size(pxa[0]) == 0) else (pxa[0], pxa[1], pxa[2], pxa[3], pxa[4], pxa[5])
-    out = st.build("tab", S.hlh_xm, bloc, not S.bw, week_on, now, badges=bdg, tables=tab, poc_runs=pcr, bars=bars)
+    # ⚠ NO POC acceptance areas on the TABLET (user 2026-09-23: "remove the below/above POC area from the
+    # tablette"). The shaded runs of >= HLH_POC_RUN_MIN cycles that closed on one side of a bloc's POC. Forced off
+    # HERE, in the one place that builds the tablet's HLH, rather than by unticking the engine window's menu:
+    # the terminal keeps its own "POC acceptance areas" option exactly as the user has it, and nothing about the
+    # blocs, the POC line, the merges or the colours changes -- the option is display-only by design.
+    out = st.build("tab", S.hlh_xm, bloc, not S.bw, week_on, now, badges=bdg, tables=tab, poc_runs=False, bars=bars)
     if out is S.hlh_out:
         return
     S.hlh_out = out
