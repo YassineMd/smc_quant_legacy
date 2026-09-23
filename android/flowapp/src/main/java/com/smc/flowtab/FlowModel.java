@@ -71,7 +71,8 @@ public final class FlowModel {
     }
     public final Lines cint = new Lines(), cimp = new Lines();
     public int smoothMin = 1, smoothMax = 30;
-    public int smIimp = 1, smCint = 20, smCimp = 20;   // the three windows, as the engine last reported them
+    public int smIimp = 5, smCint = 5, smCimp = 5;     // the three windows, as the engine last reported them
+                                                       // (these are only what shows before `hello` lands)
 
     // ---- interpretation rows
     public static final class Row {

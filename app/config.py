@@ -474,9 +474,10 @@ IIMP_LINES_MODE = "Lines Buyer/Seller"
 # THE SMOOTHING SLIDER on THIS pane drives its Lines Buyer/Seller option and nothing else (user 2026-09-22:
 # "also on the interestximpact add the slider on Lines Buyer/seller dropdown option"). Same trailing geometric
 # mean the two split panes use, over LINES_SMOOTH_MIN..MAX cycles, persisted as "iimp_smooth".
-# ⚠ DEFAULTS TO 1, not 20: 1 is no smoothing at all, which is exactly the chart Lines Buyer/Seller has been
-# drawing since e312e2c. Starting it at 20 would silently redraw a shipped view nobody asked to change.
-IIMP_SMOOTH_N = 1
+# ⚠ 5 since 2026-09-23, at the user's word ("make the smooth slider default to 5 / both on the tablet and
+# terminal"). It shipped at 1 -- no smoothing, the chart this mode drew since e312e2c -- so that turning the
+# slider on could never redraw a view nobody asked to change; they have now asked.
+IIMP_SMOOTH_N = 5
 IIMP_LINES_W = 1.8              # width of the two lines, px (the forming stretch is drawn at IIMP_FORM_PEN_A)
 
 # ---------------------------------------------------------------------------------------------------------
@@ -493,7 +494,7 @@ IIMP_LINES_W = 1.8              # width of the two lines, px (the forming stretc
 # ---------------------------------------------------------------------------------------------------------
 CINT_PANE_ON = False            # both default OFF: a split that silently adds two panes to the stack would be
 CIMP_PANE_ON = False            # a surprise, and the toggle is the point of the split
-LINES_SMOOTH_N = 20             # DEFAULT trailing-mean window, in CYCLES, and its OWN knob -- deliberately not
+LINES_SMOOTH_N = 5              # DEFAULT trailing-mean window, in CYCLES, and its OWN knob -- deliberately not
                                 # the cycle lookback. The lookback picks the BASELINE each cycle's reading is
                                 # divided by; this picks how many of those are averaged for display. Tying them
                                 # would move the smoothing every time the user changed the baseline, which are
@@ -528,10 +529,14 @@ LIMP_DOM_ALPHA_HI = 95          # guides, and the pane's job is still the lines.
 # The BRIGHT band gets its own pair of colours, picked by the user from two swatches (2026-09-23), rather
 # than the pane's teal / red at a higher alpha. They are far more saturated than IIMP_BUY_COL / SELL_COL, so
 # a gained-into band separates from an ordinary one by HUE as well as by weight.
-# ⚠ The red swatch arrived as a lossy WebP and samples #FF000D; that is encoder drift from pure red, which
-# is what is used here. The green swatch was exact and carried its own label, #66FF00.
+# ⚠ THE SELLERS' BRIGHT BAND IS PURPLE, NOT RED (user 2026-09-23: "maybe its not really visible to me, so
+# change it to this color instead bright purple"). Bright red #FF0000 against the dim band's #ef5350 was red
+# on red -- the two shades differed only in saturation and weight, which is the one axis a 38-vs-95 alpha was
+# already using. Purple separates them by HUE, the way #66FF00 already does on the buy side.
+# ⚠ Both swatches arrived as lossy WebP: the purple samples #BD03FD but is LABELLED #BE03FD, and the label
+# is used. (The first red swatch drifted the same way, #FF000D for pure red.) The green was exact.
 LIMP_DOM_BRIGHT_BUY = "#66FF00"
-LIMP_DOM_BRIGHT_SELL = "#FF0000"
+LIMP_DOM_BRIGHT_SELL = "#BE03FD"
 # --- BREAKOUT BADGE on the PRICE pane (user 2026-09-21: "add a badge on the breakout candles where the candle side is
 # above x1 interestximpact and its opposite is below x1 -- for example we have a breakout buy candle and the
 # interestximpact line buy is above x1 and interestximpact line sell is below x1"). A BREAKOUT BUY candle gets a GREEN

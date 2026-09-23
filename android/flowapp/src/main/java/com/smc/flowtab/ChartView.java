@@ -250,8 +250,10 @@ public final class ChartView extends View {
     private boolean framePending = false;
     private final Runnable heartbeat = new Runnable() { @Override public void run() { if (follow) invalidate(); h.postDelayed(this, 250); } };
     private static final int TEAL = Color.parseColor("#26a69a"), RED = Color.parseColor("#ef5350"), ORANGE = Color.parseColor("#ff9f43");
-    // LINES IMPACT, the bands the leader CLIMBED into: the user's own swatches (2026-09-23)
-    private static final int DOM_HI_BUY = Color.parseColor("#66FF00"), DOM_HI_SELL = Color.parseColor("#FF0000");
+    // LINES IMPACT, the bands the leader CLIMBED into: the user's own swatches (2026-09-23). The sellers'
+    // is PURPLE, not red -- bright red against the dim band's #ef5350 was red on red, separating only by
+    // weight, which the 38-vs-95 alpha was already doing. Purple separates it by HUE.
+    private static final int DOM_HI_BUY = Color.parseColor("#66FF00"), DOM_HI_SELL = Color.parseColor("#BE03FD");
     private static final int WALL_COL = Color.parseColor("#dcdcdc"), KEEP_COL = Color.parseColor("#3a4150");   // IIMP_WALL_COL / IIMP_KEEP_COL
     private static final int BG = Color.parseColor("#141414"), FG = Color.parseColor("#dcdcdc"), TITLE = Color.parseColor("#7d8492");
     private static final int WEAK = Color.parseColor("#8a919c"), GUIDE = Color.parseColor("#9aa4b2");
