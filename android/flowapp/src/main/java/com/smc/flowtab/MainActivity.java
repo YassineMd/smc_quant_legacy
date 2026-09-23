@@ -276,7 +276,6 @@ public final class MainActivity extends Activity implements EngineClient.Listene
         toggle(col, "Interest × Impact", "iimp", chart.showIimp, v -> chart.showIimp = v);
         toggle(col, "Lines Interest", "cint", chart.showCint, v -> chart.showCint = v);
         toggle(col, "Lines Impact", "cimp", chart.showCimp, v -> chart.showCimp = v);
-        toggle(col, "Lines Impact areas on Price", "domprice", chart.showDomPrice, v -> chart.showDomPrice = v);
         toggle(col, "Interpretation", "interp", interp.getVisibility() == View.VISIBLE, v -> { interp.setVisibility(v && chart.getFullscreen() < 0 ? View.VISIBLE : View.GONE); divider.setVisibility(interp.getVisibility()); });
         section(col, "Sub-widgets");
         toggle(col, "Market Position  (BUY / SELL)", "market", chart.tools.showMarket, v -> { chart.tools.showMarket = v; applyStyle(); });
@@ -284,6 +283,7 @@ public final class MainActivity extends Activity implements EngineClient.Listene
         section(col, "Indicator");
         toggle(col, "Big Player", "bigplayer", chart.showBp, v -> { chart.showBp = v; feed.sendToggle("bigplayer", v); });
         toggle(col, "HLH Volume Profile", "hlh", chart.showHlh, v -> { chart.showHlh = v; feed.sendToggle("hlh", v); });
+        toggle(col, "Lines Impact areas on Price", "domprice", chart.showDomPrice, v -> chart.showDomPrice = v);
         section(col, "Indicator  ›  Cycle Chart");
         toggle(col, "Takeover ▲▼  (one side owns the cycle)", "takeover", chart.showTakeover, v -> { chart.showTakeover = v; feed.sendToggle("takeover", v); });
         section(col, "Chart Style");
