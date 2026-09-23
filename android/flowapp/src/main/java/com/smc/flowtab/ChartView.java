@@ -1297,9 +1297,9 @@ public final class ChartView extends View {
         // (the engine sends -999 there) and lighter over the cycle still forming
         for (int side = 0; side < 2; side++) {
             float[] y = side == 0 ? L.b : L.s;
-            // LINES IMPACT only: the stretches this side MOVED 0.3x over. A climb is thick in the side's
-            // own colour; a FALL is thick in GREY, because a side losing its impact is not a signal FOR that
-            // side and drawing it teal or red would read as one (user 2026-09-23).
+            // LINES IMPACT only: the single STEPS where this side moved 0.3x between TWO cycles. A climb
+            // is thick in the side's own colour; a FALL is thick in GREY, because a side losing its impact
+            // is not a signal FOR that side and teal or red would read as one (user 2026-09-23).
             byte[] mk = imp ? runMark(y, L.n, L.form, L.gain) : null;
             pl.setColor(side == 0 ? TEAL : RED); pl.setStrokeWidth(1.8f * d);
             path.reset(); path2.reset(); path3.reset();
@@ -1351,35 +1351,30 @@ public final class ChartView extends View {
         }
     }
 
-    /** LINES IMPACT: which segments of one side's line belong to a MOVE of `thr` or more, and which way.
+    /** LINES IMPACT: which SEGMENTS of one side's line are a move of `thr` or more, and which way.
      *
-     * Returns mk[i] for "the segment ending at point i": +1 it is part of a qualifying CLIMB, -1 part of a
-     * qualifying FALL, 0 neither. A run is monotone -- its direction is set by its first step and it extends
-     * while the steps keep that direction -- and it qualifies when its end stands `thr` away from its start.
-     * The WHOLE run is then marked: the user asked for "just the part where it gained it", and the part that
-     * did the gaining is the climb itself, 0.5x through 0.8x, not only what comes after 0.8x.
+     * Returns mk[i] for "the segment ending at point i": +1 it CLIMBED `thr` or more from the cycle before
+     * it, -1 it FELL that far, 0 neither. ONE SEGMENT AT A TIME -- the step from one rated cycle to the next.
      *
-     * ⚠ The moment the line turns the other way the run ends, so a retrace goes thin immediately -- which
-     * also means a one-cycle wobble SPLITS a long move into two shorter ones, neither of which may reach
-     * `thr` on its own. That is the shape the user picked when asked, knowingly. */
+     * ⚠ This replaced a whole-run version (094ea83) at the user's word: "it should be the increase /
+     * decrease just from 2 cycles so we will not color the whole increase/decrease". The run version marked
+     * every segment of a monotone climb that ended 0.3x above where it began, so a slow drift over eight
+     * cycles came out as one long thick stretch. This marks only the steps that THEMSELVES moved 0.3x.
+     *
+     * ⚠ THE SMOOTHING WINDOW DECIDES HOW OFTEN THIS FIRES. These lines are a trailing mean, and a longer
+     * window flattens exactly the single-cycle jumps this looks for: at 1 there is no smoothing and the steps
+     * are large; by 20 a 0.3x step is rare. If the marks go missing, the slider is why. */
     private static byte[] runMark(float[] y, int n, byte[] form, double thr) {
         byte[] mk = new byte[Math.max(0, n)];
-        int[] idx = new int[Math.max(0, n)];
-        int m = 0;
+        int prev = -1;
         for (int i = 0; i < n && i < y.length; i++) {
             if (form != null && i < form.length && form[i] != 0) continue;   // the forming point is its own stroke
-            if (y[i] < -900f) continue;                                       // a cycle the engine could not rate
-            idx[m++] = i;
-        }
-        int s = 0;
-        while (s < m - 1) {
-            boolean up = y[idx[s + 1]] >= y[idx[s]];
-            int e = s;
-            while (e + 1 < m && (up ? y[idx[e + 1]] >= y[idx[e]] : y[idx[e + 1]] <= y[idx[e]])) e++;
-            double move = y[idx[e]] - y[idx[s]];
-            byte tag = move >= thr ? (byte) 1 : (move <= -thr ? (byte) -1 : (byte) 0);
-            if (e > s && tag != 0) for (int k = s + 1; k <= e; k++) mk[idx[k]] = tag;
-            s = e > s ? e : s + 1;
+            if (y[i] < -900f) { prev = -1; continue; }                        // a cycle the engine could not rate
+            if (prev >= 0) {
+                double step = y[i] - y[prev];
+                mk[i] = step >= thr ? (byte) 1 : (step <= -thr ? (byte) -1 : (byte) 0);
+            }
+            prev = i;
         }
         return mk;
     }
