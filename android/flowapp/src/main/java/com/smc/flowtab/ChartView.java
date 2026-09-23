@@ -244,7 +244,7 @@ public final class ChartView extends View {
     public boolean showCint = false, showCimp = false;
     // paints
     private final Paint pl = new Paint(Paint.ANTI_ALIAS_FLAG), pf = new Paint(Paint.ANTI_ALIAS_FLAG), pt = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Path path = new Path(), path2 = new Path();
+    private final Path path = new Path(), path2 = new Path(), path3 = new Path();
     private final GestureDetector gest; private final ScaleGestureDetector scale;
     private final Handler h = new Handler(Looper.getMainLooper());
     private boolean framePending = false;
@@ -254,6 +254,7 @@ public final class ChartView extends View {
     // is PURPLE, not red -- bright red against the dim band's #ef5350 was red on red, separating only by
     // weight, which the 38-vs-95 alpha was already doing. Purple separates it by HUE.
     private static final int DOM_HI_BUY = Color.parseColor("#66FF00"), DOM_HI_SELL = Color.parseColor("#BE03FD");
+    private static final int LOSS_GREY = Color.parseColor("#7a828e");   // a side that LOST 0.3x of impact
     private static final int WALL_COL = Color.parseColor("#dcdcdc"), KEEP_COL = Color.parseColor("#3a4150");   // IIMP_WALL_COL / IIMP_KEEP_COL
     private static final int BG = Color.parseColor("#141414"), FG = Color.parseColor("#dcdcdc"), TITLE = Color.parseColor("#7d8492");
     private static final int WEAK = Color.parseColor("#8a919c"), GUIDE = Color.parseColor("#9aa4b2");
@@ -1296,17 +1297,34 @@ public final class ChartView extends View {
         // (the engine sends -999 there) and lighter over the cycle still forming
         for (int side = 0; side < 2; side++) {
             float[] y = side == 0 ? L.b : L.s;
+            // LINES IMPACT only: the stretches this side MOVED 0.3x over. A climb is thick in the side's
+            // own colour; a FALL is thick in GREY, because a side losing its impact is not a signal FOR that
+            // side and drawing it teal or red would read as one (user 2026-09-23).
+            byte[] mk = imp ? runMark(y, L.n, L.form, L.gain) : null;
             pl.setColor(side == 0 ? TEAL : RED); pl.setStrokeWidth(1.8f * d);
-            path.reset();
+            path.reset(); path2.reset(); path3.reset();
             boolean open = false;
+            float lx = 0, ly = 0;
             for (int i = 0; i < L.n && i < y.length; i++) {
                 boolean formi = L.form != null && i < L.form.length && L.form[i] != 0;
                 if (formi || y[i] < -900f) { open = false; continue; }
                 float px = xPx(0.5 * (L.x0[i] + L.x1[i]));
                 float py = (float) (top + (yhi - Math.max(-clip, Math.min(clip, y[i]))) / range * hgt);
-                if (!open) { path.moveTo(px, py); open = true; } else path.lineTo(px, py);
+                if (!open) { path.moveTo(px, py); open = true; } else {
+                    path.lineTo(px, py);
+                    // the thick passes are SEGMENTS, not one polyline: a run can be any stretch of them
+                    if (mk != null && mk[i] > 0) { path2.moveTo(lx, ly); path2.lineTo(px, py); }
+                    else if (mk != null && mk[i] < 0) { path3.moveTo(lx, ly); path3.lineTo(px, py); }
+                }
+                lx = px; ly = py;
             }
             c.drawPath(path, pl);
+            if (mk != null) {
+                pl.setStrokeWidth(4.2f * d);
+                c.drawPath(path2, pl);                        // the climb, still this side's colour
+                pl.setColor(LOSS_GREY); c.drawPath(path3, pl);   // the fall, grey
+                pl.setStrokeWidth(1.8f * d);
+            }
             // the forming stretch, lighter, from the last finished point out to its own
             int k = -1;
             for (int i = L.n - 1; i >= 0; i--) if (L.form != null && i < L.form.length && L.form[i] != 0) { k = i; break; }
@@ -1331,6 +1349,39 @@ public final class ChartView extends View {
             pt.setColor(L.b[k] >= L.s[k] ? TEAL : RED);
             c.drawText(txt, plotR - pt.measureText(txt) - 6 * d, r.bottom - 5 * d, pt);
         }
+    }
+
+    /** LINES IMPACT: which segments of one side's line belong to a MOVE of `thr` or more, and which way.
+     *
+     * Returns mk[i] for "the segment ending at point i": +1 it is part of a qualifying CLIMB, -1 part of a
+     * qualifying FALL, 0 neither. A run is monotone -- its direction is set by its first step and it extends
+     * while the steps keep that direction -- and it qualifies when its end stands `thr` away from its start.
+     * The WHOLE run is then marked: the user asked for "just the part where it gained it", and the part that
+     * did the gaining is the climb itself, 0.5x through 0.8x, not only what comes after 0.8x.
+     *
+     * ⚠ The moment the line turns the other way the run ends, so a retrace goes thin immediately -- which
+     * also means a one-cycle wobble SPLITS a long move into two shorter ones, neither of which may reach
+     * `thr` on its own. That is the shape the user picked when asked, knowingly. */
+    private static byte[] runMark(float[] y, int n, byte[] form, double thr) {
+        byte[] mk = new byte[Math.max(0, n)];
+        int[] idx = new int[Math.max(0, n)];
+        int m = 0;
+        for (int i = 0; i < n && i < y.length; i++) {
+            if (form != null && i < form.length && form[i] != 0) continue;   // the forming point is its own stroke
+            if (y[i] < -900f) continue;                                       // a cycle the engine could not rate
+            idx[m++] = i;
+        }
+        int s = 0;
+        while (s < m - 1) {
+            boolean up = y[idx[s + 1]] >= y[idx[s]];
+            int e = s;
+            while (e + 1 < m && (up ? y[idx[e + 1]] >= y[idx[e]] : y[idx[e + 1]] <= y[idx[e]])) e++;
+            double move = y[idx[e]] - y[idx[s]];
+            byte tag = move >= thr ? (byte) 1 : (move <= -thr ? (byte) -1 : (byte) 0);
+            if (e > s && tag != 0) for (int k = s + 1; k <= e; k++) mk[idx[k]] = tag;
+            s = e > s ? e : s + 1;
+        }
+        return mk;
     }
 
     /** The right axis as a MULTIPLE (log2), the way every pane in this family labels it. */
