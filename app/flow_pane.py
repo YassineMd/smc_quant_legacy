@@ -358,9 +358,10 @@ class FlowStore:
         is how the user found it. On the real extremes the same comparison is exact on 99.5% of cycles, with
         the high never below the tape (the residual 0.5% is one cycle at the window edge).
 
-        ⚠ A cycle owns its whole boundary SECOND: fin is the next cycle's start bin and is included here. Any
-        reference that slices a tick tape at the exact cycle timestamps instead will disagree on ~15% of
-        cycles for that reason alone -- it cuts the boundary second in half."""
+        ⚠ A cycle owns WHOLE SECONDS: its start second through the second before the next cycle's start second,
+        plus its OPEN (the close of the second before it). Any reference that slices a tick tape at the exact
+        cycle timestamps instead will disagree on some cycles for that reason alone -- the crossing time sits
+        inside the start second and cuts it in half."""
         return self._crosses_full(t0, t1, win_secs, min_spread_pct, min_hold_secs, max_n,
                                   context_secs, tick)[10:]
 
@@ -368,6 +369,7 @@ class FlowStore:
                    min_hold_secs: float = 20.0, max_n: int = 400, context_secs: float = 600.0,
                    tick: float = 0.01):
         """(price at each cycle's START, price at its END) -- the two numbers move_ticks is the difference of.
+        START = the close of the second before the cycle's start second, i.e. the previous cycle's END.
 
         Called with the SAME arguments as crosses(), so it lands on that call's memo entry and costs a dict
         lookup rather than a second pass. NaN where that end of the cycle was never priced, exactly where
@@ -435,25 +437,36 @@ class FlowStore:
             head[0] = True
             head[1:] = colr[1:] != colr[:-1]
             fl = fl[head]; sg = sg[head]; db = db[head]
-        # How far price travelled over each cycle: this head -> the NEXT head, or the last bin of tape for the
-        # one still forming. The price is carried over tradeless seconds, and a cycle whose ends were never
-        # priced at all reports NaN rather than a fake 0.
+        # ONE SECOND BELONGS TO ONE CYCLE (user 2026-09-23, "go with B"). A cycle owns its START second -- the
+        # one its lines crossed in -- through the second BEFORE the next cycle's start second (the last bin of
+        # tape for the one still forming). Its candle OPENS at the close of the second before its start second
+        # (= the previous cycle's close) and CLOSES at its own last second, so the candle and the dollars cover
+        # exactly the same trades. ⚠ It used to open at the start second's CLOSE while counting that second's
+        # dollars, and the boundary second was counted in BOTH cycles: the print that makes the lines cross
+        # sits in that second, so each cycle was credited with its trigger's dollars but not its price move
+        # (21:22:39 on 2026-09-23: a $582k sell sweep, 114.18 -> 114.05 in one second, counted in a green
+        # candle that opened at 114.05 -- "sellers dominate, price rose").
+        # The price is carried over tradeless seconds, and a cycle whose ends were never priced at all reports
+        # NaN rather than a fake 0.
         px = self._px[p0:i1 + 1].copy()
         pv = px > 0
         if pv.any():
             px = px[np.maximum.accumulate(np.where(pv, np.arange(m), 0))]
             pv = pv[np.maximum.accumulate(np.where(pv, np.arange(m), 0))]
-        fin = np.concatenate([fl[1:], [m - 1]]) if fl.size else np.zeros(0, dtype=np.int64)
+        fin = np.concatenate([fl[1:] - 1, [m - 1]]) if fl.size else np.zeros(0, dtype=np.int64)
         if fl.size:
-            _ok = pv[fl] & pv[fin]
-            mv = np.where(_ok, (px[fin] - px[fl]) / float(tick), np.nan)
+            op = fl - 1                                    # the second before the start (flips are >= 1)
+            _ok = pv[op] & pv[fin]
+            mv = np.where(_ok, (px[fin] - px[op]) / float(tick), np.nan)
             # the two prices the move is the difference of, kept rather than discarded: the feed prints the
             # cycle as "100.01 -> 97.30". NaN exactly where move_ticks is NaN, so they can never disagree.
-            px0_ = np.where(_ok, px[fl], np.nan)
+            # One cycle's close IS the next one's open (px[fin[k]] == px[op[k + 1]]).
+            px0_ = np.where(_ok, px[op], np.nan)
             px1_ = np.where(_ok, px[fin], np.nan)
-            # the cycle's HIGH and LOW, from the per-bin TRUE extremes -- NOT from the closes. The heads are
-            # contiguous (fin[k] == fl[k+1]), so one reduceat covers every cycle in O(n) -- but reduceat's
-            # segment is HALF-OPEN, so the closing bin belongs to the next segment and is folded back by hand.
+            # the cycle's HIGH and LOW, from the per-bin TRUE extremes -- NOT from the closes. The spans are
+            # contiguous and disjoint (fin[k] == fl[k+1] - 1), so reduceat's HALF-OPEN segments are exactly the
+            # cycles, O(n). The OPEN is folded in: it is a real trade (the second before), and without it a
+            # cycle that gapped away from the previous close would draw a body outside its own wick.
             # ⚠ an untraded bin holds 0 in both arrays, which would drag every low to 0: mask those to the
             # bin's own close (itself 0 there, so the fill in _filled/price_series still governs what is
             # DRAWN) by taking the max against _pxl's positive entries only.
@@ -464,11 +477,11 @@ class FlowStore:
             _ll = np.where(_ll > 0, _ll, np.inf)               # untraded bins must not pull the low to zero
             _hi = np.maximum.reduceat(_hh, fl)
             _lo = np.minimum.reduceat(_ll, fl)
-            pxh_ = np.where(_ok, np.maximum(_hi, _hh[fin]), np.nan)
-            _lo_end = np.where(_ll[fin] > 0, _ll[fin], np.inf)
-            pxl_ = np.minimum(_lo, _lo_end)
+            pxh_ = np.where(_ok, np.maximum(_hi, px[op]), np.nan)
+            pxl_ = np.minimum(_lo, np.where(pv[op], px[op], np.inf))
             pxl_ = np.where(_ok & np.isfinite(pxl_), pxl_, np.nan)
-            # the dollars each side traded INSIDE the cycle, over the same span the move is measured across
+            # the dollars each side traded INSIDE the cycle -- exactly the seconds the candle covers, each second
+            # in one cycle only
             vb_ = cb[fin + 1] - cb[fl]
             vs_ = ca[fin + 1] - ca[fl]
         else:
@@ -520,11 +533,13 @@ class FlowStore:
                   `min_spread_pct` and stayed there for `min_hold_secs` consecutive seconds.
           not strong  the side held for `min_hold_secs` but never got that far apart -- a real cycle, a weak one
                   (user 2026-09-10 asked for these back, drawn in gray rather than dropped).
-          move_ticks  how far PRICE travelled over that cycle -- from this cross to the NEXT one, or to the last
-                  bin of tape for the one still forming. Its sign is the price's, not the side's: a buy cycle
-                  that ends below where it started is negative. NaN where no trade priced either end.
-          buy_usd / sell_usd  taker dollars each side traded INSIDE that cycle, over the same span the move is
-                  measured across. The caller decides which one to hold the move against.
+          move_ticks  how far PRICE travelled over that cycle -- from the close of the second before its cross
+                  to the close of the second before the NEXT cross, or to the last bin of tape for the one still
+                  forming. Its sign is the price's, not the side's: a buy cycle that ends below where it started
+                  is negative. NaN where no trade priced either end.
+          buy_usd / sell_usd  taker dollars each side traded INSIDE that cycle, over exactly the seconds the
+                  move covers -- its cross's second through the second before the next cross, each second in
+                  ONE cycle. The caller decides which one to hold the move against.
           t_end   where the cycle ENDED -- the NEXT cross's own interpolated crossing, so one cycle's right edge
                   is the next one's left edge and both sit exactly on the vertical line drawn there.
           done    False only for the cycle still open at the end of the read, i.e. the one still forming when

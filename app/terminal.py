@@ -22352,7 +22352,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         self._score_memo = (key, out)
         return out
 
-    def _iimp_climb2(self, t, t_end):
+    def _iimp_climb2(self, t, t_end, done=None):
         """BOTH sides' own aggressive $ up to THEIR OWN extreme, and the seconds to it, in ONE walk.
 
         The per-side score needs buyers' climb to the HIGH and sellers' climb to the LOW on every cycle, not just
@@ -22365,9 +22365,10 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             return tuple(z4)
         ob, sb, os_, ss = z4
         base = int(base)
+        _Z = self._cycle_last_bins(t_end, done, base, n)
         for k in range(int(np.size(t))):
             a = int(np.floor(float(t[k]))) - base
-            z = min(int(np.floor(float(t_end[k]))) - base, n - 1)
+            z = int(_Z[k])
             if a < 0 or z < a:
                 continue
             segh = st._pxh[a:z + 1]; segl = st._pxl[a:z + 1]
@@ -22565,13 +22566,27 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         np.maximum.accumulate(idx, out=idx)
         return v[idx]                      # before the first sample idx is 0, and v[0] is NaN there by definition
 
-    def _iimp_climb(self, t, t_end, is_buy):
+    @staticmethod
+    def _cycle_last_bins(t_end, done, base: int, n: int):
+        """Each cycle's LAST store bin, the flow store's rule (FlowStore._cross_scan, 2026-09-23): a FINISHED
+        cycle ends with the second BEFORE the next cycle's start second -- its t_end is the next crossing, which
+        sits INSIDE that start second, hence floor - 1. An unfinished one ends at an exclusive edge (the tape's
+        end) or at `now` mid-second (the forming one, clamped), hence ceil - 1: the live second stays in.
+        ⚠ By `done`, not by position: a read clipped to the view can end on a finished cycle."""
+        te = np.asarray(t_end, dtype=np.float64)
+        dn = np.asarray(done, dtype=bool) if done is not None else np.arange(te.size) < te.size - 1
+        z = np.where(dn, np.floor(te), np.ceil(te)) - base - 1
+        return np.minimum(z, n - 1).astype(np.int64)
+
+    def _iimp_climb(self, t, t_end, is_buy, done=None):
         """Per cycle: the side's own aggressive $ up to the cycle's EXTREME, and the seconds it took to get there.
 
-        Read off the store's own 1 s bins -- a cycle owns [floor(start), floor(end)] and its extreme is the first
-        bin holding the cycle's high (buy) or low (sell). Checked against the cycle's own high / low from
-        crosses_hl on 100% of 1539 cycles when this was measured. Only the cycles in the read are walked, and that
-        is bounded by FLOW_CROSS_MAX."""
+        Read off the store's own 1 s bins -- a cycle owns its start second through _cycle_last_bins (the second
+        before the next cycle's start) and its extreme is the first bin holding the cycle's high (buy) or low
+        (sell). Measured against crosses_hl on 100% of 1539 cycles under the old boundary rule; since
+        2026-09-23 crosses_hl also folds in the cycle's OPEN (the second before), so where the open itself is
+        the extreme this walk stops at the highest / lowest trade INSIDE the cycle instead. Only the cycles in
+        the read are walked, and that is bounded by FLOW_CROSS_MAX."""
         st = self._flow
         base = getattr(st, "_base", None)
         n = int(len(st._buy)) if base is not None else 0
@@ -22592,7 +22607,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         _d = _memo[1]
         _settled = n - 1 - int(getattr(st, "_HIST_MARGIN_BINS", 5))    # a row ending before this bin cannot change
         _A = (np.floor(np.asarray(t, dtype=np.float64)) - base).astype(np.int64).tolist()
-        _Z = np.minimum(np.floor(np.asarray(t_end, dtype=np.float64)) - base, n - 1).astype(np.int64).tolist()
+        _Z = self._cycle_last_bins(t_end, done, base, n).tolist()
         _B = np.asarray(is_buy, dtype=bool).tolist()      # plain ints and bools: the per-row numpy scalar
         for k in range(len(_A)):                          # conversions were most of the warm walk's cost
             a = _A[k]; z = _Z[k]    # z: the FORMING cycle's end can sit past the store's last bin (a quiet tape,
@@ -22969,7 +22984,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         lead_buy = np.isfinite(imb) & (imb >= 0.0)
         wall_raw = self._iimp_wall(t, lead_buy)
         wall = self._lob_ratio(wall_raw, done, n_lb, n_mn, include_open=True)
-        own_b, secs_b = self._iimp_climb(t, t_end_c, lead_buy)
+        own_b, secs_b = self._iimp_climb(t, t_end_c, lead_buy, done)
         reach = np.where(lead_buy, pxh - px0, px0 - pxl) / float(config.TICK_SIZE)
         with np.errstate(divide="ignore", invalid="ignore"):
             y_r = np.log1p(np.maximum(reach, 0.0))
@@ -23499,7 +23514,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             sm_s = self._lines_smooth(_is, rated, sm_n, n_mn)
         else:
             wall_raw = self._iimp_wall(t, lead_buy)
-            own_b, secs_b = self._iimp_climb(t, t_end_c, lead_buy)
+            own_b, secs_b = self._iimp_climb(t, t_end_c, lead_buy, done)
             reach = np.where(lead_buy, pxh - px0, px0 - pxl) / float(config.TICK_SIZE)
             with np.errstate(divide="ignore", invalid="ignore"):
                 y_r = np.log1p(np.maximum(reach, 0.0))
