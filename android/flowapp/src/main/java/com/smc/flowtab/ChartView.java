@@ -78,7 +78,12 @@ public final class ChartView extends View {
     private final boolean[] yAuto = {true, true, true, true, true, true};
     private final double[] yLo = new double[PANE_N], yHi = new double[PANE_N],
             lastLo = new double[PANE_N], lastHi = new double[PANE_N];
-    private final double[] lineTop = new double[PANE_N];       // each line pane's own y dead-band
+    private final double[] lineTop = new double[PANE_N];       // each line pane's HELD y scale (0 = not yet fitted)
+    // ⚠ THE Y SCALE IS FITTED ONCE AND HELD (2026-09-23): fitting to what was on screen rescaled the pane on
+    // every pan. Each latch is cleared only by a change in what the pane MEANS -- see the reset points below.
+    private static final int FIT_MIN_N = 20;                   // cycles behind a fit before it may latch
+    private String lastIimpMode = null; private int lastIimpSmn = -1, lastLb = -1;
+    private final int[] lastLineSmooth = new int[PANE_N];
     private int panPane = -1; private float panAccY = 0;
 
     /** The pane's y range this frame: its fit, or the range the user panned / zoomed it to. */
@@ -337,7 +342,11 @@ public final class ChartView extends View {
         postOnAnimation(() -> { framePending = false; invalidate(); });
     }
 
-    public void recentre() { follow = true; pxLo = pxHi = Double.NaN; java.util.Arrays.fill(yAuto, true); sendView(true); invalidate(); }
+    public void recentre() {
+        follow = true; pxLo = pxHi = Double.NaN; java.util.Arrays.fill(yAuto, true);
+        iimpTop = 0; java.util.Arrays.fill(lineTop, 0);          // the HELD scales refit on the next frame
+        sendView(true); invalidate();
+    }
 
     public void setFullscreen(int p) { fullscreen = p; if (host != null) host.onFullscreen(p >= 0); invalidate(); }
 
@@ -472,7 +481,7 @@ public final class ChartView extends View {
             s.tkBuy = M.tkBuy; s.tkSell = M.tkSell; s.tkForm = M.tkForm;
             s.mode = M.iimpMode; s.iN = M.iN; s.iX0 = M.iX0; s.iX1 = M.iX1; s.iV = M.iV; s.iMult = M.iMult; s.iScore = M.iScore; s.iWall = M.iWall; s.iKept = M.iKept;
             s.iSbuy = M.iSbuy; s.iSsell = M.iSsell; s.iLiib = M.iLiib; s.iLiis = M.iLiis; s.iUp = M.iUp; s.iContra = M.iContra; s.iGood = M.iGood; s.iForm = M.iForm;
-            s.iLyb = M.iLyb; s.iLys = M.iLys;
+            s.iLyb = M.iLyb; s.iLys = M.iLys; s.iSmn = M.iSmn;
             s.connected = M.connected;
             s.cint = M.cint; s.cimp = M.cimp;
             s.hlhOn = M.hlhOn && showHlh; s.hlhNote = M.hlhNote; s.hlhPics = M.hlhPics; s.hlhLabels = M.hlhLabels; s.hlhDashes = M.hlhDashes;
@@ -517,7 +526,7 @@ public final class ChartView extends View {
         double livePx, win, tick; int formCol, dec;
         double[] lqX; float[] lqB, lqA;
         double[] tkBuy, tkSell, tkForm;
-        String mode; int iN; double[] iX0, iX1; float[] iV, iMult, iScore, iWall, iKept, iSbuy, iSsell, iLiib, iLiis, iLyb, iLys; byte[] iUp, iContra, iGood, iForm;
+        String mode; int iN, iSmn; double[] iX0, iX1; float[] iV, iMult, iScore, iWall, iKept, iSbuy, iSsell, iLiib, iLiis, iLyb, iLys; byte[] iUp, iContra, iGood, iForm;
         boolean connected;
         FlowModel.Lines cint, cimp;
         boolean hlhOn; String hlhNote; List<FlowModel.HlhPic> hlhPics; List<FlowModel.HlhLabel> hlhLabels; List<FlowModel.HlhDash> hlhDashes;
@@ -952,7 +961,11 @@ public final class ChartView extends View {
         boolean signed = "Buyer".equals(s.mode) || "Seller".equals(s.mode) || lines;
         double clip = Math.log(8.0) / LN2;
         // y: p95 of what is drawn, floored, capped
-        double lim;
+        double lim, fitNow = 0;
+        // the reset points: a new mode, a new smoothing window IN THE DATA, a new lookback
+        if (lastIimpMode == null || !lastIimpMode.equals(s.mode)) { iimpTop = 0; lastIimpMode = s.mode; }
+        if (lines && s.iSmn != lastIimpSmn) { iimpTop = 0; lastIimpSmn = s.iSmn; }
+        if (M.lb != lastLb) { iimpTop = 0; java.util.Arrays.fill(lineTop, 0); lastLb = M.lb; }
         {
             float[] fit;
             if (lines && s.iN > 0) { fit = new float[2 * s.iN]; for (int i = 0; i < s.iN; i++) { fit[i] = (float) Math.abs(Math.max(-clip, Math.min(clip, s.iLyb[i]))); fit[s.iN + i] = (float) Math.abs(Math.max(-clip, Math.min(clip, s.iLys[i]))); } }
@@ -961,11 +974,13 @@ public final class ChartView extends View {
             if (fit.length > 0) {
                 java.util.Arrays.sort(fit);
                 double p95 = fit[Math.min(fit.length - 1, (int) (0.95 * (fit.length - 1)))] * 1.15;
-                lim = Math.min(Math.max(Math.max(p95, Math.log(1.37) / LN2 * 1.4), 1.0), clip * 1.15);
-                if (lim > iimpTop * 0.98 || lim < iimpTop * 0.55) iimpTop = lim;
+                fitNow = Math.min(Math.max(Math.max(p95, Math.log(1.37) / LN2 * 1.4), 1.0), clip * 1.15);
+                // ⚠ LATCH, do not follow: it was a dead-band refit on every frame, which is what rescaled the
+                // pane as the user panned. Held once enough cycles back it; a boot-time handful may not freeze it.
+                if (iimpTop <= 0 && fit.length >= (lines ? 2 : 1) * FIT_MIN_N) iimpTop = fitNow;
             }
         }
-        lim = Math.max(1.0, iimpTop);
+        lim = Math.max(1.0, iimpTop > 0 ? iimpTop : fitNow);
         double[] irg = yRange(PANE_IIMP, -lim, lim);
         double yhi = irg[1], ylo = irg[0], range = yhi - ylo;
         notePane(PANE_IIMP, top, hgt, ylo, yhi);
@@ -1252,7 +1267,8 @@ public final class ChartView extends View {
                 + (imp ? " LED" : ""));
         float top = r.top + TITLE_H, hgt = r.bottom - top;
         double clip = Math.log(8.0) / LN2;
-        double lim;
+        double lim, fitNow = 0;
+        if (L.smooth != lastLineSmooth[p]) { lineTop[p] = 0; lastLineSmooth[p] = L.smooth; }   // new window in the DATA
         if (L.n > 0) {
             float[] fit = new float[2 * L.n];
             for (int i = 0; i < L.n; i++) {
@@ -1261,10 +1277,10 @@ public final class ChartView extends View {
             }
             java.util.Arrays.sort(fit);
             double p95 = fit[Math.min(fit.length - 1, (int) (0.95 * (fit.length - 1)))] * 1.15;
-            double want = Math.min(Math.max(Math.max(p95, Math.log(1.37) / LN2 * 1.4), 1.0), clip * 1.15);
-            if (want > lineTop[p] * 0.98 || want < lineTop[p] * 0.55) lineTop[p] = want;
+            fitNow = Math.min(Math.max(Math.max(p95, Math.log(1.37) / LN2 * 1.4), 1.0), clip * 1.15);
+            if (lineTop[p] <= 0 && fit.length >= 2 * FIT_MIN_N) lineTop[p] = fitNow;   // LATCH, do not follow
         }
-        lim = Math.max(1.0, lineTop[p]);
+        lim = Math.max(1.0, lineTop[p] > 0 ? lineTop[p] : fitNow);
         double[] rg = yRange(p, -lim, lim);
         double yhi = rg[1], ylo = rg[0], range = Math.max(1e-9, yhi - ylo);
         notePane(p, top, hgt, ylo, yhi);

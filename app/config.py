@@ -606,6 +606,19 @@ PX_IIB_FORM_A = 110             # alpha of the forming candle's badge (finished 
 IIMP_LOW = 0.76                 # imbalance terciles: below = sellers lead, above IIMP_HIGH = buyers lead
 IIMP_HIGH = 1.37
 IIMP_WALL_RADIUS = 25           # the wall is read within +-this many ticks of mid (a radius on the daemon's ladder)
+# THE CANONICAL WALL GRID (2026-09-23). The wall is read from columns aligned to absolute multiples of this many
+# seconds, fetched for their own sake -- never from the Limit Orders pane's VIEW window, whose columns start at
+# the view's left edge and are as wide as the view divided by the pane's pixels. The daemon fills a column with
+# the latest depth snapshot at or before the column's END, so an aligned column has ONE value whichever request
+# fetched it. ⚠ Before this, the same cycle read differently depending on where the user had panned (measured:
+# 31/97 I x I and 40/91 LINES IMPACT cycles changed between a cold and a warm read of the same view).
+IIMP_WALL_COL_SECS = 15         # the snapshots come every ~30 s; 15 s columns never skip one
+IIMP_WALL_CHUNK = 900           # columns per request (3.75 h; ~50 KB, the Limit Orders pane's own budget)
+IIMP_WALL_FINAL_LAG = 45.0      # a column is FINAL once its end is this far in the past -- a snapshot has landed
+IIMP_WALL_BACKFILL_GAP = 1.0    # seconds between requests while filling history
+IIMP_WALL_LIVE_GAP = 30.0       # ... and at the live edge once caught up: one new snapshot per 30 s, no point sooner
+IIMP_FIT_MIN_N = 20             # the y fit LATCHES only once this many cycles were rated -- a boot-time read with a
+                                # handful of cycles must not freeze a scale the rest of the data will not fit
 IIMP_WALL_LOW = 0.94            # far-side resting orders vs the previous N cycles -- terciles again
 IIMP_WALL_HIGH = 1.06
 IIMP_COEF_BUY = (0.090, 0.275, -0.235)

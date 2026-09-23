@@ -1986,7 +1986,13 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         self._iimp_pop = None          # the small panel that explains that bar in words
         self._iimp_last = None         # the drawn cycles, so a click can explain one without re-reading the store
         self._iimp_sel_t = None        # the SELECTED cycle's start: the mark survives a redraw by time, not index
-        self._iimp_wall_cache = {}     # {cycle start: (ask $, bid $) at the open} -- kept ACROSS liquidity windows
+        self._iimp_wall_cache = {}     # (superseded by _wall_grid 2026-09-23; kept so nothing that names it breaks)
+        # THE CANONICAL WALL GRID: {absolute column k: (ask $, bid $, mid)} at IIMP_WALL_RADIUS, column k covering
+        # [k*C, (k+1)*C). Filled by _wall_tick for the whole loaded history; DATA, so it survives pane rebuilds.
+        self._wall_grid = {}
+        self._wall_lo = None; self._wall_hi = None     # the contiguous run of columns already fetched
+        self._wall_req = None; self._wall_req_t = 0.0  # the request in flight: its (t0 ms, t1 ms, cols) key
+        self._wall_sent = set()                        # every key asked for and not yet answered
         self._iimp_book_cache = {}     # {cycle start: (bid mean, ask mean) OVER the cycle} -- the passive component
         self._score_memo = None        # (key, ({side: score}, {side: parts})) shared with the iimp panel
         self._flow_pane_on = bool(config.FLOW_PANE_ON)     # the Buy/Sell Flow pane (the main chart in Flow mode)
@@ -20385,7 +20391,9 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             setattr(self, _a + "_t", 0.0)
         for _k in self._LINES_KINDS:            # both split panes are rated against the lookback as well
             self._lp_(_k)["sig"] = None
+            self._lp_(_k)["ytop"] = 0.0         # ... and a new baseline is a new scale: refit, then hold again
         self._lines_t = 0.0
+        self._iimp_ytop = 0.0
         self._apply_pane_names()
         self._save_ui_state()
 
@@ -20812,11 +20820,11 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
 
         So READING is driven by demand and DRAWING by visibility. If nothing wants it, nothing is fetched --
         that is what keeps a toggled-off pane free rather than merely cheap."""
-        # ⚠ LINES IMPACT is in this list because its score reads _iimp_wall: without a book window every
-        # cycle's `pred` is NaN and the pane silently draws NOTHING. That is the _liq_wanted lesson exactly.
+        # (The I x I pane and LINES IMPACT were in this list until 2026-09-23: their wall came from THIS window.
+        # It now comes from the canonical grid _wall_tick fetches for its own sake -- see _wall_wanted -- so a
+        # view window is fetched only for the panes that genuinely draw one.)
         for _w in (getattr(self, "_liq_plot", None), getattr(self, "_lob_plot", None),
-                   getattr(self, "interp_panel", None), getattr(self, "_iimp_plot", None),
-                   getattr(self, "_cimp_plot", None)):
+                   getattr(self, "interp_panel", None)):
             if _w is not None:
                 try:
                     if _w.isVisible():
@@ -20824,6 +20832,156 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 except RuntimeError:                 # torn down under us -- it wants nothing
                     continue
         return self._px_iib_wanted()                 # the breakout badges read the I x I numbers, walls included
+
+    def _liq_consume(self) -> None:
+        """Take a liquidity reply off the worker and hand it to whoever ASKED for it.
+
+        Two requesters share the worker's single consume-once slot: the Limit Orders pane's VIEW window and the
+        canonical WALL grid. The daemon echoes the (t0, t1, cols) it was asked for, so a reply is routed by that
+        key. Called from both ticks; whichever runs first in a frame does the routing, and it is correct either
+        way. The two never have a request in flight at the same time (each waits on the other's), because the
+        slot keeps only the NEWEST reply and a second in flight would silently drop the first."""
+        try:
+            pkt = self.worker.liquidity_state()
+        except Exception:
+            return
+        if pkt is None:
+            return
+        try:
+            key = (int(pkt.t0), int(pkt.t1), int(pkt.cols))
+        except Exception:
+            key = None
+        if key is not None and key in self._wall_sent:
+            self._wall_sent.discard(key)
+            if self._wall_req == key:
+                self._wall_req = None
+            self._wall_ingest(pkt)
+            return
+        try:
+            nr = max(1, len(pkt.radii))
+            mids = np.frombuffer(base64.b64decode(pkt.mids_b64), dtype="<f4")
+            bid = np.frombuffer(base64.b64decode(pkt.bid_b64), dtype="<f4").reshape(nr, -1)
+            ask = np.frombuffer(base64.b64decode(pkt.ask_b64), dtype="<f4").reshape(nr, -1)
+            self._liq_data = (float(pkt.t0) / 1000.0, float(pkt.t1) / 1000.0, int(pkt.cols),
+                              [int(r) for r in pkt.radii], mids, bid, ask)
+            self._liq_sig = None
+        except Exception as ex:
+            print("LIQUIDITY WINDOW DECODE: %s" % ex)
+        self._liq_req = None
+
+    def _wall_wanted(self) -> bool:
+        """Does anything on screen read a cycle's wall? The I x I pane, LINES IMPACT, or the PRICE pane's
+        Takeover badges (which join the I x I numbers)."""
+        for _a in ("_iimp_plot", "_cimp_plot"):
+            _pw = self.__dict__.get(_a)
+            if _pw is not None:
+                try:
+                    if _pw.isVisible():
+                        return True
+                except RuntimeError:
+                    pass
+        try:
+            return bool(self._px_iib_wanted())
+        except Exception:
+            return False
+
+    def _wall_tick(self, now: float) -> None:
+        """Fill the canonical wall grid: the live edge first, then back through the loaded history.
+
+        ⚠ ONE-TIME COST, then almost nothing. A fresh start backfills up to DEPTH_RETENTION_HOURS in chunks
+        of IIMP_WALL_CHUNK columns (~50 KB each, ~1 MB for 72 h); once caught up it asks for the one or two new
+        columns every IIMP_WALL_LIVE_GAP seconds. Cycles in a stretch not yet fetched read no wall -- exactly
+        as before -- and get it, ONCE, when their chunk lands. After that nothing a pan does can move it."""
+        self._liq_consume()
+        if self.scanner_mode != "flow" or not self._wall_wanted():
+            return
+        if self._wall_req is not None:
+            if now - self._wall_req_t < 60.0:
+                return
+            self._wall_sent.discard(self._wall_req); self._wall_req = None          # timed out -> ask again
+        if self._liq_req is not None:
+            # the view window is in flight: never two replies racing for the one slot. ⚠ But a view request
+            # that is never answered must not block the grid FOR EVER -- its own 60 s timeout is cleared inside
+            # _liq_tick, which returns early whenever nothing draws the view window, so it is cleared here too.
+            if now - float(self._liq_req_t) > 60.0:
+                self._liq_req = None
+            else:
+                return
+        C = float(config.IIMP_WALL_COL_SECS); N = int(config.IIMP_WALL_CHUNK)
+        k_fin = int((now - float(config.IIMP_WALL_FINAL_LAG)) // C) - 1             # the newest FINAL column
+        try:
+            _sp = self._flow.span()
+            _s0 = float(_sp[0]) if _sp else now
+        except Exception:
+            _s0 = now
+        k_min = int(max(_s0, now - float(config.DEPTH_RETENTION_HOURS) * 3600.0) // C) - 1
+        if self._wall_hi is None:
+            a, b = max(k_min, k_fin - N + 1), k_fin
+        elif self._wall_hi < k_fin:
+            if k_fin - self._wall_hi < N and now - self._wall_req_t < float(config.IIMP_WALL_LIVE_GAP):
+                return
+            a, b = self._wall_hi + 1, min(k_fin, self._wall_hi + N)
+        elif self._wall_lo is not None and self._wall_lo > k_min:
+            if now - self._wall_req_t < float(config.IIMP_WALL_BACKFILL_GAP):
+                return
+            b = self._wall_lo - 1; a = max(k_min, b - N + 1)
+        else:
+            return
+        if b < a:
+            return
+        key = (int(round(a * C * 1000.0)), int(round((b + 1) * C * 1000.0)), int(b - a + 1))
+        self._wall_req = key; self._wall_req_t = now; self._wall_sent.add(key)
+        try:
+            self.worker.request_liquidity_window(key[0], key[1], key[2])
+        except Exception:
+            self._wall_sent.discard(key); self._wall_req = None
+
+    def _wall_ingest(self, pkt) -> None:
+        """Write a reply into the canonical grid and extend the covered run. Then every pane that reads a wall
+        is invalidated, so the cycles this chunk covered are re-rated ONCE with their walls."""
+        try:
+            C = float(config.IIMP_WALL_COL_SECS)
+            nr = max(1, len(pkt.radii))
+            mids = np.frombuffer(base64.b64decode(pkt.mids_b64), dtype="<f4")
+            bid = np.frombuffer(base64.b64decode(pkt.bid_b64), dtype="<f4").reshape(nr, -1)
+            ask = np.frombuffer(base64.b64decode(pkt.ask_b64), dtype="<f4").reshape(nr, -1)
+            radii = [int(r) for r in pkt.radii]
+            try:
+                j = radii.index(int(config.IIMP_WALL_RADIUS))
+            except ValueError:
+                j = min(range(len(radii)), key=lambda q: abs(radii[q] - int(config.IIMP_WALL_RADIUS)))
+            a = int(round(float(pkt.t0) / 1000.0 / C)); n = int(pkt.cols)
+            g = self._wall_grid
+            for i in range(min(n, int(mids.size))):
+                g[a + i] = (float(ask[j][i]), float(bid[j][i]), float(mids[i]))
+            b = a + n - 1
+            self._wall_lo = a if self._wall_lo is None else min(self._wall_lo, a)
+            self._wall_hi = b if self._wall_hi is None else max(self._wall_hi, b)
+            # prune what the store itself has let go of
+            k_keep = int((time.time() - float(config.DEPTH_RETENTION_HOURS) * 3600.0) // C) - 2
+            if self._wall_lo < k_keep:
+                for _k in [k for k in g if k < k_keep]:
+                    g.pop(_k, None)
+                self._wall_lo = k_keep
+        except Exception as ex:
+            print("WALL GRID DECODE: %s" % ex)
+            return
+        # one line when the backfill first reaches the start of the loaded history -- the only way to see from a
+        # journal (the tablet's engine) that every cycle now has its wall
+        if not self.__dict__.get("_wall_done_logged"):
+            try:
+                _s0 = float(self._flow.span()[0])
+                _km = int(max(_s0, time.time() - float(config.DEPTH_RETENTION_HOURS) * 3600.0) // C) - 1
+                if self._wall_lo is not None and self._wall_lo <= _km:
+                    self._wall_done_logged = True
+                    print("WALL GRID complete: %d columns of %.0f s back to %s"
+                          % (len(g), C, time.strftime("%m-%d %H:%M", time.gmtime(self._wall_lo * C))), flush=True)
+            except Exception:
+                pass
+        self._iimp_sig = None; self._iimp_t = 0.0
+        for _k in self._LINES_KINDS:
+            self._lp_(_k)["sig"] = None
+        self._lines_t = 0.0
 
     def _liq_tick(self, now: float) -> None:
         """Per frame in Flow mode: keep the live edge fresh, ask for a new window when the view settles, draw.
@@ -20837,6 +20995,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 _shown = bool(self._liq_plot.isVisible())
             except RuntimeError:                     # the splitter was torn down -> treat as hidden
                 self._liq_plot = None
+        self._liq_consume()             # a reply may be the WALL grid's: route it before anything else
         if not (_shown or self._liq_wanted()):
             return
         # LIVE edge: sum the pulse book within the radius -- no request, no history, always current.
@@ -20913,7 +21072,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             need = (vx0 < d0 - 0.02 * span) or (vx1 > d1 + 0.25 * span) or (now - self._liq_req_t > 120.0)
         if self._liq_req is not None and now - self._liq_req_t > 60.0:
             self._liq_req = None                                   # timed out -> allow another
-        if need and self._liq_req is None and now - self._liq_req_t > 1.0:
+        if need and self._liq_req is None and self._wall_req is None and now - self._liq_req_t > 1.0:
             # Columns at ~2x the snapshot cadence, NOT one per pixel: past that every extra column repeats the
             # snapshot next to it and the painter still rasterises it (profiled at +25 ms/frame, see LIQ_COL_SECS).
             _span = max(60.0, float(vx1) - float(vx0))
@@ -20939,23 +21098,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                     self.worker.request_liquidity_window(t0ms, t1ms, cols)
                 except Exception:
                     self._liq_req = None
-        pkt = None
-        try:
-            pkt = self.worker.liquidity_state()
-        except Exception:
-            pkt = None
-        if pkt is not None:
-            try:
-                nr = max(1, len(pkt.radii))
-                mids = np.frombuffer(base64.b64decode(pkt.mids_b64), dtype="<f4")
-                bid = np.frombuffer(base64.b64decode(pkt.bid_b64), dtype="<f4").reshape(nr, -1)
-                ask = np.frombuffer(base64.b64decode(pkt.ask_b64), dtype="<f4").reshape(nr, -1)
-                self._liq_data = (float(pkt.t0) / 1000.0, float(pkt.t1) / 1000.0, int(pkt.cols),
-                                  [int(r) for r in pkt.radii], mids, bid, ask)
-                self._liq_sig = None
-            except Exception as ex:
-                print("LIQUIDITY WINDOW DECODE: %s" % ex)
-            self._liq_req = None
+        self._liq_consume()             # (the reply, if it landed during the request logic above)
         if not _shown:
             return                  # the data is in hand for the feed and the Book pane; nothing to paint
         self._liq_draw(now)
@@ -22042,6 +22185,27 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         self._stack_cursor_sync("iimp", pt.x())
 
     def _iimp_wall(self, t, is_buy):
+        """The FAR side's resting $ at each cycle's OPEN: asks for a buy cycle, bids for a sell one, from the
+        canonical column that ENDS at or before the open (column floor(t / C) - 1), at IIMP_WALL_RADIUS.
+
+        ⚠ READ FROM THE CANONICAL GRID (2026-09-23), never from the view's window: a cycle's wall is the same
+        number wherever the user looks, whatever the zoom, on this terminal and on the tablet's engine. NaN for a
+        cycle whose column has not been fetched yet, or had no book at all."""
+        C = float(config.IIMP_WALL_COL_SECS)
+        g = self._wall_grid
+        tt = np.asarray(t, dtype=np.float64)
+        out = np.full(int(tt.size), np.nan)
+        if not g or tt.size == 0:
+            return out
+        cols = (np.floor(tt / C).astype(np.int64) - 1).tolist()
+        _b = np.asarray(is_buy, dtype=bool).tolist()
+        for k, c in enumerate(cols):
+            v = g.get(c)
+            if v is not None and v[2] > 0:
+                out[k] = v[0] if _b[k] else v[1]
+        return out
+
+    def _iimp_wall_view(self, t, is_buy):
         """The FAR side's resting $ at each cycle's OPEN: asks for a buy cycle, bids for a sell one, from the last
         book column that ENDS at or before the open, within IIMP_WALL_RADIUS ticks of mid.
 
@@ -22770,23 +22934,37 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             self._iimp_read.setColor(config.IIMP_CONTRA_COL if contra[_k]
                                      else (config.IIMP_BUY_COL if up[_k] else config.IIMP_SELL_COL))
         # the lines mode fits BOTH series it draws; every other mode the one it draws
-        if _lines and _sm_b is not None:
-            _fit = np.abs(np.concatenate([np.clip(_sm_b[keep], -_clip, _clip), np.clip(_sm_s[keep], -_clip, _clip)]))
-        elif _lines:
-            _fit = np.abs(np.concatenate([np.clip(_lb, -_clip, _clip), np.clip(_ls, -_clip, _clip)]))
+        # ⚠ THE FIT RUNS OVER EVERY RATED CYCLE OF THE READ -- not only the visible ones -- and is then HELD
+        # (2026-09-23). Fitting to what was on screen rescaled the whole pane on every pan (measured on LINES
+        # IMPACT: ±1.32 -> ±2.28 -> ±2.97 over three pans with no value changing). It is redone only when the user
+        # double-clicks the pane's right axis, or when what the pane shows changes meaning: the mode, the
+        # smoothing slider, the lookback (each of those zeroes _iimp_ytop).
+        _ra = _rated_all
+        if _lines:
+            _fa = (np.concatenate([_sm_b[_ra], _sm_s[_ra]]) if _sm_b is not None
+                   else np.concatenate([_lb_all[_ra], _ls_all[_ra]]))
+        elif _mode == "Buyer":
+            _fa = _lb_all[_ra]
+        elif _mode == "Seller":
+            _fa = _ls_all[_ra]
+        elif _mode == "Delta":
+            _fa = (_lb_all - _ls_all)[_ra]
         else:
-            _fit = np.abs(v)
-        # the smoothed series is NaN until min_n cycles have accrued, and np.percentile of an all-NaN slice is
-        # both a warning and a NaN range -- the pane would come back blank on a short read
+            _fa = imb[_ra]
+        _fit = np.abs(np.clip(np.asarray(_fa, dtype=np.float64), -_clip, _clip))
         _fit = _fit[np.isfinite(_fit)]
+        _n_fit = int(_fit.size)
         if _fit.size == 0:
             _fit = np.zeros(1)
         lim = float(np.percentile(_fit, 95.0)) * 1.15
         lim = min(max(lim, abs(float(np.log2(max(1e-9, config.IIMP_HIGH)))) * 1.4, 1.0), _clip * 1.15)
-        cur = getattr(self, "_iimp_ytop", 0.0)
-        if lim > cur * 0.98 or lim < cur * 0.55:
-            self._iimp_ytop = lim
-            self._iimp_vb.setYRange(-lim, lim, padding=0.0)      # no badge strip to leave room for any more
+        cur = float(getattr(self, "_iimp_ytop", 0.0))
+        if cur <= 0.0:
+            # not latched yet: show this fit, and LATCH it once enough cycles back it -- a boot-time read with a
+            # handful of cycles must not freeze a scale the rest of the data will never fit
+            self._iimp_vb.setYRange(-lim, lim, padding=0.0)
+            if _n_fit >= int(config.IIMP_FIT_MIN_N):
+                self._iimp_ytop = lim
         if self._iimp_read is not None:
             (_rx0, _rx1), (_ry0, _ry1) = self._iimp_vb.viewRange()
             self._iimp_read.setPos(_rx1, _ry0)      # bottom right, clear of the pane's own name
@@ -22998,7 +23176,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             except RuntimeError:
                 st["smlab"] = None
         st["sig"] = None
-        st["ytop"] = 0.0                     # a longer mean is a flatter series: let the y range refit
+        st["ytop"] = 0.0                     # a longer mean is a flatter series: refit, then hold again
         self._lines_position_widgets(kind)
         self._lines_draw(kind, time.time())
         # the redraw wants every step of the drag; the settings FILE does not
@@ -23116,6 +23294,9 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             _scl = np.where(np.isfinite(score), score, 0.0) / float(np.log(2.0))
             sm_b = self._lines_hold(self._lines_smooth(_scl, rated & lead_buy, sm_n, n_mn))
             sm_s = self._lines_hold(self._lines_smooth(_scl, rated & ~lead_buy, sm_n, n_mn))
+        # the y fit's sample: every rated cycle of the READ, not only the drawn ones (see _lines_draw)
+        _okf = rated & np.isfinite(sm_b) & np.isfinite(sm_s)
+        self._lp_(kind)["fitall"] = np.concatenate([sm_b[_okf], sm_s[_okf]])
         keep = rated & np.isfinite(sm_b) & np.isfinite(sm_s) & (t >= vx0)
         if not keep.any():
             return None
@@ -23217,16 +23398,21 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                                                        abs(float(dgap[_k])))
             st["read"].setText(_txt)
             st["read"].setColor(config.IIMP_BUY_COL if sm_b[_k] >= sm_s[_k] else config.IIMP_SELL_COL)
-        _fit = np.abs(np.concatenate([yb, ys]))
+        # the fit over EVERY rated cycle of the READ, then HELD -- the I x I pane's rule, and for its reason
+        _fa = st.get("fitall")
+        _fit = np.abs(np.clip(np.asarray(_fa if _fa is not None else np.concatenate([sm_b, sm_s]),
+                                         dtype=np.float64), -_clip, _clip))
         _fit = _fit[np.isfinite(_fit)]
+        _n_fit = int(_fit.size)
         if _fit.size == 0:
             _fit = np.zeros(1)
         lim = float(np.percentile(_fit, 95.0)) * 1.15
         lim = min(max(lim, abs(float(np.log2(max(1e-9, config.IIMP_HIGH)))) * 1.4, 1.0), _clip * 1.15)
         cur = float(st.get("ytop", 0.0))
-        if lim > cur * 0.98 or lim < cur * 0.55:
-            st["ytop"] = lim
+        if cur <= 0.0:
             st["vb"].setYRange(-lim, lim, padding=0.0)
+            if _n_fit >= 2 * int(config.IIMP_FIT_MIN_N):      # two series: the same count of CYCLES
+                st["ytop"] = lim
         if st.get("read") is not None:
             (_rx0, _rx1), (_ry0, _ry1) = st["vb"].viewRange()
             st["read"].setPos(_rx1, _ry0)
@@ -23809,6 +23995,22 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 return
         except Exception:
             return
+        # a double-click ON THE RIGHT AXIS of a pane whose y scale is HELD refits it (2026-09-23) -- the tablet's
+        # double-tap-an-axis. Anywhere else in the pane it is still fullscreen.
+        try:
+            _ax = pw.getAxis("right")
+            if _ax is not None and _ax.sceneBoundingRect().contains(ev.scenePos()):
+                _hit = None
+                if pw is self.__dict__.get("_iimp_plot"):
+                    self._iimp_ytop = 0.0; self._iimp_sig = None; self._iimp_t = 0.0; _hit = True
+                for _k in self._LINES_KINDS:
+                    if pw is self.__dict__.get("_%s_plot" % _k):
+                        self._lp_(_k)["ytop"] = 0.0; self._lp_(_k)["sig"] = None; self._lines_t = 0.0; _hit = True
+                if _hit:
+                    ev.accept()
+                    return
+        except Exception:
+            pass
         # an ARMED drawing tool owns its own clicks: double-clicking to finish a shape must not also zoom
         try:
             _d = self._draw_target()
@@ -24811,6 +25013,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         self._interp_show(bool(getattr(self, "_interp_on", True)))  # ... and the Interpretation feed
         self._flow_pane_apply()                                     # the pane itself may be toggled off
         self._liq_sig = None; self._liq_req = None; self._liq_pend = None; self._liq_pend_key = None
+        self._wall_req = None; self._wall_sent = set()     # a stale in-flight key must not block the grid
         self._flow_subscribe(backfill=True)
         now = time.time()
         span = float(config.FLOW_BACKFILL_SECS)
@@ -24935,6 +25138,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         except Exception:
             pass
         try:
+            self._wall_tick(now)        # the canonical wall grid the two below read from
             self._iimp_tick(now)        # Interest x Impact pane -- same read again
             self._lines_tick(now)       # LINES INTEREST / LINES IMPACT -- the same read once more
         except Exception:

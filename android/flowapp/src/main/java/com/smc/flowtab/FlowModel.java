@@ -55,6 +55,7 @@ public final class FlowModel {
     public float[] iV, iMult, iScore, iWall, iReach, iMv, iArb, iArs, iKept, iSbuy, iSsell, iLiib, iLiis, iPliib, iPliis;
     // the pair the LINES mode draws: the raw one through the slider's trailing mean (raw when it is at 1)
     public float[] iLyb = new float[0], iLys = new float[0];
+    public int iSmn = 1;        // the smoothing window the I x I DATA was computed with (not the slider's position)
     public byte[] iUp, iContra, iGood, iForm, iVac, iQuiet;
     public long iimpVersion = 0;
 
@@ -240,6 +241,7 @@ public final class FlowModel {
             iLiib = liib; iLiis = liis; iPliib = pliib; iPliis = pliis;
             iLyb = lyb.length == n ? lyb : liib; iLys = lys.length == n ? lys : liis;
             smIimp = m.optInt("smn", smIimp);
+            iSmn = m.optInt("smn", iSmn);
             iUp = up; iContra = contra; iGood = good; iForm = form; iVac = vac; iQuiet = quiet;
             iimpVersion++; version++;
         }
