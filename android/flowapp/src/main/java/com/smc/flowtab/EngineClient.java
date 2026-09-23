@@ -27,7 +27,15 @@ public final class EngineClient extends Thread {
     private final Listener listener;
     private volatile boolean stop = false;
     private volatile Socket sock;
-    private final LinkedBlockingQueue<String> out = new LinkedBlockingQueue<>();
+    // ⚠ ONE OUTBOX PER CONNECTION (2026-09-23). The outbox used to be a single queue shared by every connection's
+    // writer thread, and a writer was only interrupted when its connection ended CLEANLY. A connection that died
+    // with an exception -- the 30 s read timeout after the tablet slept, a network change -- left its writer
+    // alive, blocked on the shared queue; it then took the NEXT connection's "hi" and wrote it into the dead
+    // socket. The engine saw the auth line and never a "hi", sent nothing, the read timed out again, and every
+    // reconnect after that lost its "hi" the same way: stuck "connecting" until the app was restarted (seen
+    // live, 5 reconnects 31 s apart). Now each connection gets a fresh queue that only its own writer reads,
+    // and the writer is interrupted however the connection ends.
+    private volatile LinkedBlockingQueue<String> out = new LinkedBlockingQueue<>();
     private volatile double lastViewX0 = 0, lastViewX1 = 0; private volatile boolean lastFollow = true;
     public volatile String path = "";                // "USB" / "VM" while connected, for the UI
 
@@ -79,29 +87,34 @@ public final class EngineClient extends Thread {
         int which = 0;                                   // 0 = USB, 1 = VM; USB gets the first shot each cycle
         while (!stop) {
             boolean vm = haveVm && which == 1;
+            Thread writer = null;
+            Inflater inf = null;
             try (Socket s = new Socket()) {
                 sock = s;
                 s.setTcpNoDelay(true);
                 s.connect(new InetSocketAddress(vm ? BuildConfig.VM_HOST : "127.0.0.1", 8766), vm ? 6000 : 2500);
                 s.setSoTimeout(30000);
                 OutputStream os = s.getOutputStream();
-                Inflater inf = null;
                 if (vm) {
                     os.write(("{\"t\":\"auth\",\"k\":\"" + BuildConfig.FLOW_TOKEN + "\",\"z\":1}\n").getBytes(StandardCharsets.UTF_8));
                     os.flush();
                     inf = new Inflater();
                 }
                 path = vm ? "VM" : "USB";
-                out.clear();
-                out.offer("{\"t\":\"hi\"}");
+                // this connection's own outbox: "hi" first, then the last view; nothing an older writer can reach
+                final LinkedBlockingQueue<String> q = new LinkedBlockingQueue<>();
+                q.offer("{\"t\":\"hi\"}");
+                out = q;
                 if (lastViewX1 > lastViewX0) sendView(lastViewX0, lastViewX1, lastFollow);
-                Thread writer = new Thread(() -> writeLoop(s, os), "engine-writer");
+                writer = new Thread(() -> writeLoop(s, os, q), "engine-writer");
                 writer.setDaemon(true); writer.start();
                 readLines(s.getInputStream(), inf);
-                if (inf != null) inf.end();
-                writer.interrupt();
             } catch (Exception e) {
                 Log.i("FLOW", "engine (" + (vm ? "VM" : "USB") + "): " + e);
+            } finally {
+                // however the connection ended -- a clean close, a timeout, a dead network -- its writer goes too
+                if (writer != null) writer.interrupt();
+                if (inf != null) inf.end();
             }
             path = "";
             synchronized (model.lock) { model.connected = false; model.version++; }
@@ -112,10 +125,10 @@ public final class EngineClient extends Thread {
         }
     }
 
-    private void writeLoop(Socket s, OutputStream os) {
+    private void writeLoop(Socket s, OutputStream os, LinkedBlockingQueue<String> q) {
         try {
             while (!stop && !s.isClosed()) {
-                String line = out.take();
+                String line = q.take();
                 os.write((line + "\n").getBytes(StandardCharsets.UTF_8));
                 os.flush();
             }
