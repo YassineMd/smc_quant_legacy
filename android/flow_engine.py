@@ -571,9 +571,13 @@ def tick_interp():
     out = []
     for r in rows:
         try:
-            t0, t1, head, name, d1, d2, st, strong, forming, col, mv_txt, mv_sign, mv_word = r
+            t0, t1, head, name, d1, d2, st, strong, forming, col, mv_txt, mv_sign, mv_word = r[:13]
+            # the card redesign (2026-09-23) draws the NUMBERS behind a row -- quadrant, tape bars, book arrows,
+            # give-back bar. ⚠ NaN is not JSON: Android's parser rejects it and would drop the WHOLE message.
+            _raw = r[13] if len(r) > 13 and isinstance(r[13], dict) else {}
+            _raw = {k: (None if isinstance(v, float) and not math.isfinite(v) else v) for k, v in _raw.items()}
             out.append([float(t0), float(t1), str(head), str(name), str(d1), [str(d2[0]), str(d2[1])] if d2 else ["", ""],
-                        int(st), bool(strong), bool(forming), int(col), str(mv_txt), int(mv_sign), str(mv_word)])
+                        int(st), bool(strong), bool(forming), int(col), str(mv_txt), int(mv_sign), str(mv_word), _raw])
         except Exception:
             continue
     # the feed rebuilds its list every tick even when no word changed: send only what reads differently

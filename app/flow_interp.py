@@ -38,6 +38,7 @@ nearly all do. A missing reading prints "-", never a fabricated one.
 from __future__ import annotations
 
 import bisect
+import math
 import time
 
 import numpy as np
@@ -512,6 +513,19 @@ def build_rows(t, t_end, done, move, side_dom, vol_ratio, speed_ratio,
     with np.errstate(divide="ignore", invalid="ignore"):
         conf = np.minimum(np.abs(np.log2(np.maximum(vr, 1e-9))), np.abs(np.log2(np.maximum(sr, 1e-9))))
 
+    def _raw(k, st, side, dur):
+        """The NUMBERS behind a row (2026-09-23 card redesign): the feed now DRAWS them -- the effort x result
+        quadrant, the tape bars, the book arrows, the give-back bar -- instead of only printing sentences.
+        Appended as the row's 14th element, so every reader of the first 13 is untouched."""
+        p0, p1, ph, pl = _at(px_start, k), _at(px_end, k), _at(px_hi, k), _at(px_lo, k)
+        push = give = frac = float("nan")
+        if st == ST_ABSORB:
+            push, give, frac = rejection(side == "buy", p0, p1, ph, pl, float(tick), float(push_min))
+        return {"st": int(st), "side": side or "", "mv": float(mv[k]), "flat": bool(flat[k]), "dur": float(dur),
+                "px0": p0, "px1": p1, "hi": ph, "lo": pl, "vr": _at(vr, k), "sr": _at(sr, k),
+                "buy": _at(buy_ratio, k), "sell": _at(sell_ratio, k), "bid": _at(bid_ratio, k),
+                "ask": _at(ask_ratio, k), "push": push, "give": give, "gb": frac}
+
     rows = []
     order = range(n - 1, -1, -1)
     for k in order:
@@ -533,7 +547,8 @@ def build_rows(t, t_end, done, move, side_dom, vol_ratio, speed_ratio,
                 0.0, (float(now) if now is not None else time.time()) - t0)
             head = "%s - ... - %s" % (_clock(t0), dur_text(el))
             if not rateable[k]:
-                rows.append((t0, t0 + el, head, "forming", "", ("", ""), ST_FORMING, False, False, C_FORMING, "", 0, ""))
+                rows.append((t0, t0 + el, head, "forming", "", ("", ""), ST_FORMING, False, False, C_FORMING, "", 0, "",
+                             _raw(k, ST_FORMING, "", el)))
                 continue
             st, side = _quadrant(heavy[k], big[k], up[k], sd[k])
             _mt, _mw, _ms = move_text(_at(px_start, k), _at(px_end, k), mv[k], flat[k], sr[k],
@@ -549,11 +564,12 @@ def build_rows(t, t_end, done, move, side_dom, vol_ratio, speed_ratio,
                          _line1(vr[k], buy_ratio, sell_ratio, k),
                          _line2(bid_ratio, ask_ratio, k),
                          st, bool(conf[k] >= float(weak_below)), True,
-                         colour_of(st, side), _mt, _ms, _mw))
+                         colour_of(st, side), _mt, _ms, _mw, _raw(k, st, side, el)))
             continue
         if not ok[k]:
             rows.append((t0, t1, "%s - %s - %s" % (_clock(t0), _clock(t1), dur_text(t1 - t0)),
-                         "-", "not enough history yet", ("", ""), ST_QUIET, False, False, C_QUIET, "", 0, ""))
+                         "-", "not enough history yet", ("", ""), ST_QUIET, False, False, C_QUIET, "", 0, "",
+                         _raw(k, -1, "", t1 - t0)))
             continue
         st, side = _quadrant(heavy[k], big[k], up[k], sd[k])
         _mt, _mw, _ms = move_text(_at(px_start, k), _at(px_end, k), mv[k], flat[k], sr[k],
@@ -577,7 +593,7 @@ def build_rows(t, t_end, done, move, side_dom, vol_ratio, speed_ratio,
                      _line1(vr[k], buy_ratio, sell_ratio, k),
                      _line2(bid_ratio, ask_ratio, k),
                      st, _strong, False,
-                     colour_of(st, side), _mt, _ms, _mw))
+                     colour_of(st, side), _mt, _ms, _mw, _raw(k, st, side, t1 - t0)))
     return rows
 
 
@@ -606,7 +622,6 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
     cycleClicked = QtCore.Signal(float, float)      # (t_start, t_end) of the clicked row
     lookbackChanged = QtCore.Signal(int)           # the cycle lookback N, bottom-right
 
-    ROW_H = 78
     PAD = 10
     GAP = 16          # between a label and the value that belongs beside it
     FOOT_H = 26
@@ -614,6 +629,8 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._rows: list = []
+        self._ys: list = []             # each card's top offset (see _layout); the pane resizes before any rows land
+        self._total = 0
         self._dark = True
         self._top_t = None
         self._hover = -1
@@ -781,23 +798,52 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
             return 2                                 # the number itself: click to type
         return 0
 
+    # ---- layout: one CARD per cycle, and an hour divider where the clock's hour changes (2026-09-23) ----------
+    # The feed was redesigned from four lines of text per cycle into a card that SHOWS its numbers (user
+    # 2026-09-23: "completely redesign it ... beautifully designed so that it facilitates reading"): the state as
+    # a chip, the price move as the headline, the effort x result QUADRANT the state is read from, the tape as
+    # two bars around each side's own normal, the book as arrows. Cards share one height, so every index <->
+    # pixel mapping stays a lookup in `_ys`; only the hour dividers make the offsets uneven.
+    CARD_H = 112
+    CARD_GAP = 6
+    SEP_H = 22
+    TOP = 22            # the pane's title band
+    ROW_H = CARD_H + CARD_GAP      # (kept for anything that still reads the old name)
+
+    def _hour(self, i):
+        try:
+            return str(self._rows[i][2])[:2]           # every head starts with the cycle's own clock
+        except Exception:
+            return ""
+
+    def _layout(self):
+        ys, y = [], 0
+        for i in range(len(self._rows)):
+            if i > 0 and self._hour(i) != self._hour(i - 1):
+                y += self.SEP_H
+            ys.append(y)
+            y += self.CARD_H + self.CARD_GAP
+        self._ys = ys
+        self._total = y
+
     # ---- data -------------------------------------------------------------------------------------------
     def setRows(self, rows) -> None:
         """Replace the feed. Keeps the reader's place: if they have scrolled down into history, the scrollbar
-        moves by however many rows were prepended, so the cycle they were reading stays under the cursor."""
+        moves by however far the cards they were reading were pushed down by the new ones on top."""
         sb = self.verticalScrollBar()
         old_top, val = self._top_t, sb.value()
         _sel_t = (float(self._rows[self._sel][0])
                   if (self._sel != -1 and 0 <= self._sel < len(self._rows)) else None)
         self._rows = rows or []
+        self._layout()
         if val > 0 and old_top is not None:
             added = 0
             for r in self._rows:
                 if r[0] <= old_top + 1e-6:
                     break
                 added += 1
-            if added:
-                val += added * self.ROW_H
+            if 0 < added < len(self._ys):
+                val += self._ys[added]
         # the selection follows its CYCLE, not its index: rows are prepended as cycles form, so holding the
         # index would slide the highlight onto a different cycle every time the feed grew
         if self._sel != -1 and _sel_t is not None:
@@ -809,12 +855,10 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
         self.viewport().update()
 
     def scrollToCycle(self, t0: float, centre: bool = True) -> int:
-        """Bring the row for cycle `t0` into view and mark it. Returns its index, or -1 if it is not in the feed.
+        """Bring the card for cycle `t0` into view and mark it. Returns its index, or -1 if it is not in the feed.
 
-        The reverse of cycleClicked: clicking a candle in the PRICE pane above the chart asks the feed to show
-        that cycle's interpretation. Matching is NEAREST-start rather than exact because the candle's own x is
-        the cycle's midpoint and the caller rounds; a tolerance of half the shortest cycle would still be
-        fragile, so the nearest row wins and the caller decides whether that is close enough."""
+        The reverse of cycleClicked: clicking a candle in the PRICE pane asks the feed to show that cycle's
+        reading. NEAREST start wins -- the candle's own x is the cycle's midpoint and the caller rounds."""
         if not self._rows:
             return -1
         best, bd = -1, None
@@ -825,10 +869,12 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
         if best < 0:
             return -1
         self._sel = best
+        if len(getattr(self, "_ys", ())) != len(self._rows):
+            self._layout()
         sb = self.verticalScrollBar()
-        top = self.PAD + 22 + best * self.ROW_H
+        top = self.PAD + self.TOP + self._ys[best]
         if centre:
-            want = int(top - max(0, (self.viewport().height() - self.FOOT_H - self.ROW_H) // 2))
+            want = int(top - max(0, (self.viewport().height() - self.FOOT_H - self.CARD_H) // 2))
         else:
             want = top
         sb.setValue(max(0, min(want, sb.maximum())))
@@ -847,11 +893,13 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
 
     def _update_scroll(self) -> None:
         sb = self.verticalScrollBar()
-        # + FOOT_H so the last row can scroll clear of the lookback control rather than sitting under it
-        total = len(self._rows) * self.ROW_H + self.PAD * 2 + 22 + self.FOOT_H
+        if len(getattr(self, "_ys", ())) != len(self._rows):
+            self._layout()
+        # + FOOT_H so the last card can scroll clear of the lookback control rather than sitting under it
+        total = self._total + self.PAD * 2 + self.TOP + self.FOOT_H
         sb.setRange(0, max(0, total - self.viewport().height()))
         sb.setPageStep(self.viewport().height())
-        sb.setSingleStep(self.ROW_H)
+        sb.setSingleStep(self.CARD_H // 2)
 
     def resizeEvent(self, ev):
         super().resizeEvent(ev)
@@ -861,8 +909,12 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
 
     # ---- interaction ------------------------------------------------------------------------------------
     def _row_at(self, y: int) -> int:
-        i = (y + self.verticalScrollBar().value() - self.PAD - 22) // self.ROW_H
-        return int(i) if 0 <= i < len(self._rows) else -1
+        ys = getattr(self, "_ys", [])
+        if not ys:
+            return -1
+        yy = y + self.verticalScrollBar().value() - self.PAD - self.TOP
+        i = bisect.bisect_right(ys, yy) - 1
+        return int(i) if (0 <= i < len(self._rows) and yy < ys[i] + self.CARD_H) else -1
 
     def mouseMoveEvent(self, ev):
         pos = ev.position().toPoint()
@@ -887,7 +939,7 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
             self._bump(hv)
             return
         if pos.y() >= self.viewport().height() - self.FOOT_H:
-            return                                  # the footer band belongs to the control, not to a row
+            return                                  # the footer band belongs to the control, not to a card
         i = self._row_at(pos.y())
         if i >= 0:
             r = self._rows[i]
@@ -906,109 +958,293 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
             except Exception:
                 pass
 
+    def _fonts(self):
+        f = getattr(self, "_cf", None)
+        if f is not None:
+            return f
+        # Consolas where Windows has it: the system fixed font there is Courier New, whose serifs read as dated
+        mono = (QtGui.QFont("Consolas") if "Consolas" in QtGui.QFontDatabase.families()
+                else QtGui.QFontDatabase.systemFont(QtGui.QFontDatabase.FixedFont))
+        def mk(base, pt, bold=False):
+            q = QtGui.QFont(base); q.setPointSizeF(pt); q.setBold(bold); return q
+        sans = QtGui.QFont()
+        self._cf = f = {"chip": mk(sans, 8, True), "meta": mk(mono, 8), "big": mk(sans, 15, True),
+                        "small": mk(mono, 8), "label": mk(sans, 8), "tiny": mk(sans, 7), "sep": mk(mono, 7)}
+        return f
+
+    def _chip_text(self, st, name, raw):
+        side = str((raw or {}).get("side") or (name.split()[-1] if name and name.split()[-1] in ("buy", "sell") else ""))
+        if name == "-":
+            return "Warming up"
+        if st == ST_BREAK:
+            return "Breakout · %s" % side
+        if st == ST_ABSORB:
+            return "Buyer absorbed" if side == "buy" else "Seller absorbed"
+        if st == ST_VACUUM:
+            return "Vacuum · %s" % side
+        if st == ST_QUIET:
+            return "Quiet"
+        return "Forming"
+
     def _paint_event(self, ev):
         p = QtGui.QPainter(self.viewport())
+        p.setRenderHint(QtGui.QPainter.Antialiasing, True)
         w = self.viewport().width(); h = self.viewport().height()
-        bg = QtGui.QColor("#141414" if self._dark else "#ffffff")
-        p.fillRect(0, 0, w, h, bg)
-        dim = QtGui.QColor("#6f7a82" if self._dark else "#8a8a8a")
-        det = QtGui.QColor("#8FA0A8" if self._dark else "#666666")
-        hl = QtGui.QColor(255, 255, 255, 14) if self._dark else QtGui.QColor(0, 0, 0, 12)
-        sel_bg = QtGui.QColor(255, 255, 255, 30) if self._dark else QtGui.QColor(0, 0, 0, 26)
-        sel_edge = QtGui.QColor("#7FB2FF" if self._dark else "#0B4FA8")
+        dk = self._dark
+        p.fillRect(0, 0, w, h, QtGui.QColor("#141414" if dk else "#ffffff"))
+        F = self._fonts()
+        dim = QtGui.QColor("#6f7a82" if dk else "#7a7a7a")
+        det = QtGui.QColor("#9aa8b0" if dk else "#303030")
 
         p.setFont(self._f_title)
-        p.setPen(QtGui.QColor("#7d8492"))
+        p.setPen(QtGui.QColor("#7d8492" if dk else "#303030"))
         p.drawText(self.PAD, 15, self.title)
-        p.setPen(QtGui.QColor("#2a3138" if self._dark else "#dddddd"))
+        p.setPen(QtGui.QColor("#2a3138" if dk else "#dddddd"))
         p.drawLine(self.PAD, 20, w - self.PAD, 20)
 
-        # the rows own the band BETWEEN the title and the control, and are clipped to it: before this they
-        # scrolled up under the title
+        if len(getattr(self, "_ys", ())) != len(self._rows):
+            self._layout()
         p.save()
         p.setClipRect(0, 21, w, max(0, h - 21 - self.FOOT_H))
         off = self.verticalScrollBar().value()
-        y_top = self.PAD + 22 - off
-        first = max(0, (off - self.PAD - 22) // self.ROW_H)
-        last = min(len(self._rows), first + h // self.ROW_H + 2)
-        x = self.PAD
-        txt_pal = TXT_DARK if self._dark else TXT_LIGHT
-        mv_pal = MOVE_DARK if self._dark else MOVE_LIGHT
-        fm_name = QtGui.QFontMetrics(self._f_name)
-        fm_head = QtGui.QFontMetrics(self._f_head)
-        for i in range(int(first), int(last)):
-            (t0, t1, head, name, d1, d2, st, strong, forming, col,
-             mv_txt, mv_sign, mv_word) = self._rows[i]
-            y = y_top + i * self.ROW_H
-            if y > h or y + self.ROW_H < 20:
+        base = self.PAD + self.TOP - off
+        ys = self._ys
+        first = max(0, bisect.bisect_right(ys, off - self.PAD - self.TOP - self.CARD_H) - 1)
+        x = self.PAD; cw = w - 2 * self.PAD
+        for i in range(int(first), len(self._rows)):
+            y = base + ys[i]
+            if y > h:
+                break
+            if i > 0 and self._hour(i) != self._hour(i - 1):
+                self._draw_sep(p, F, x, y - self.SEP_H, cw, i, dim)
+            if y + self.CARD_H < 20:
                 continue
-            if i == self._hover:
-                p.fillRect(0, y, w, self.ROW_H - 4, hl)
-            if i == self._sel:
-                # the row a PRICE-pane candle click pointed at. A tinted band plus a rule down the RIGHT edge:
-                # the band alone is nearly the hover tint, and scrolling to a row you cannot pick out of six
-                # others is not an answer to "show me this candle's interpretation".
-                p.fillRect(0, y, w, self.ROW_H - 4, sel_bg)
-                p.fillRect(w - 3, y, 3, self.ROW_H - 4, sel_edge)
-            # the state's colour bar: full width and opacity for a confident cycle, thin and faded for one
-            # sitting near its own baseline, which is most of the point of the confidence measurement
-            bar = QtGui.QColor(BAR_COL[col])
-            if not strong:
-                bar.setAlpha(105)
-            if forming:
-                # dashes, not a solid rule: the cycle is still open and this reading is not final
-                _w = 4 if strong else 2
-                _y = y + 3
-                while _y < y + self.ROW_H - 12:
-                    p.fillRect(x, _y, _w, 5, bar)
-                    _y += 9
-            else:
-                p.fillRect(x, y + 3, 4 if strong else 2, self.ROW_H - 12, bar)
-            p.setFont(self._f_head); p.setPen(dim)
-            p.drawText(x + 12, y + 14, head)
-            # a running read is tagged "forming" -- the live state of an unfinished cycle, which can still
-            # change -- and a settled one near its own baseline is tagged "weak". Both sit at the RIGHT end of
-            # the header line, because the name line now carries the price move.
-            _tag = "forming" if forming else ("" if (strong or st == ST_FORMING or name == "-") else "weak")
-            if _tag:
-                p.setPen(QtGui.QColor(txt_pal[col]) if forming else dim)
-                p.drawText(w - self.PAD - fm_head.horizontalAdvance(_tag), y + 14, _tag)
-            tc = QtGui.QColor(txt_pal[col])
-            if not strong:
-                tc.setAlpha(165)
-            p.setFont(self._f_name); p.setPen(tc)
-            p.drawText(x + 12, y + 30, name)
-            if mv_word:
-                # HOW price moved, immediately BESIDE the state (user 2026-09-12) -- it qualifies the state, so
-                # stranding it at the right edge made the two read as unrelated. Splitting them saved no width:
-                # name + gap + word is the same total wherever the gap sits.
-                p.setFont(self._f_move)
-                p.setPen(QtGui.QColor(mv_pal[int(mv_sign) + 1]))
-                p.drawText(x + 12 + fm_name.horizontalAdvance(name) + self.GAP, y + 30, mv_word)
-            # the price move sits NEXT TO the state (user 2026-09-11), coloured by the move and not by the
-            # state: green up, red down, grey when it ended where it started
-            if mv_txt:
-                p.setFont(self._f_move)
-                p.setPen(QtGui.QColor(mv_pal[int(mv_sign) + 1]))
-                p.drawText(x + 12, y + 46, mv_txt)
-
-            if d1:
-                p.setFont(self._f_det); p.setPen(det)
-                p.drawText(x + 12, y + 60, d1)
-            if d2 and d2[0]:
-                # the two halves of one reading, side by side (user 2026-09-12): right-aligning the sellers put
-                # a panel's width between two numbers that are meant to be compared with each other
-                p.setFont(self._f_det); p.setPen(dim)
-                p.drawText(x + 12, y + 72, d2[0])
-                if d2[1]:
-                    _fd2 = QtGui.QFontMetrics(self._f_det)
-                    p.drawText(x + 12 + _fd2.horizontalAdvance(d2[0]) + self.GAP, y + 72, d2[1])
-            # a hairline under each row: at four lines apiece the eye needs the grouping
-            p.setPen(QtGui.QColor("#20262b" if self._dark else "#eeeeee"))
-            p.drawLine(x, y + self.ROW_H - 5, w - self.PAD, y + self.ROW_H - 5)
+            self._draw_card(p, F, i, x, y, cw, dim, det)
         p.restore()
         if not self._rows:
             p.setFont(self._f_det); p.setPen(dim)
             p.drawText(self.PAD, 44, "waiting for the first cycles")
         self._draw_footer(p, w, h)
         p.end()
+
+    def _draw_sep(self, p, F, x, y, cw, i, dim):
+        """The hour divider: this card's hour, then a hairline."""
+        lab = "%s:00" % self._hour(i)
+        p.setFont(F["sep"]); p.setPen(dim)
+        fm = QtGui.QFontMetrics(F["sep"])
+        p.drawText(x + 2, y + 15, lab)
+        p.setPen(QtGui.QPen(QtGui.QColor("#2a3138" if self._dark else "#e3e3e3"), 1))
+        p.drawLine(int(x + 8 + fm.horizontalAdvance(lab)), y + 11, int(x + cw), y + 11)
+
+    def _draw_card(self, p, F, i, x, y, cw, dim, det):
+        row = self._rows[i]
+        (t0, t1, head, name, d1, d2, st, strong, forming, col, mv_txt, mv_sign, mv_word) = row[:13]
+        raw = row[13] if len(row) > 13 and isinstance(row[13], dict) else {}
+        dk = self._dark
+        col = max(0, min(len(BAR_COL) - 1, int(col)))
+        scol = QtGui.QColor(BAR_COL[col])
+        tcol = QtGui.QColor((TXT_DARK if dk else TXT_LIGHT)[col])
+        mvp = MOVE_DARK if dk else MOVE_LIGHT
+        nan = float("nan")
+        def g(k):
+            try:
+                v = float(raw.get(k, nan))
+                return v if math.isfinite(v) else nan
+            except Exception:
+                return nan
+
+        # ---- the card itself
+        rect = QtCore.QRectF(x, y, cw, self.CARD_H)
+        path = QtGui.QPainterPath(); path.addRoundedRect(rect, 8, 8)
+        # light = Chart Style Simple BW (user 2026-09-23: "it should be white"): white cards on the white page,
+        # held apart by a hairline instead of a tint
+        fill = QtGui.QColor("#1a1f25" if dk else "#ffffff")
+        if i == self._hover:
+            fill = QtGui.QColor("#20262d" if dk else "#f5f6f7")
+        p.fillPath(path, fill)
+        if i == self._sel:
+            p.setPen(QtGui.QPen(QtGui.QColor("#7FB2FF" if dk else "#0B4FA8"), 1.6))
+        else:
+            _bp = QtGui.QPen(QtGui.QColor("#262d34" if dk else "#d9dde1"), 1)
+            if forming:
+                _bp.setStyle(QtCore.Qt.DashLine)
+            p.setPen(_bp)
+        p.setBrush(QtCore.Qt.NoBrush)
+        p.drawPath(path)
+        # the state rail, clipped to the rounded card: solid and 4 px for a confident reading, faded and
+        # narrower for a weak one, dashed while the cycle is still forming
+        p.save(); p.setClipPath(path)
+        rc = QtGui.QColor(scol)
+        if not strong:
+            rc.setAlpha(110)
+        rw = 4 if strong else 3
+        if forming:
+            _yy = y + 2
+            while _yy < y + self.CARD_H - 2:
+                p.fillRect(QtCore.QRectF(x, _yy, rw, 6), rc)
+                _yy += 10
+        else:
+            p.fillRect(QtCore.QRectF(x, y, rw, self.CARD_H), rc)
+        p.restore()
+
+        L = x + 14
+        qx = x + cw - 12 - 44
+        R = qx - 10                                   # the left column's right edge
+
+        # ---- line 1: the state chip, then the clock and the duration; live / weak at the right
+        chip = self._chip_text(int(st), str(name), raw)
+        p.setFont(F["chip"])
+        fmc = QtGui.QFontMetrics(F["chip"])
+        crect = QtCore.QRectF(L, y + 8, fmc.horizontalAdvance(chip) + 16, 18)
+        filled = int(st) in (ST_BREAK, ST_ABSORB)
+        if filled:
+            cb = QtGui.QColor(scol); cb.setAlpha(58 if dk else 44)
+            p.setPen(QtCore.Qt.NoPen); p.setBrush(cb)
+        else:
+            cb = QtGui.QColor(scol); cb.setAlpha(170)
+            p.setPen(QtGui.QPen(cb, 1)); p.setBrush(QtCore.Qt.NoBrush)
+        p.drawRoundedRect(crect, 9, 9)
+        p.setBrush(QtCore.Qt.NoBrush)
+        p.setPen(tcol)
+        p.drawText(crect, QtCore.Qt.AlignCenter, chip)
+        parts = str(head).split(" - ")
+        clock = parts[0] if parts else ""
+        dur = parts[-1] if len(parts) > 1 else ""
+        p.setFont(F["meta"]); p.setPen(dim)
+        p.drawText(QtCore.QPointF(crect.right() + 8, y + 21), "%s · %s" % (clock, dur) if dur else clock)
+        if forming:
+            p.setPen(QtCore.Qt.NoPen); p.setBrush(QtGui.QColor(mvp[0]))
+            # the dot breathes with the second: the feed repaints every tick of a forming cycle anyway
+            if int(time.time()) % 2 == 0:
+                p.drawEllipse(QtCore.QPointF(x + cw - 40, y + 17), 3.2, 3.2)
+            p.setBrush(QtCore.Qt.NoBrush)
+            p.setFont(F["label"]); p.setPen(QtGui.QColor(mvp[0]))
+            p.drawText(QtCore.QPointF(x + cw - 33, y + 21), "live")
+        elif not strong and str(name) != "-":
+            p.setFont(F["label"]); p.setPen(dim)
+            p.drawText(QtCore.QPointF(x + cw - 12 - QtGui.QFontMetrics(F["label"]).horizontalAdvance("weak"), y + 21),
+                       "weak")
+
+        # ---- the headline: the move in ticks -- or, for an absorbed cycle, how much of its push was given back
+        mv = g("mv"); p0 = g("px0"); p1 = g("px1")
+        p.save(); p.setClipRect(QtCore.QRectF(x, y, R - x, self.CARD_H))
+        gb = g("gb"); push = g("push")
+        if int(st) == ST_ABSORB and math.isfinite(gb) and math.isfinite(push):
+            big = "%d%%" % int(round(gb * 100))
+            p.setFont(F["big"]); p.setPen(tcol)
+            p.drawText(QtCore.QPointF(L, y + 50), big)
+            bx = L + QtGui.QFontMetrics(F["big"]).horizontalAdvance(big) + 8
+            ext = g("hi") if raw.get("side") == "buy" else g("lo")
+            p.setFont(F["small"]); p.setPen(det)
+            txt = "of a %dt push" % int(round(push))
+            if math.isfinite(ext) and math.isfinite(p1):
+                # the prices only when they fit: on a narrow feed the push is the part worth keeping
+                _px = "  %s %.2f → %.2f" % ("hi" if raw.get("side") == "buy" else "lo", ext, p1)
+                if bx + QtGui.QFontMetrics(F["small"]).horizontalAdvance(txt + _px) <= R:
+                    txt += _px
+            p.drawText(QtCore.QPointF(bx, y + 49), txt)
+            # the give-back bar: the whole track is the push, the filled part (from its tip) what was handed back
+            tr = QtCore.QRectF(L, y + 56, max(10.0, R - L), 5)
+            tk = QtGui.QColor(scol); tk.setAlpha(60)
+            p.setPen(QtCore.Qt.NoPen); p.setBrush(tk); p.drawRoundedRect(tr, 2.5, 2.5)
+            fw = tr.width() * max(0.0, min(1.0, gb))
+            p.setBrush(scol); p.drawRoundedRect(QtCore.QRectF(tr.right() - fw, tr.y(), fw, 5), 2.5, 2.5)
+            p.setBrush(QtCore.Qt.NoBrush)
+        elif str(name) == "-":
+            p.setFont(F["big"]); p.setPen(dim)
+            p.drawText(QtCore.QPointF(L, y + 50), "—")
+            p.setFont(F["small"]); p.setPen(det)
+            p.drawText(QtCore.QPointF(L + 28, y + 49), "not enough history yet")
+        else:
+            if math.isfinite(mv):
+                n = int(round(mv))
+                big = ("+%dt" % n) if n > 0 else (("−%dt" % -n) if n < 0 else "0t")
+            else:
+                big = "—"
+            p.setFont(F["big"]); p.setPen(QtGui.QColor(mvp[max(0, min(2, int(mv_sign) + 1))]))
+            p.drawText(QtCore.QPointF(L, y + 50), big)
+            bx = L + QtGui.QFontMetrics(F["big"]).horizontalAdvance(big) + 8
+            p.setFont(F["small"]); p.setPen(det)
+            if math.isfinite(p0) and math.isfinite(p1):
+                p.drawText(QtCore.QPointF(bx, y + 49), "%.2f → %.2f" % (p0, p1))
+            elif mv_txt:
+                p.drawText(QtCore.QPointF(bx, y + 49), str(mv_txt))
+        p.restore()
+
+        # ---- tape: each side's aggressive $/s against ITS OWN normal, as a bar either side of 1x
+        def ratio_bar(bx, by, v, c):
+            bw = 40.0
+            tr = QtCore.QRectF(bx, by, bw, 6)
+            p.setPen(QtCore.Qt.NoPen); p.setBrush(QtGui.QColor("#262d34" if dk else "#eceef0"))
+            p.drawRoundedRect(tr, 3, 3)
+            if math.isfinite(v) and v > 0:
+                ext = max(-1.5, min(1.5, math.log2(v))) / 1.5 * (bw / 2)
+                p.setBrush(QtGui.QColor(c))
+                if ext >= 0:
+                    p.drawRoundedRect(QtCore.QRectF(bx + bw / 2, by, ext, 6), 3, 3)
+                else:
+                    p.drawRoundedRect(QtCore.QRectF(bx + bw / 2 + ext, by, -ext, 6), 3, 3)
+            p.setBrush(QtCore.Qt.NoBrush)
+            p.setPen(QtGui.QPen(QtGui.QColor("#6f7a82" if dk else "#9aa3aa"), 1))
+            p.drawLine(QtCore.QPointF(bx + bw / 2, by - 2), QtCore.QPointF(bx + bw / 2, by + 8))
+            p.setFont(F["small"]); p.setPen(det)
+            p.drawText(QtCore.QPointF(bx + bw + 4, by + 6.5), ("%.2f×" % v) if math.isfinite(v) else "–")
+        p.setFont(F["label"]); p.setPen(dim)
+        p.drawText(QtCore.QPointF(L, y + 78), "tape")
+        ratio_bar(L + 34, y + 71, g("buy"), "#26A69A")
+        ratio_bar(L + 34 + 40 + 44, y + 71, g("sell"), "#EF5350")
+
+        # ---- book: the resting orders on each side, as a change against their own recent level
+        def pct(px, py, label, r):
+            p.setFont(F["label"]); p.setPen(det)
+            p.drawText(QtCore.QPointF(px, py), label)
+            px += QtGui.QFontMetrics(F["label"]).horizontalAdvance(label) + 4
+            if not math.isfinite(r):
+                p.setPen(dim); p.drawText(QtCore.QPointF(px, py), "–"); return px + 12
+            n = int(round((r - 1.0) * 100.0))
+            if n == 0:
+                s = "0%"; c = dim
+            else:
+                s = ("▲%d%%" % n) if n > 0 else ("▼%d%%" % -n)
+                c = QtGui.QColor(mvp[2] if n > 0 else mvp[0])
+            p.setFont(F["small"]); p.setPen(c)
+            p.drawText(QtCore.QPointF(px, py), s)
+            return px + QtGui.QFontMetrics(F["small"]).horizontalAdvance(s) + 12
+        p.setFont(F["label"]); p.setPen(dim)
+        p.drawText(QtCore.QPointF(L, y + 98), "book")
+        # the two columns sit exactly under the two tape bars: buyers left, sellers right, in both rows
+        pct(L + 34, y + 98, "buyers", g("bid"))
+        pct(L + 34 + 40 + 44, y + 98, "sellers", g("ask"))
+
+        # ---- the quadrant: the two numbers the state is READ from -- flow (effort, left -> right) against speed
+        # (result, bottom -> top). Breakout top-right, absorbed bottom-right, vacuum top-left, quiet bottom-left.
+        qy = y + 30; q = 44
+        for (cx, cy, c) in ((0, 0, BAR_COL[C_VACUUM]), (1, 0, BAR_COL[C_BREAK_BUY]),
+                            (0, 1, BAR_COL[C_QUIET]), (1, 1, BAR_COL[C_ABSORB_BUY])):
+            qc = QtGui.QColor(c); qc.setAlpha(46 if dk else 38)
+            p.fillRect(QtCore.QRectF(qx + cx * q / 2, qy + cy * q / 2, q / 2, q / 2), qc)
+        p.setPen(QtGui.QPen(QtGui.QColor("#4a545c" if dk else "#c3c9ce"), 1))
+        p.drawLine(QtCore.QPointF(qx + q / 2, qy), QtCore.QPointF(qx + q / 2, qy + q))
+        p.drawLine(QtCore.QPointF(qx, qy + q / 2), QtCore.QPointF(qx + q, qy + q / 2))
+        vr = g("vr"); sr = g("sr")
+        if math.isfinite(vr) and vr > 0 and math.isfinite(sr) and sr > 0:
+            ex = max(-1.5, min(1.5, math.log2(vr))) / 1.5 * (q / 2 - 4)
+            ey = max(-1.5, min(1.5, math.log2(sr))) / 1.5 * (q / 2 - 4)
+            if raw.get("flat"):
+                ey = min(ey, -2.0)                    # a flat move is "small" however fast its few ticks were
+            dc = QtCore.QPointF(qx + q / 2 + ex, qy + q / 2 - ey)
+            if strong:
+                p.setPen(QtCore.Qt.NoPen); p.setBrush(scol)
+            else:
+                p.setPen(QtGui.QPen(scol, 1.6)); p.setBrush(QtCore.Qt.NoBrush)
+            p.drawEllipse(dc, 4, 4)
+            p.setBrush(QtCore.Qt.NoBrush)
+        p.setFont(F["tiny"])
+        fmt = QtGui.QFontMetrics(F["tiny"])
+        ft = ("flow %.2f×" % vr) if math.isfinite(vr) else "flow –"
+        p.setPen(dim)
+        p.drawText(QtCore.QPointF(qx + q / 2 - fmt.horizontalAdvance(ft) / 2, qy + q + 13), ft)
+        if mv_word and int(st) != ST_ABSORB:
+            sw = str(mv_word)
+            p.setPen(det)
+            p.drawText(QtCore.QPointF(qx + q / 2 - fmt.horizontalAdvance(sw) / 2, qy + q + 25), sw)

@@ -79,6 +79,14 @@ public final class FlowModel {
     // ---- interpretation rows
     public static final class Row {
         public double t0, t1; public String head, name, d1, d2a, d2b, mvTxt, mvWord; public int st, col, mvSign; public boolean strong, forming;
+        // the NUMBERS behind the row (card redesign 2026-09-23): the card draws them, NaN where the engine had none
+        public String side = ""; public boolean flat;
+        public double mv = Double.NaN, px0 = Double.NaN, px1 = Double.NaN, hi = Double.NaN, lo = Double.NaN,
+                vr = Double.NaN, sr = Double.NaN, buy = Double.NaN, sell = Double.NaN, bid = Double.NaN, ask = Double.NaN,
+                push = Double.NaN, gb = Double.NaN;
+    }
+    private static double num(JSONObject o, String k) {
+        return (o == null || o.isNull(k) || !o.has(k)) ? Double.NaN : o.optDouble(k, Double.NaN);
     }
     public List<Row> rows = new ArrayList<>();
 
@@ -358,6 +366,13 @@ public final class FlowModel {
                 JSONArray d2 = r.optJSONArray(5); row.d2a = d2 == null ? "" : d2.optString(0); row.d2b = d2 == null ? "" : d2.optString(1);
                 row.st = r.optInt(6); row.strong = r.optBoolean(7); row.forming = r.optBoolean(8); row.col = r.optInt(9);
                 row.mvTxt = r.optString(10); row.mvSign = r.optInt(11); row.mvWord = r.optString(12);
+                JSONObject x = r.optJSONObject(13);
+                if (x != null) {
+                    row.side = x.optString("side", ""); row.flat = x.optBoolean("flat", false);
+                    row.mv = num(x, "mv"); row.px0 = num(x, "px0"); row.px1 = num(x, "px1"); row.hi = num(x, "hi"); row.lo = num(x, "lo");
+                    row.vr = num(x, "vr"); row.sr = num(x, "sr"); row.buy = num(x, "buy"); row.sell = num(x, "sell");
+                    row.bid = num(x, "bid"); row.ask = num(x, "ask"); row.push = num(x, "push"); row.gb = num(x, "gb");
+                }
                 out.add(row);
             }
         }
