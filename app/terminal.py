@@ -19591,6 +19591,116 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             br.append(e[0]); pn.append(e[1])
         return br, pn, hp, lp
 
+    # ---- THE BRIGHT PAIR NEEDS A FILLED ORANGE BAR (user 2026-09-23: "dont include the ones that have a hollow orange
+    # histogram on the interestximpact"). A breakout against its leader is bright only where the I x I pane draws that
+    # cycle's bar ORANGE *and* FILLED: the leader's push reached what its effort normally buys, and price still broke
+    # the other way. The fill is the pane's own verdict (impact model + resting book) and cannot be recomputed here,
+    # so this is a JOIN on the pane's rows by cycle START within a second -- the Takeover badge's rule. The colour
+    # cache keeps 7 / 8 (the contra read, final at depth N); this demotes them at DRAW time, so a bar that fills or
+    # empties later recolours its candle. No bar at all (the pane never rated the cycle) = not bright.
+    @staticmethod
+    def _match_start(xs, t, tol: float = 1.0):
+        """Index into sorted `xs` of the start within `tol` s of each `t`, or -1."""
+        xs = np.asarray(xs, dtype=np.float64); t = np.asarray(t, dtype=np.float64)
+        if xs.size == 0 or t.size == 0:
+            return np.full(int(t.size), -1, dtype=np.int64)
+        i = np.searchsorted(xs, t)
+        a = np.clip(i - 1, 0, xs.size - 1); b = np.clip(i, 0, xs.size - 1)
+        da = np.abs(xs[a] - t); db = np.abs(xs[b] - t)
+        j = np.where(db < da, b, a)
+        return np.where(np.minimum(da, db) < float(tol), j, -1).astype(np.int64)
+
+    def _iimp_bright_src(self):
+        """(sorted starts, filled-orange flags) of every cycle the I x I pane has a bar for: its per-cycle cache's
+        finished rows, REPLACED within a second by the live read's rows (fresher, and the only source of the forming
+        one). Memoised on the identities of the two sources, so a frame costs two identity checks."""
+        c = self.__dict__.get("_rcache", {}).get("iimp")
+        rc = c.get("cols") if c is not None else None
+        L = self.__dict__.get("_iimp_last")
+        m = self.__dict__.get("_iimp_bright_memo")
+        if m is not None and m[0] is rc and m[1] is L:
+            return m[2], m[3]
+        xs = np.zeros(0); fs = np.zeros(0, dtype=bool)
+        if rc is not None and np.size(rc.get("x0", ())):
+            xs = np.asarray(rc["x0"], dtype=np.float64)
+            fs = np.asarray(rc["contra"], dtype=bool) & np.asarray(rc["good"], dtype=bool)
+        if L is not None and np.size(L.get("x0", ())):
+            xl = np.asarray(L["x0"], dtype=np.float64)
+            fl = np.asarray(L["contra"], dtype=bool) & np.asarray(L["good"], dtype=bool)
+            if xs.size:
+                o = np.argsort(xl, kind="stable")
+                hit = self._match_start(xl[o], xs) >= 0          # cache rows the read re-rated
+                xs = np.concatenate([xs[~hit], xl]); fs = np.concatenate([fs[~hit], fl])
+            else:
+                xs, fs = xl, fl
+            o = np.argsort(xs, kind="stable"); xs = xs[o]; fs = fs[o]
+        self._iimp_bright_memo = (rc, L, xs, fs, hash((xs.tobytes(), fs.tobytes())))
+        return xs, fs
+
+    def _iimp_bright_tok(self) -> int:
+        """A CONTENT token of _iimp_bright_src (never an id(): a freed array's id can come back)."""
+        self._iimp_bright_src()
+        return int(self._iimp_bright_memo[4])
+
+    def _px_bright_demote(self, t, cols):
+        """`cols` with every bright candle (7 / 8) whose I x I bar is not ORANGE AND FILLED put back on its plain
+        breakout colour (1 / 2). Everything else untouched."""
+        cols = np.asarray(cols, dtype=np.int64)
+        bx = (cols == _C_BRK_BUY_X) | (cols == _C_BRK_SELL_X)
+        if not bx.any():
+            return cols
+        xs, fs = self._iimp_bright_src()
+        j = self._match_start(xs, np.asarray(t, dtype=np.float64)[bx])
+        ok = (j >= 0) & (fs[np.maximum(j, 0)] if fs.size else np.zeros(j.size, dtype=bool))
+        out = cols.copy()
+        dem = np.zeros(cols.size, dtype=bool); dem[bx] = ~ok
+        out[dem & (cols == _C_BRK_BUY_X)] = _C_BRK_BUY
+        out[dem & (cols == _C_BRK_SELL_X)] = _C_BRK_SELL
+        return out
+
+    def _px_bright_cols(self, t, cols):
+        """(_px_bright_demote over the whole candle cache, a token of WHICH candles stayed bright) -- memoised on the
+        identities of the cache's arrays and of the I x I sources, so the picture's signature costs nothing per frame
+        and it rebuilds only when a candle actually changes colour."""
+        c = self.__dict__.get("_rcache", {}).get("iimp")
+        rc = c.get("cols") if c is not None else None
+        L = self.__dict__.get("_iimp_last")
+        m = self.__dict__.get("_px_bright_memo")
+        if m is not None and m[0] is cols and m[1] is t and m[2] is rc and m[3] is L:
+            return m[4], m[5]
+        out = self._px_bright_demote(t, cols)
+        tok = hash(np.flatnonzero((out == _C_BRK_BUY_X) | (out == _C_BRK_SELL_X)).tobytes())
+        self._px_bright_memo = (cols, t, rc, L, out, tok)
+        return out, tok
+
+    def _px_bright_wanted(self) -> bool:
+        """Are cycle candles on screen? While they are, the I x I tick runs for their bright colours even with its
+        own pane hidden (reading by demand, drawing by visibility -- the Takeover badge's rule)."""
+        if self.scanner_mode != "flow":
+            return False
+        pw = self.__dict__.get("_px_plot")
+        if pw is None:
+            return False
+        try:
+            return bool(pw.isVisible())
+        except RuntimeError:
+            return False
+
+    def _interp_bright_demote(self, rows):
+        """The feed's rows with the same rule: a bright card whose I x I bar is not orange AND filled goes back to
+        the plain breakout colour."""
+        idx = [i for i, r in enumerate(rows) if int(r[9]) in (_C_BRK_BUY_X, _C_BRK_SELL_X)]
+        if not idx:
+            return rows
+        cols = np.array([int(rows[i][9]) for i in idx], dtype=np.int64)
+        dem = self._px_bright_demote(np.array([float(rows[i][0]) for i in idx]), cols)
+        rows = list(rows)
+        for i, c in zip(idx, dem.tolist()):
+            if c != int(rows[i][9]):
+                r = rows[i]
+                rows[i] = tuple(r[:9]) + (int(c),) + tuple(r[10:])
+        return rows
+
     def _px_grow(self, force: bool = False, share: float = 0.20) -> bool:
         """Give the PRICE pane its slice, taken from the main chart.
 
@@ -20108,12 +20218,18 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 self._px_curve.setData(_t, _p)
             return
         ct, cte, co, ch, cl, cc, ccol = arr
+        if self._iimp_plot is None:
+            # the bright pair joins the I x I pane's bars: it must EXIST -- hidden when its own toggle is off
+            if self._iimp_ensure_pane() is not None and not bool(getattr(self, "_iimp_on", True)):
+                self._iimp_show(False)
+        ccol, _bright_tok = self._px_bright_cols(ct, ccol)
         # ⚠ the VIEW is deliberately NOT in this signature, and neither is the live price: the picture covers
         # a WINDOW on the cache that is padded well past the view, so an ordinary pan or zoom falls inside
         # what is already drawn; and the forming candle is the overlay, so a price tick moves that alone.
         # What belongs here: the cache's own size and ends, the Chart Style, and the lookback (which re-rates
         # every colour, and is what clears the cache).
-        sig = (int(np.size(ct)), round(float(ct[0]), 2), round(float(ct[-1]), 2), _bw, int(self._lb_n()))
+        sig = (int(np.size(ct)), round(float(ct[0]), 2), round(float(ct[-1]), 2), _bw, int(self._lb_n()),
+               _bright_tok)                       # a candle whose I x I bar filled / emptied changes colour
         _live_sig = round(float(_lp), 6) if _lp is not None else None
         _vr = (round(dx0, 2), round(dx1, 2))
         _moved = _vr != getattr(self, "_px_vrange", None)
@@ -20174,8 +20290,8 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 _fh = max(float(_rph[-1]) if np.isfinite(_rph[-1]) else _fo, _fc, _fo)
                 _fl = min(float(_rpl[-1]) if np.isfinite(_rpl[-1]) else _fo, _fc, _fo)
                 _fdur = max(_fte - _ft0, 1e-9)
-                _fbr, _fpn, _fhp, _flp = self._px_brushes(np.array([int(d[9])], dtype=np.int64),
-                                                          np.array([_fo]), np.array([_fc]), _bw)
+                _fcd = self._px_bright_demote(np.array([_ft0]), np.array([int(d[9])], dtype=np.int64))
+                _fbr, _fpn, _fhp, _flp = self._px_brushes(_fcd, np.array([_fo]), np.array([_fc]), _bw)
                 self._px_lc_frame((_ft0, _ft0 + _fdur * 0.5), _fo, _fh, _fl, _fc,
                                   _fdur * float(config.PX_CANDLE_FILL),
                                   _fbr[0], _fpn[0], _fhp[0], _flp[0])
@@ -20607,7 +20723,8 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         sig = (nvis, round(float(t[-1]), 2), int(self._flow_win), int(_form // 2), live,
                round(float(_lp), 6) if _lp is not None else None,
                int(len(getattr(self, "_lob_cache", {}) or {})) // 8,
-               int(t.size), int(getattr(self._flow, "rev_hist", 0)))   # the baseline behind the window moved
+               int(t.size), int(getattr(self._flow, "rev_hist", 0)),   # the baseline behind the window moved
+               self._iimp_bright_tok())              # the I x I pane re-rated: a bright card may fill or empty
         if sig == self._interp_sig:
             return
         self._interp_sig = sig
@@ -20680,7 +20797,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                                   px_hi=pxh[k], px_lo=pxl[k], tick=float(config.TICK_SIZE),
                                   push_min=float(config.ABSORB_PUSH_MIN_TICKS),
                                   reject_weak=float(config.ABSORB_REJECT_WEAK))
-        p.setRows(rows)
+        p.setRows(self._interp_bright_demote(rows))
 
     def _stack_axis_sync(self) -> None:
         """ONE clock axis for the whole stack, on the BOTTOM-MOST visible pane (user 2026-09-11).
@@ -22751,7 +22868,8 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         # READING by demand, DRAWING by visibility (the _liq_wanted lesson): the PRICE pane's breakout badges join
         # THIS pane's per-cycle numbers, so while they are wanted the tick runs even with this pane's own widget
         # hidden -- its items are updated unseen, which costs no paint
-        if self._iimp_plot is None or not (self._iimp_plot.isVisible() or self._px_iib_wanted()):
+        if self._iimp_plot is None or not (self._iimp_plot.isVisible() or self._px_iib_wanted()
+                                           or self._px_bright_wanted()):
             return
         if now - self._iimp_t < float(config.CYCLE_RECALC_SECS):
             return

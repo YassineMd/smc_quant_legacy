@@ -392,6 +392,7 @@ CFG = {
 class State:
     bins_sent = None          # (base, buy, sell, px, pxh, pxl) as last sent
     cyc_key = None; cyc_t = 0.0; cyc_full_needed = True; cyc_last_total = 0
+    cyc_base = None; cyc_cols_sent = None      # the last read's arrays, and the colours the tablet last got
     rev_hist = -1
     iimp_id = None; interp_id = None; liq_sig = None; tko_id = None
     lines_sig = {"cint": None, "cimp": None}   # the two split panes, each keyed on what it last sent
@@ -492,17 +493,32 @@ def tick_cycles(now, force=False):
     t, is_buy, strong, move, cbuy, csell, t_end, done = st.crosses(A, B, *XARGS)
     if t.size == 0:
         return
-    px0, px1 = st.crosses_px(A, B, *XARGS); pxh, pxl = st.crosses_hl(A, B, *XARGS)
     key = (int(t.size), round(float(t[-1]), 2), round(float(t_end[-1]), 2), round(float(np.nansum(cbuy) + np.nansum(csell)), 1))
-    if key == S.cyc_key and not force:
+    fresh = force or key != S.cyc_key or S.cyc_base is None
+    if fresh:
+        px0, px1 = st.crosses_px(A, B, *XARGS); pxh, pxl = st.crosses_hl(A, B, *XARGS)
+        cols0 = w._px_state_cols(t, t_end, done, move, is_buy, strong, cbuy, csell)
+        pick_b, rate, state = w._cycle_impact(is_buy, strong, move, cbuy, csell)
+        S.cyc_base = (t, is_buy, strong, move, cbuy, csell, t_end, done, px0, px1, pxh, pxl, cols0, pick_b, rate, state)
+        S.cyc_key = key
+    (t, is_buy, strong, move, cbuy, csell, t_end, done, px0, px1, pxh, pxl, cols0, pick_b, rate, state) = S.cyc_base
+    # THE BRIGHT PAIR (7 / 8) needs its I x I bar ORANGE AND FILLED (user 2026-09-23), and that pane re-rates on its
+    # own clock -- so the join is re-checked every tick, and any candle whose colour moved is re-sent, not just the
+    # last few (a bar can fill well after its cycle closed, once the wall columns land)
+    cols = w._px_bright_demote(t, cols0)
+    prev = S.cyc_cols_sent
+    if not fresh and prev is not None and prev.size == cols.size and np.array_equal(prev, cols):
         return
-    S.cyc_key = key
-    cols = w._px_state_cols(t, t_end, done, move, is_buy, strong, cbuy, csell)
-    pick_b, rate, state = w._cycle_impact(is_buy, strong, move, cbuy, csell)
     total = int(t.size)
     full = force or S.cyc_full_needed or total < S.cyc_last_total
     i0 = 0 if full else max(0, total - 8)
+    if not full and prev is not None and prev.size:
+        _n = min(int(prev.size), int(cols.size))
+        _d = np.flatnonzero(prev[:_n] != cols[:_n])
+        if _d.size:
+            i0 = min(i0, int(_d[0]))
     S.cyc_full_needed = False; S.cyc_last_total = total
+    S.cyc_cols_sent = np.array(cols, copy=True)
     sl = slice(i0, total)
     send({"t": "cyc", "i0": i0, "total": total, "ts": b64(t[sl], "<f8"), "te": b64(t_end[sl], "<f8"),
           "side": b64(is_buy[sl], "u1"), "strong": b64(strong[sl], "u1"), "done": b64(done[sl], "u1"),
@@ -625,6 +641,8 @@ def tick_live(now):
         lp = tape
     d = w.__dict__.get("_px_data")
     fcol = int(d[9]) if (d is not None and len(d) > 9) else -1
+    if fcol in (7, 8) and np.size(d[2]):             # the forming candle: the same filled-orange join
+        fcol = int(w._px_bright_demote(np.array([float(d[2][-1])]), np.array([fcol]))[0])
     send({"t": "live", "now": now, "px": float(lp) if lp is not None else None, "fcol": fcol})
 
 
