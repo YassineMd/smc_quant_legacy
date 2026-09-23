@@ -57,7 +57,7 @@ from PySide6 import QtWidgets                                 # noqa: E402
 qapp = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
 from app import terminal as _term                             # noqa: E402
 from app.terminal import MinimalTerminalWindow                # noqa: E402
-from app.flow_interp import C_BREAK_BUY, C_BREAK_SELL         # noqa: E402
+from app.flow_interp import BREAK_BUY_COLS, BREAK_SELL_COLS   # noqa: E402  (the bright contra pair are breakouts too)
 
 GCS = str(getattr(config, "ARCHIVE_GCS", "gs://smc-quant-archive/solusdt")).rstrip("/") + "/cycles/"
 DATA = os.path.join(HERE, "data")
@@ -283,7 +283,7 @@ for r in R:
     lt = int(r[ci["vac"]]) if bool(config.PX_IIB_VACUUM) else 0
     if lt == 0 and bool(config.PX_IIB_QUIET):
         lt = int(r[ci["quiet"]])
-    side = 1 if col == int(C_BREAK_BUY) else (-1 if col == int(C_BREAK_SELL) else (lt if col < 0 else 0))
+    side = 1 if col in BREAK_BUY_COLS else (-1 if col in BREAK_SELL_COLS else (lt if col < 0 else 0))
     if side == 0:
         continue
     own, oth = (r[ci["liib"]], r[ci["liis"]]) if side > 0 else (r[ci["liis"]], r[ci["liib"]])

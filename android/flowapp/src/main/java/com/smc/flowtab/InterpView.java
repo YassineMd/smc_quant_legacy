@@ -41,10 +41,11 @@ public final class InterpView extends View {
     private final float d, PAD, TOPY, CARD_H, CARD_GAP, SEP_H;
     private final DashPathEffect dashed;
     private final Typeface sans = Typeface.DEFAULT, bold = Typeface.DEFAULT_BOLD, mono = Typeface.MONOSPACE;
-    private static final String[] BAR_COL = {"#FF9500", "#00C853", "#FF1F1F", "#E2574C", "#6B7A82", "#4E5C64", "#2979FF"};
-    private static final String[] TXT_DARK = {"#FFB84D", "#2BE86B", "#FF5A5A", "#F0857C", "#9AAAB2", "#6B7A82", "#7FB2FF"};
+    // 7 / 8 = a breakout against its leader (the I x I orange bar): bright green up, bright purple down (flow_interp)
+    private static final String[] BAR_COL = {"#FF9500", "#00C853", "#FF1F1F", "#E2574C", "#6B7A82", "#4E5C64", "#2979FF", "#76FF03", "#D500F9"};
+    private static final String[] TXT_DARK = {"#FFB84D", "#2BE86B", "#FF5A5A", "#F0857C", "#9AAAB2", "#6B7A82", "#7FB2FF", "#9CFF57", "#E57BFF"};
     private static final String[] MOVE_DARK = {"#FF5A5A", "#7A828C", "#2BE86B"};
-    private static final String[] TXT_LIGHT = {"#A85C00", "#00822F", "#C40D0D", "#A8382F", "#5A666D", "#6B7A82", "#0B4FA8"};
+    private static final String[] TXT_LIGHT = {"#A85C00", "#00822F", "#C40D0D", "#A8382F", "#5A666D", "#6B7A82", "#0B4FA8", "#3F7F00", "#8E00B0"};
     private static final String[] MOVE_LIGHT = {"#C40D0D", "#77808A", "#00822F"};
     private static final int ST_ABSORB = 0, ST_BREAK = 1, ST_VACUUM = 2, ST_QUIET = 3;
     private static final int C_ABSORB_BUY = 0, C_BREAK_BUY = 1, C_VACUUM = 3, C_QUIET = 4;

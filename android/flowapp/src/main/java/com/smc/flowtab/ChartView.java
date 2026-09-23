@@ -266,8 +266,10 @@ public final class ChartView extends View {
     private static final int BG = Color.parseColor("#141414"), FG = Color.parseColor("#dcdcdc"), TITLE = Color.parseColor("#7d8492");
     private static final int WEAK = Color.parseColor("#8a919c"), GUIDE = Color.parseColor("#9aa4b2");
     private static final int B_UP = Color.rgb(26, 154, 96), B_DN = Color.rgb(208, 48, 48), B_CONTRA = Color.rgb(222, 130, 0), B_FLAT = Color.rgb(122, 130, 140);
-    private static final int[] BAR_COL = {Color.parseColor("#FF9500"), Color.parseColor("#00C853"), Color.parseColor("#FF1F1F"), Color.parseColor("#E2574C"), Color.parseColor("#6B7A82"), Color.parseColor("#4E5C64"), Color.parseColor("#2979FF")};
-    private static final int C_AB_BUY = 0, C_BRK_BUY = 1, C_BRK_SELL = 2, C_AB_SELL = 6;
+    private static final int[] BAR_COL = {Color.parseColor("#FF9500"), Color.parseColor("#00C853"), Color.parseColor("#FF1F1F"), Color.parseColor("#E2574C"), Color.parseColor("#6B7A82"), Color.parseColor("#4E5C64"), Color.parseColor("#2979FF"), Color.parseColor("#76FF03"), Color.parseColor("#D500F9")};
+    // 7 / 8 = a BREAKOUT whose I x I bar is orange (its leader is not the way price broke, user 2026-09-23): bright green
+    // up through sellers, bright purple down through buyers -- flow_interp.C_BREAK_*_X, the engine's colour index
+    private static final int C_AB_BUY = 0, C_BRK_BUY = 1, C_BRK_SELL = 2, C_AB_SELL = 6, C_BRK_BUY_X = 7, C_BRK_SELL_X = 8;
     private static final double LN2 = Math.log(2.0);
 
     public ChartView(Context ctx, FlowModel model) {
@@ -797,6 +799,9 @@ public final class ChartView extends View {
         if (col == C_AB_BUY && !down) { col = -1; hiWick = BAR_COL[C_AB_BUY]; }
         else if (col == C_AB_SELL && !(cl > o)) { col = -1; loWick = BAR_COL[C_AB_SELL]; }
         if (col == C_BRK_BUY || col == C_BRK_SELL || col == C_AB_BUY || col == C_AB_SELL) { fill = BAR_COL[col]; pen = fill; }
+        else if (col == C_BRK_BUY_X || col == C_BRK_SELL_X) {       // the bright pair keeps a darker outline: neon on white washes out
+            fill = BAR_COL[col]; pen = Color.rgb(Color.red(fill) * 2 / 3, Color.green(fill) * 2 / 3, Color.blue(fill) * 2 / 3);
+        }
         else if (bw) { fill = down ? Color.BLACK : Color.WHITE; pen = Color.BLACK; }
         else { fill = down ? RED : TEAL; pen = Color.parseColor("#9aa4ae"); }
         pl.setStrokeWidth(1 * d); pl.setColor(pen);

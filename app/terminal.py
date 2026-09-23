@@ -46,6 +46,8 @@ from .flow_interp import (FlowInterpPanel, build_rows as _interp_build_rows, pre
                           BAR_COL as _STATE_BAR_COL,
                           C_ABSORB_BUY as _C_AB_BUY, C_ABSORB_SELL as _C_AB_SELL,
                           C_BREAK_BUY as _C_BRK_BUY, C_BREAK_SELL as _C_BRK_SELL,
+                          C_BREAK_BUY_X as _C_BRK_BUY_X, C_BREAK_SELL_X as _C_BRK_SELL_X,
+                          iimp_contra as _iimp_contra,
                           )
 from .region_state import EXH_WINDOW, exhaustion_mults as _exhaustion_mults
 from .alerts import AlertsLedger
@@ -19437,7 +19439,23 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # ABSORBED. VACUUM and QUIET deliberately come back as -1 and are drawn on the Chart Style's own
         # bearish-fill / bullish-hollow pair -- colouring all six (which I did first) makes the two that
         # matter compete with four that do not, which is the opposite of what a colour code is for.
-        col = np.where(heavy & big, np.where(up, _C_BRK_BUY, _C_BRK_SELL),
+        # A BREAKOUT whose I x I bar is ORANGE (user 2026-09-23) -- its leader is not the way price broke -- takes
+        # the bright pair. The leader is read exactly as the I x I pane reads it: each side's aggressive $/s over its
+        # own last N, the SAME lookback, so the candle and the orange bar cannot disagree.
+        te = np.array(t_end, dtype=np.float64, copy=True)
+        if n and not bool(done[-1]):
+            te[-1] = max(float(t[-1]), min(time.time(), float(te[-1])))
+        dur = np.maximum(te - np.asarray(t, dtype=np.float64), 1e-9)
+        try:
+            _arb = _interp_prev(np.maximum(np.asarray(cbuy, dtype=np.float64), 0.0) / dur, done,
+                                self._lb_n(), self._lb_min_n(), include_open=True)
+            _ars = _interp_prev(np.maximum(np.asarray(csell, dtype=np.float64), 0.0) / dur, done,
+                                self._lb_n(), self._lb_min_n(), include_open=True)
+            cx = _iimp_contra(_arb, _ars, move)
+        except Exception:
+            cx = np.zeros(n, dtype=bool)
+        col = np.where(heavy & big, np.where(up, np.where(cx, _C_BRK_BUY_X, _C_BRK_BUY),
+                                             np.where(cx, _C_BRK_SELL_X, _C_BRK_SELL)),
               np.where(heavy, np.where(side, _C_AB_BUY, _C_AB_SELL), -1))
         return np.where(ok, col, -1).astype(np.int64)
 
@@ -19564,7 +19582,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             e = _cache.get(ci)
             if e is None:
                 _c = _STATE_BAR_COL[ci]
-                _p = pg.mkPen(_c, width=1.0); _p.setCosmetic(True)
+                # the bright pair keeps a DARKER outline: neon green on the white Simple BW ground washes out
+                _p = pg.mkPen(QtGui.QColor(_c).darker(150) if ci in (_C_BRK_BUY_X, _C_BRK_SELL_X) else _c,
+                              width=1.0)
+                _p.setCosmetic(True)
                 e = (pg.mkBrush(QtGui.QColor(_c)), _p)
                 _cache[ci] = e
             br.append(e[0]); pn.append(e[1])
@@ -23824,7 +23845,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         # could carry a badge at all -- a BREAKOUT in the making. Always in, it re-laid every badge ~5 times a second
         # for nothing (measured on the first live boot: median 25 us per frame against 7 us idle).
         _fl = None
-        if lc and (_fcol in (1, 2) or (_fcol < 0 and _fvac != 0)):    # a BREAKOUT (C_BREAK_BUY / _SELL), a VACUUM or a QUIET forming
+        if lc and (_fcol in (1, 2, 7, 8) or (_fcol < 0 and _fvac != 0)):    # a BREAKOUT (C_BREAK_* and the bright C_BREAK_*_X), a VACUUM or a QUIET forming
             try:
                 # ... the close too when it is a light-flow candle: its "kept" moves with every print
                 _fl = (round(float(lc["l"]), 6), round(float(lc["h"]), 6), round(float(lc["x"]), 1),
@@ -23850,7 +23871,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                                          brush=pg.mkBrush(_q.red(), _q.green(), _q.blue(), _a))
                 _it.setZValue(32); self._px_plot.addItem(_it, ignoreBounds=True); its.append(_it)
             self._px_iib = tuple(its)
-        from .flow_interp import C_BREAK_BUY, C_BREAK_SELL
+        from .flow_interp import BREAK_BUY_COLS, BREAK_SELL_COLS
         _ypx = (float(vy1) - float(vy0)) / max(1.0, float(vb.height()))
         _off = float(config.PX_IIB_OFFSET_PX) * _ypx
         _r = 0.5 * float(config.PX_IIB_SIZE) * _ypx
@@ -23907,15 +23928,15 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 _vf = vac[fin]
                 _neutral = ccol[j] < 0
                 _kb = _kept_ok(co[j], ch[j], cc[j], 1.0); _ks = _kept_ok(co[j], cl[j], cc[j], -1.0)
-                mb = ok & agree_b[fin] & ((ccol[j] == int(C_BREAK_BUY)) | (_neutral & (_vf > 0) & _kb))
-                ms = ok & agree_s[fin] & ((ccol[j] == int(C_BREAK_SELL)) | (_neutral & (_vf < 0) & _ks))
+                mb = ok & agree_b[fin] & (np.isin(ccol[j], BREAK_BUY_COLS) | (_neutral & (_vf > 0) & _kb))
+                ms = ok & agree_s[fin] & (np.isin(ccol[j], BREAK_SELL_COLS) | (_neutral & (_vf < 0) & _ks))
                 xm = 0.5 * (ct[j] + cte[j])
                 bx = xm[mb]; by = np.clip(cl[j][mb] - _off, _lo_y, _hi_y); keys_b = ct[j][mb]
                 sx = xm[ms]; sy = np.clip(ch[j][ms] + _off, _lo_y, _hi_y); keys_s = ct[j][ms]
         self._px_iib[0].setData(x=bx, y=by); self._px_iib[1].setData(x=sx, y=sy)
         # the FORMING candle: the overlay's own geometry, the live read's state, the dict's forming row
         fdraw = None
-        _fside = 1 if _fcol == int(C_BREAK_BUY) else (-1 if _fcol == int(C_BREAK_SELL) else (_fvac if _fcol < 0 else 0))
+        _fside = 1 if _fcol in BREAK_BUY_COLS else (-1 if _fcol in BREAK_SELL_COLS else (_fvac if _fcol < 0 else 0))
         if lc and _fl is not None and form.any() and _fside != 0:
             k = int(np.flatnonzero(form)[-1])
             try:

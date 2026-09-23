@@ -68,12 +68,21 @@ def state_label(st, side):
 #   BLUE MEASURED, not picked: #2979FF's nearest neighbour in this palette is 192 channel-units away (from
 #   quiet/gray), where the closest EXISTING pair -- quiet vs forming -- is only 89 apart.
 C_ABSORB_BUY, C_BREAK_BUY, C_BREAK_SELL, C_VACUUM, C_QUIET, C_FORMING, C_ABSORB_SELL = 0, 1, 2, 3, 4, 5, 6
+# A BREAKOUT AGAINST ITS LEADER (user 2026-09-23: "they are breakout bars and have orange histogram bar on
+# interestximpact"): the side whose aggressive $/s ran further above its own normal is NOT the way price broke --
+# the INTEREST x IMPACT pane's own orange "contra" rule (iimp_contra below). Breakout and absorption at once: the
+# leader was absorbed and price broke the other way. Bright green = broke UP through sellers, bright purple =
+# broke DOWN through buyers (the user's colours). APPENDED like C_ABSORB_SELL; they are still BREAKOUTS to every
+# rule that asks (BREAK_BUY_COLS / BREAK_SELL_COLS).
+C_BREAK_BUY_X, C_BREAK_SELL_X = 7, 8
+BREAK_BUY_COLS = (C_BREAK_BUY, C_BREAK_BUY_X)
+BREAK_SELL_COLS = (C_BREAK_SELL, C_BREAK_SELL_X)
 C_ABSORB = C_ABSORB_BUY                     # kept for anything still importing the old name
-BAR_COL = ("#FF9500", "#00C853", "#FF1F1F", "#E2574C", "#6B7A82", "#4E5C64", "#2979FF")
+BAR_COL = ("#FF9500", "#00C853", "#FF1F1F", "#E2574C", "#6B7A82", "#4E5C64", "#2979FF", "#76FF03", "#D500F9")
 # ... and TEXT is per THEME. It was not: on the white Simple BW ground every name drew in a pale dark-theme
 # colour and was barely readable.
-TXT_DARK = ("#FFB84D", "#2BE86B", "#FF5A5A", "#F0857C", "#9AAAB2", "#6B7A82", "#7FB2FF")
-TXT_LIGHT = ("#A85C00", "#00822F", "#C40D0D", "#A8382F", "#5A666D", "#6B7A82", "#0B4FA8")
+TXT_DARK = ("#FFB84D", "#2BE86B", "#FF5A5A", "#F0857C", "#9AAAB2", "#6B7A82", "#7FB2FF", "#9CFF57", "#E57BFF")
+TXT_LIGHT = ("#A85C00", "#00822F", "#C40D0D", "#A8382F", "#5A666D", "#6B7A82", "#0B4FA8", "#3F7F00", "#8E00B0")
 
 # the price move, coloured by the move itself: green up, red down, grey when it ended where it started
 MOVE_DARK = ("#FF5A5A", "#7A828C", "#2BE86B")
@@ -85,12 +94,28 @@ STATE_TXT = (TXT_DARK[C_ABSORB], TXT_DARK[C_BREAK_BUY], TXT_DARK[C_VACUUM], TXT_
              TXT_DARK[C_FORMING])
 
 
-def colour_of(st, side):
-    """Which colour a row draws in. BREAKOUT and ABSORPTION both split by side.
+def iimp_contra(buy_ratio, sell_ratio, move):
+    """The INTEREST x IMPACT pane's ORANGE bar, as a rule anyone can ask: the LEADER -- the side whose aggressive $/s
+    ran further above its OWN last-N normal (log2 buy/sell >= 0 = buyers) -- is not the way price went. Needs both
+    ratios finite and positive (the pane rates nothing else) and a real move; flat is never contra. Vectorised;
+    scalars in, a 0-d bool out."""
+    b = np.asarray(buy_ratio, dtype=np.float64); s_ = np.asarray(sell_ratio, dtype=np.float64)
+    m = np.asarray(move, dtype=np.float64)
+    with np.errstate(invalid="ignore"):
+        ok = np.isfinite(b) & np.isfinite(s_) & (b > 0) & (s_ > 0) & np.isfinite(m)
+        lead_buy = b >= s_
+        return ok & ((lead_buy & (m < 0)) | (~lead_buy & (m > 0)))
+
+
+def colour_of(st, side, contra=False):
+    """Which colour a row draws in. BREAKOUT and ABSORPTION both split by side; a BREAKOUT against its leader
+    (`contra`, see iimp_contra) takes the bright pair.
 
     This is the ONE place either pane asks, which is why the cycle candles above the flow lines and the rows
     in this feed cannot disagree about what a colour means."""
     if st == ST_BREAK:
+        if contra:
+            return C_BREAK_BUY_X if side == "buy" else C_BREAK_SELL_X
         return C_BREAK_BUY if side == "buy" else C_BREAK_SELL
     if st == ST_ABSORB:
         return C_ABSORB_BUY if side == "buy" else C_ABSORB_SELL
@@ -526,6 +551,10 @@ def build_rows(t, t_end, done, move, side_dom, vol_ratio, speed_ratio,
                 "buy": _at(buy_ratio, k), "sell": _at(sell_ratio, k), "bid": _at(bid_ratio, k),
                 "ask": _at(ask_ratio, k), "push": push, "give": give, "gb": frac}
 
+    def _contra(k):
+        """The I x I pane's orange for this row: its tape ratios ARE the pane's interest (same lookback)."""
+        return bool(iimp_contra(_at(buy_ratio, k), _at(sell_ratio, k), mv[k]))
+
     rows = []
     order = range(n - 1, -1, -1)
     for k in order:
@@ -564,7 +593,7 @@ def build_rows(t, t_end, done, move, side_dom, vol_ratio, speed_ratio,
                          _line1(vr[k], buy_ratio, sell_ratio, k),
                          _line2(bid_ratio, ask_ratio, k),
                          st, bool(conf[k] >= float(weak_below)), True,
-                         colour_of(st, side), _mt, _ms, _mw, _raw(k, st, side, el)))
+                         colour_of(st, side, _contra(k)), _mt, _ms, _mw, _raw(k, st, side, el)))
             continue
         if not ok[k]:
             rows.append((t0, t1, "%s - %s - %s" % (_clock(t0), _clock(t1), dur_text(t1 - t0)),
@@ -593,7 +622,7 @@ def build_rows(t, t_end, done, move, side_dom, vol_ratio, speed_ratio,
                      _line1(vr[k], buy_ratio, sell_ratio, k),
                      _line2(bid_ratio, ask_ratio, k),
                      st, _strong, False,
-                     colour_of(st, side), _mt, _ms, _mw, _raw(k, st, side, t1 - t0)))
+                     colour_of(st, side, _contra(k)), _mt, _ms, _mw, _raw(k, st, side, t1 - t0)))
     return rows
 
 
