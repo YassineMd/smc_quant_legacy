@@ -605,6 +605,9 @@ public final class ChartView extends View {
         pxTop = top; pxHgt = hgt; pxYl = yl; pxYh = yh;
         notePane(PANE_PRICE, top, hgt, yl, yh);
         c.save(); c.clipRect(r.left, r.top, r.right, r.bottom);
+        // LINES IMPACT's areas, behind everything else on the price chart (user 2026-09-23). They come with the
+        // engine's LINES IMPACT data, which flows whether or not that pane is shown here.
+        drawDomBands(c, s.cimp, r.left, top, r.bottom);
         if (s.hlhOn) drawHlh(c, s, r, top, hgt, yl, yh);
         for (int i = i0; i < i1; i++) {
             boolean isForm = i == last && forming;
@@ -1286,21 +1289,7 @@ public final class ChartView extends View {
         notePane(p, top, hgt, ylo, yhi);
         c.save(); c.clipRect(r.left, top, r.right, r.bottom);
         // the bands go down FIRST, under the guides and the lines
-        if (imp && L.dside != null && L.n > 0) {
-            for (int i = 0; i < L.n && i < L.dside.length; i++) {
-                int sd = L.dside[i];
-                if (sd == 0) continue;
-                boolean bright = L.dgain != null && i < L.dgain.length && L.dgain[i] > -900f
-                        && L.dgain[i] >= (float) L.gain;
-                // the BRIGHT band is the user's own pair (#66FF00 / #FF0000), not teal / red at more alpha:
-                // a band the leader CLIMBED into differs in HUE as well as in weight
-                int col = bright ? (sd > 0 ? DOM_HI_BUY : DOM_HI_SELL) : (sd > 0 ? TEAL : RED);
-                pf.setColor(Color.argb(bright ? 95 : 38, Color.red(col), Color.green(col), Color.blue(col)));
-                float bx0 = xPx(L.x0[i]), bx1 = xPx(L.x1[i]);
-                if (bx1 < r.left || bx0 > plotR) continue;
-                c.drawRect(Math.max(r.left, bx0), top, Math.min(plotR, bx1), r.bottom, pf);
-            }
-        }
+        if (imp) drawDomBands(c, L, r.left, top, r.bottom);
         pl.setColor(cGuide); pl.setStrokeWidth(1 * d);
         pl.setPathEffect(new DashPathEffect(new float[]{5 * d, 5 * d}, 0));
         for (double g : new double[]{Math.log(0.76) / LN2, Math.log(1.37) / LN2}) {
@@ -1364,6 +1353,26 @@ public final class ChartView extends View {
             pt.setTypeface(Typeface.MONOSPACE); pt.setTextSize(10 * d); pt.setFakeBoldText(false);
             pt.setColor(L.b[k] >= L.s[k] ? TEAL : RED);
             c.drawText(txt, plotR - pt.measureText(txt) - 6 * d, r.bottom - 5 * d, pt);
+        }
+    }
+
+    /** LINES IMPACT's dominance AREAS: one band per cycle where a side's impact stands LIMP_DOM_SPREAD above the
+     * other's, BRIGHT where the leader climbed LIMP_DOM_GAIN into it. Drawn in the LINES IMPACT pane and on the
+     * PRICE pane -- ONE routine, so the two can never disagree about where an area is or what colour. */
+    private void drawDomBands(Canvas c, FlowModel.Lines L, float left, float top, float bottom) {
+        if (L == null || L.dside == null || L.n <= 0) return;
+        for (int i = 0; i < L.n && i < L.dside.length; i++) {
+            int sd = L.dside[i];
+            if (sd == 0) continue;
+            boolean bright = L.dgain != null && i < L.dgain.length && L.dgain[i] > -900f
+                    && L.dgain[i] >= (float) L.gain;
+            // the BRIGHT band is the user's own pair (#66FF00 / #BE03FD), not teal / red at more alpha:
+            // a band the leader CLIMBED into differs in HUE as well as in weight
+            int col = bright ? (sd > 0 ? DOM_HI_BUY : DOM_HI_SELL) : (sd > 0 ? TEAL : RED);
+            pf.setColor(Color.argb(bright ? 95 : 38, Color.red(col), Color.green(col), Color.blue(col)));
+            float bx0 = xPx(L.x0[i]), bx1 = xPx(L.x1[i]);
+            if (bx1 < left || bx0 > plotR) continue;
+            c.drawRect(Math.max(left, bx0), top, Math.min(plotR, bx1), bottom, pf);
         }
     }
 
