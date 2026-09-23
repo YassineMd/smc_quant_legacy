@@ -614,9 +614,24 @@ IIMP_WALL_RADIUS = 25           # the wall is read within +-this many ticks of m
 # 31/97 I x I and 40/91 LINES IMPACT cycles changed between a cold and a warm read of the same view).
 IIMP_WALL_COL_SECS = 15         # the snapshots come every ~30 s; 15 s columns never skip one
 IIMP_WALL_CHUNK = 900           # columns per request (3.75 h; ~50 KB, the Limit Orders pane's own budget)
-IIMP_WALL_FINAL_LAG = 45.0      # a column is FINAL once its end is this far in the past -- a snapshot has landed
+# THE LIVE EDGE (2026-09-23). A new cycle is only known ~20 s after it opened (FLOW_CROSS_MIN_HOLD_SECS), and its
+# wall is the column that ENDS at or before its open -- so that column has been over for 20 s or more by then.
+# Fetching it LIVE_LAG after its end puts the wall in hand BEFORE the cycle is known, and the forming point shows
+# the moment the cycle does. ⚠ It was FINAL_LAG + a 30 s cadence before: the forming I x I bar and LINES IMPACT
+# point came 30-75 s after the open, and a cycle shorter than that was never drawn while it formed (measured).
+# The daemon writes its snapshots every DEPTH_SYNC_SECS (10 s) and that write can stall, so a column fetched
+# before FINAL_LAG is PROVISIONAL: it is fetched once more when it turns final, and a changed value replaces it.
+# The grid a live session ends with is therefore the grid a cold start reads.
+IIMP_WALL_LIVE_LAG = 15.0       # a column is fetched this long after its end (past the daemon's 10 s write)
+IIMP_WALL_FINAL_LAG = 45.0      # ... and is FINAL once its end is this far in the past -- every snapshot has landed
 IIMP_WALL_BACKFILL_GAP = 1.0    # seconds between requests while filling history
-IIMP_WALL_LIVE_GAP = 30.0       # ... and at the live edge once caught up: one new snapshot per 30 s, no point sooner
+IIMP_WALL_LIVE_GAP = 2.0        # the least seconds between live-edge requests (one is due per 15 s column anyway)
+# WHAT HAS BEEN PAINTED STAYS (user 2026-09-23: "whatever have been loaded and calculated and painted should staaay
+# no matter if i zoom in out or pane left right"). The I x I pane and the two LINES panes keep every FINISHED cycle
+# they have computed, keyed by its start, and draw from that cache -- the PRICE pane's rule (PX_CACHE_MAX). Before,
+# each drew only its latest read: what left the view was dropped, and what came into it was blank until the next
+# read. Bounded, evicting what is FURTHEST FROM THE VIEW; ~72 h of cycles fits.
+IIMP_CACHE_MAX = 6000
 IIMP_FIT_MIN_N = 20             # the y fit LATCHES only once this many cycles were rated -- a boot-time read with a
                                 # handful of cycles must not freeze a scale the rest of the data will not fit
 IIMP_WALL_LOW = 0.94            # far-side resting orders vs the previous N cycles -- terciles again
