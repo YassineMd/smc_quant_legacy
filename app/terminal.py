@@ -20966,18 +20966,20 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         except Exception as ex:
             print("WALL GRID DECODE: %s" % ex)
             return
-        # one line when the backfill first reaches the start of the loaded history -- the only way to see from a
-        # journal (the tablet's engine) that every cycle now has its wall
-        if not self.__dict__.get("_wall_done_logged"):
-            try:
-                _s0 = float(self._flow.span()[0])
-                _km = int(max(_s0, time.time() - float(config.DEPTH_RETENTION_HOURS) * 3600.0) // C) - 1
-                if self._wall_lo is not None and self._wall_lo <= _km:
-                    self._wall_done_logged = True
-                    print("WALL GRID complete: %d columns of %.0f s back to %s"
-                          % (len(g), C, time.strftime("%m-%d %H:%M", time.gmtime(self._wall_lo * C))), flush=True)
-            except Exception:
-                pass
+        # one line each time the grid CATCHES UP with the start of the loaded history -- the only way to see from
+        # a journal (the tablet's engine) that every cycle has its wall. ⚠ Not once: the engine loads its history
+        # in 6 h chunks, so the start moves back and the grid follows it; a line per hour of new history reached.
+        try:
+            _s0 = float(self._flow.span()[0])
+            _km = int(max(_s0, time.time() - float(config.DEPTH_RETENTION_HOURS) * 3600.0) // C) - 1
+            _prev = self.__dict__.get("_wall_logged_k")
+            if (self._wall_lo is not None and self._wall_lo <= _km
+                    and (_prev is None or _km < _prev - int(3600.0 / C))):
+                self._wall_logged_k = _km
+                print("WALL GRID caught up with the loaded history: %d columns of %.0f s back to %s"
+                      % (len(g), C, time.strftime("%m-%d %H:%M", time.gmtime(self._wall_lo * C))), flush=True)
+        except Exception:
+            pass
         self._iimp_sig = None; self._iimp_t = 0.0
         for _k in self._LINES_KINDS:
             self._lp_(_k)["sig"] = None
