@@ -624,7 +624,12 @@ IIMP_WALL_CHUNK = 900           # columns per request (3.75 h; ~50 KB, the Limit
 # The grid a live session ends with is therefore the grid a cold start reads.
 IIMP_WALL_LIVE_LAG = 15.0       # a column is fetched this long after its end (past the daemon's 10 s write)
 IIMP_WALL_FINAL_LAG = 45.0      # ... and is FINAL once its end is this far in the past -- every snapshot has landed
-IIMP_WALL_BACKFILL_GAP = 1.0    # seconds between requests while filling history
+IIMP_WALL_BACKFILL_GAP = 5.0    # seconds between requests while filling history -- PACED (2026-09-23 outage, below)
+# ⚠⚠ THE 2026-09-23 OUTAGE. The daemon's trade intake froze at 14:13:11 UTC during a sell-off burst, on a box already
+# out of memory, after its slow liquidity-window requests had gone from 0-30/h (~1 s each) to 184/h (38-83 s max) --
+# every start of every client backfilled ALL 72 h of walls at 1 s spacing. The grid now backfills ON DEMAND: this
+# many hours at least, and back to the leftmost view edge seen this session (+ the lookback), never further.
+IIMP_WALL_MIN_BACK_H = 6.0
 IIMP_WALL_LIVE_GAP = 2.0        # the least seconds between live-edge requests (one is due per 15 s column anyway)
 # WHAT HAS BEEN PAINTED STAYS (user 2026-09-23: "whatever have been loaded and calculated and painted should staaay
 # no matter if i zoom in out or pane left right"). The I x I pane and the two LINES panes keep every FINISHED cycle

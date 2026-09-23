@@ -20922,7 +20922,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             _s0 = float(_sp[0]) if _sp else now
         except Exception:
             _s0 = now
-        k_min = int(max(_s0, now - float(config.DEPTH_RETENTION_HOURS) * 3600.0) // C) - 1
+        k_min = self._wall_kmin(now, _s0)
         _due = [k for k in self._wall_prov if k <= k_fin]          # provisional columns that have turned final
         if self._wall_hi is None:
             a, b = max(k_min, k_live - N + 1), k_live
@@ -20946,11 +20946,34 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         except Exception:
             self._wall_sent.discard(key); self._wall_req = None
 
+    def _wall_kmin(self, now: float, s0: float) -> int:
+        """The oldest column the grid should hold: ON DEMAND (2026-09-23 outage, see IIMP_WALL_MIN_BACK_H) -- at least
+        that many hours, and back to the leftmost view edge seen this session plus the lookback its reads reach
+        behind it; never past the store's own start or the daemon's retention."""
+        C = float(config.IIMP_WALL_COL_SECS)
+        try:
+            (vx0, _vx1), _ = self.vb.viewRange()
+            vx0 = float(vx0)
+        except Exception:
+            vx0 = now
+        seen = min(float(self.__dict__.get("_wall_seen_lo", vx0)), vx0)
+        self._wall_seen_lo = seen
+        try:
+            lb = float(self._lb_secs())
+        except Exception:
+            lb = 0.0
+        # a full lookback BELOW anything viewed: a cycle's rating stands on the walls of the N same-side cycles
+        # before it, so a view whose left edge lacked them would draw degraded ratings until the grid caught up
+        want = min(now - float(config.IIMP_WALL_MIN_BACK_H) * 3600.0, seen) - lb - 600.0
+        floor = max(float(s0), now - float(config.DEPTH_RETENTION_HOURS) * 3600.0, want)
+        return int(floor // C) - 1
+
     def _wall_ingest(self, pkt) -> None:
         """Write a reply into the canonical grid and extend the covered run. Then, if any column is new or read
         differently, every pane that reads a wall is invalidated, so those cycles are re-rated ONCE."""
         changed = False
         k_first = None                  # the earliest column this reply added or changed
+        k_last = None                   # ... and the latest
         try:
             C = float(config.IIMP_WALL_COL_SECS)
             nr = max(1, len(pkt.radii))
@@ -20973,6 +20996,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 if old != v:
                     changed = True
                     k_first = k if k_first is None else min(k_first, k)
+                    k_last = k if k_last is None else max(k_last, k)
                     if old is not None:
                         self._wall_fixes += 1          # a provisional column the final read disagreed with
                 g[k] = v
@@ -20999,7 +21023,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         # in 6 h chunks, so the start moves back and the grid follows it; a line per hour of new history reached.
         try:
             _s0 = float(self._flow.span()[0])
-            _km = int(max(_s0, time.time() - float(config.DEPTH_RETENTION_HOURS) * 3600.0) // C) - 1
+            _km = self._wall_kmin(time.time(), _s0)
             _prev = self.__dict__.get("_wall_logged_k")
             if (self._wall_lo is not None and self._wall_lo <= _km
                     and (_prev is None or _km < _prev - int(3600.0 / C))):
@@ -21014,7 +21038,16 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             # column k is the wall of the cycles opening in [(k+1)C, (k+2)C), and every later cycle may hold one of
             # those in its baseline: the painted cache is dropped from there on (at the live edge that is the
             # forming cycle only, which is never cached)
-            self._rc_drop_from((k_first + 1) * float(config.IIMP_WALL_COL_SECS))
+            # ... but only over the cycles it can REACH: its own, and those whose baseline looks back over it --
+            # _lb_secs() is sized to hold a same-side baseline -- plus 30 min for the smoothing windows. A backfill
+            # chunk extending into history must not wipe everything painted after it (measured: at 3x the lookback
+            # it dropped all 88 cycles near the live edge).
+            try:
+                _reach = float(self._lb_secs()) + 1800.0
+            except Exception:
+                _reach = float("inf")
+            self._rc_drop_from((k_first + 1) * float(config.IIMP_WALL_COL_SECS),
+                               (k_last + 2) * float(config.IIMP_WALL_COL_SECS) + _reach)
         self._iimp_sig = None; self._iimp_t = 0.0
         for _k in self._LINES_KINDS:
             self._lp_(_k)["sig"] = None
@@ -21106,7 +21139,10 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             need = True
         else:
             d0, d1 = self._liq_data[0], self._liq_data[1]
-            need = (vx0 < d0 - 0.02 * span) or (vx1 > d1 + 0.25 * span) or (now - self._liq_req_t > 120.0)
+            # ⚠ judged against min(vx1, now): the daemon has no book past NOW, so a view reaching into the future
+            # was "uncovered" for ever and re-requested every 20-40 s (the 2026-09-23 outage, see config)
+            need = ((vx0 < d0 - 0.02 * span) or (min(float(vx1), now) > d1 + 0.25 * span)
+                    or (now - self._liq_req_t > 120.0))
         if self._liq_req is not None and now - self._liq_req_t > 60.0:
             self._liq_req = None                                   # timed out -> allow another
         if need and self._liq_req is None and self._wall_req is None and now - self._liq_req_t > 1.0:
@@ -22666,13 +22702,13 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         st[1:] = np.where(x0[1:] - x1[:-1] <= 0.5, 1, 2)
         return np.cumsum(st)
 
-    def _rc_drop_from(self, t0: float) -> None:
-        """A wall column changed: every cached cycle opening at or after `t0` was rated on the old value (its own
-        wall, or a same-side predecessor's in its baseline) -- drop those; the next read re-rates them."""
+    def _rc_drop_from(self, t0: float, t1: float = float("inf")) -> None:
+        """Wall columns changed: every cached cycle opening in [t0, t1] was rated on the old values (its own wall, or
+        a same-side predecessor's in its baseline) -- drop those; the next read re-rates them."""
         for c in self.__dict__.get("_rcache", {}).values():
             cols = c.get("cols")
             if cols is not None:
-                m = cols["x0"] < float(t0)
+                m = (cols["x0"] < float(t0)) | (cols["x0"] > float(t1))
                 c["cols"] = {k: v[m] for k, v in cols.items()}
 
     def _iimp_tick(self, now: float) -> None:
