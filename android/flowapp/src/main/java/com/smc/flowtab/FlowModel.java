@@ -69,6 +69,7 @@ public final class FlowModel {
         public float[] dgain = null, dgap = null;
         public double spread = 0.3, gain = 0.3, step = 0.3;
         public int smooth = 20;
+        String keepKey = null;                      // what the held rows MEAN: smoothing, lookback, window
     }
     public final Lines cint = new Lines(), cimp = new Lines();
     public int smoothMin = 1, smoothMax = 30;
@@ -227,6 +228,57 @@ public final class FlowModel {
         }
     }
 
+    // ---- WHAT HAS BEEN PAINTED STAYS (user 2026-09-23: "whatever have been loaded and calculated and painted should
+    // staaay no matter if i zoom in out or pane left right"). The engine sends the I x I pane and the two LINES panes
+    // for its CURRENT view only; each message used to REPLACE what the tablet held, so everything outside the new
+    // view vanished and came back only after a round trip. Now a message is SPLICED in, keyed by cycle start -- the
+    // way onBins and onCycles already are: rows inside the stretch it covers are replaced (a recomputed or re-keyed
+    // cycle wins), rows outside it stay, and a forming row only ever lives in the newest message.
+    // Everything held is dropped when what it MEANS changes: the lookback, the flow window, the smoothing, the mode.
+    static final int KEEP_MAX = 6000;                  // cycles held per pane (~72 h); the furthest from the news go
+
+    /** The merge PLAN: for each output row, an old index (>= 0) or a new one (-1 - j). Sorted by cycle start. */
+    static int[] keepPlan(double[] ox, byte[] oform, int on, double[] nx, byte[] nform, int nn) {
+        double lo = nn > 0 ? nx[0] - 0.5 : Double.POSITIVE_INFINITY;
+        boolean forming = false; double formX = Double.POSITIVE_INFINITY;
+        for (int j = 0; j < nn; j++) if (nform != null && j < nform.length && nform[j] != 0) { forming = true; formX = Math.min(formX, nx[j]); }
+        // the stretch this message covered: its first row to its last -- or on to the live edge while a cycle forms,
+        // since nothing after a forming cycle's start can be finished
+        double hi = forming ? Double.POSITIVE_INFINITY : (nn > 0 ? nx[nn - 1] + 0.5 : Double.NEGATIVE_INFINITY);
+        int[] tmp = new int[on + nn]; int k = 0, i = 0, j = 0;
+        while (i < on || j < nn) {
+            if (i < on) {
+                boolean oldForm = oform != null && i < oform.length && oform[i] != 0;
+                boolean punched = (ox[i] >= lo && ox[i] <= hi) || oldForm || ox[i] >= formX - 0.5;
+                if (punched) { i++; continue; }
+                if (j >= nn || ox[i] < nx[j]) { tmp[k++] = i++; continue; }
+            }
+            tmp[k++] = -1 - j++;
+        }
+        int from = 0, to = k;
+        if (k > KEEP_MAX) {                            // keep the KEEP_MAX rows nearest the message just received
+            int c0 = 0; for (int q = 0; q < k; q++) if (tmp[q] < 0) { c0 = q; break; }
+            from = Math.max(0, Math.min(k - KEEP_MAX, c0 - KEEP_MAX / 2)); to = from + KEEP_MAX;
+        }
+        return java.util.Arrays.copyOfRange(tmp, from, to);
+    }
+    static double[] pick(double[] o, double[] nw, int[] p) {
+        double[] out = new double[p.length];
+        for (int q = 0; q < p.length; q++) { int x = p[q]; out[q] = x >= 0 ? (o != null && x < o.length ? o[x] : Double.NaN) : (nw != null && -1 - x < nw.length ? nw[-1 - x] : Double.NaN); }
+        return out;
+    }
+    static float[] pick(float[] o, float[] nw, int[] p) {
+        float[] out = new float[p.length];
+        for (int q = 0; q < p.length; q++) { int x = p[q]; out[q] = x >= 0 ? (o != null && x < o.length ? o[x] : Float.NaN) : (nw != null && -1 - x < nw.length ? nw[-1 - x] : Float.NaN); }
+        return out;
+    }
+    static byte[] pick(byte[] o, byte[] nw, int[] p) {
+        byte[] out = new byte[p.length];
+        for (int q = 0; q < p.length; q++) { int x = p[q]; out[q] = x >= 0 ? (o != null && x < o.length ? o[x] : 0) : (nw != null && -1 - x < nw.length ? nw[-1 - x] : 0); }
+        return out;
+    }
+    private String iKeepKey = null;                    // what the held I x I rows MEAN: mode, smoothing, lookback, window
+
     public void onIimp(JSONObject m) {
         int n = m.optInt("n");
         double[] x0 = f64(m.optString("x0")), x1 = f64(m.optString("x1"));
@@ -235,14 +287,28 @@ public final class FlowModel {
         float[] liib = f32(m.optString("liib")), liis = f32(m.optString("liis")), pliib = f32(m.optString("pliib")), pliis = f32(m.optString("pliis"));
         float[] lyb = f32(m.optString("lyb")), lys = f32(m.optString("lys"));
         byte[] up = i8(m.optString("up")), contra = i8(m.optString("contra")), good = i8(m.optString("good")), form = i8(m.optString("form")), vac = i8(m.optString("vac")), quiet = i8(m.optString("quiet"));
+        if (lyb.length != n) lyb = liib;
+        if (lys.length != n) lys = liis;
+        String mode = m.optString("mode", "None");
+        int smn = m.optInt("smn", iSmn);
         synchronized (lock) {
-            iimpMode = m.optString("mode", "None"); iN = n; iX0 = x0; iX1 = x1;
-            iV = v; iMult = mult; iScore = score; iWall = wall; iReach = reach; iMv = mv; iArb = arb; iArs = ars; iKept = kept; iSbuy = sbuy; iSsell = ssell;
-            iLiib = liib; iLiis = liis; iPliib = pliib; iPliis = pliis;
-            iLyb = lyb.length == n ? lyb : liib; iLys = lys.length == n ? lys : liis;
+            // SPLICED, not replaced (see keepPlan) -- unless what the rows mean has changed
+            String key = mode + "|" + smn + "|" + lb + "|" + win;
+            int on = key.equals(iKeepKey) && iX0 != null ? iN : 0;
+            iKeepKey = key;
+            int[] p = keepPlan(iX0, iForm, on, x0, form, n);
+            if (on == 0) { iX0 = null; iX1 = null; iV = null; iMult = null; iScore = null; iWall = null; iReach = null; iMv = null; iArb = null; iArs = null; iKept = null; iSbuy = null; iSsell = null; iLiib = null; iLiis = null; iPliib = null; iPliis = null; iLyb = null; iLys = null; iUp = null; iContra = null; iGood = null; iForm = null; iVac = null; iQuiet = null; }
+            iimpMode = mode; iN = p.length;
+            iX0 = pick(iX0, x0, p); iX1 = pick(iX1, x1, p);
+            iV = pick(iV, v, p); iMult = pick(iMult, mult, p); iScore = pick(iScore, score, p); iWall = pick(iWall, wall, p);
+            iReach = pick(iReach, reach, p); iMv = pick(iMv, mv, p); iArb = pick(iArb, arb, p); iArs = pick(iArs, ars, p);
+            iKept = pick(iKept, kept, p); iSbuy = pick(iSbuy, sbuy, p); iSsell = pick(iSsell, ssell, p);
+            iLiib = pick(iLiib, liib, p); iLiis = pick(iLiis, liis, p); iPliib = pick(iPliib, pliib, p); iPliis = pick(iPliis, pliis, p);
+            iLyb = pick(iLyb, lyb, p); iLys = pick(iLys, lys, p);
             smIimp = m.optInt("smn", smIimp);
-            iSmn = m.optInt("smn", iSmn);
-            iUp = up; iContra = contra; iGood = good; iForm = form; iVac = vac; iQuiet = quiet;
+            iSmn = smn;
+            iUp = pick(iUp, up, p); iContra = pick(iContra, contra, p); iGood = pick(iGood, good, p); iForm = pick(iForm, form, p);
+            iVac = pick(iVac, vac, p); iQuiet = pick(iQuiet, quiet, p);
             iimpVersion++; version++;
         }
     }
@@ -257,9 +323,20 @@ public final class FlowModel {
         byte[] ds = m.has("dside") ? i8(m.optString("dside")) : null;
         float[] dg = m.has("dgain") ? f32(m.optString("dgain")) : null;
         float[] gp = m.has("dgap") ? f32(m.optString("dgap")) : null;
+        int smooth = m.optInt("smooth", L.smooth);
         synchronized (lock) {
-            L.n = n; L.x0 = x0; L.x1 = x1; L.b = b; L.s = s2; L.form = fm;
-            L.dside = ds; L.dgain = dg; L.dgap = gp;
+            // SPLICED, not replaced (see keepPlan) -- unless what the rows mean has changed
+            String key = smooth + "|" + lb + "|" + win;
+            int on = key.equals(L.keepKey) ? L.n : 0;
+            L.keepKey = key;
+            int[] p = keepPlan(L.x0, L.form, on, x0, fm, n);
+            if (on == 0) { L.x0 = null; L.x1 = null; L.b = null; L.s = null; L.form = null; L.dside = null; L.dgain = null; L.dgap = null; }
+            boolean bands = ds != null || L.dside != null;
+            L.n = p.length; L.x0 = pick(L.x0, x0, p); L.x1 = pick(L.x1, x1, p);
+            L.b = pick(L.b, b, p); L.s = pick(L.s, s2, p); L.form = pick(L.form, fm, p);
+            L.dside = bands ? pick(L.dside, ds, p) : null;
+            L.dgain = bands ? pick(L.dgain, dg, p) : null;
+            L.dgap = bands ? pick(L.dgap, gp, p) : null;
             if (m.has("spread")) L.spread = m.optDouble("spread", 0.3);
             if (m.has("gain")) L.gain = m.optDouble("gain", 0.3);
             if (m.has("step")) L.step = m.optDouble("step", 0.3);

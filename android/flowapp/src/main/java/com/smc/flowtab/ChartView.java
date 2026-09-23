@@ -1307,14 +1307,18 @@ public final class ChartView extends View {
             // LINES IMPACT only: the single STEPS where this side moved 0.3x between TWO cycles. A climb
             // is thick in the side's own colour; a FALL is thick in GREY, because a side losing its impact
             // is not a signal FOR that side and teal or red would read as one (user 2026-09-23).
-            byte[] mk = imp ? runMark(y, L.n, L.form, L.step) : null;
+            byte[] mk = imp ? runMark(y, L.x0, L.x1, L.n, L.form, L.step) : null;
             pl.setColor(side == 0 ? TEAL : RED); pl.setStrokeWidth(1.8f * d);
             path.reset(); path2.reset(); path3.reset();
             boolean open = false;
             float lx = 0, ly = 0;
+            int pi = -1;
             for (int i = 0; i < L.n && i < y.length; i++) {
                 boolean formi = L.form != null && i < L.form.length && L.form[i] != 0;
                 if (formi || y[i] < -900f) { open = false; continue; }
+                // a GAP in time is a cycle nobody rated -- each cycle ends exactly where the next begins -- so the
+                // line BREAKS there (the terminal's rule). Held rows from several messages sit side by side now.
+                if (open && pi >= 0 && L.x0[i] - L.x1[pi] > 0.5) open = false;
                 float px = xPx(0.5 * (L.x0[i] + L.x1[i]));
                 float py = (float) (top + (yhi - Math.max(-clip, Math.min(clip, y[i]))) / range * hgt);
                 if (!open) { path.moveTo(px, py); open = true; } else {
@@ -1323,7 +1327,7 @@ public final class ChartView extends View {
                     if (mk != null && mk[i] > 0) { path2.moveTo(lx, ly); path2.lineTo(px, py); }
                     else if (mk != null && mk[i] < 0) { path3.moveTo(lx, ly); path3.lineTo(px, py); }
                 }
-                lx = px; ly = py;
+                lx = px; ly = py; pi = i;
             }
             c.drawPath(path, pl);
             if (mk != null) {
@@ -1335,7 +1339,7 @@ public final class ChartView extends View {
             // the forming stretch, lighter, from the last finished point out to its own
             int k = -1;
             for (int i = L.n - 1; i >= 0; i--) if (L.form != null && i < L.form.length && L.form[i] != 0) { k = i; break; }
-            if (k > 0 && y.length > k && y[k] > -900f && y[k - 1] > -900f) {
+            if (k > 0 && y.length > k && y[k] > -900f && y[k - 1] > -900f && L.x0[k] - L.x1[k - 1] <= 0.5) {
                 int col = side == 0 ? TEAL : RED;
                 pl.setColor(Color.argb(150, Color.red(col), Color.green(col), Color.blue(col)));
                 float x1p = xPx(0.5 * (L.x0[k - 1] + L.x1[k - 1])), x2p = xPx(0.5 * (L.x0[k] + L.x1[k]));
@@ -1437,12 +1441,13 @@ public final class ChartView extends View {
      * ⚠ THE SMOOTHING WINDOW DECIDES HOW OFTEN THIS FIRES. These lines are a trailing mean, and a longer
      * window flattens exactly the single-cycle jumps this looks for: at 1 there is no smoothing and the steps
      * are large; by 20 a 0.3x step is rare. If the marks go missing, the slider is why. */
-    private static byte[] runMark(float[] y, int n, byte[] form, double thr) {
+    private static byte[] runMark(float[] y, double[] x0, double[] x1, int n, byte[] form, double thr) {
         byte[] mk = new byte[Math.max(0, n)];
         int prev = -1;
         for (int i = 0; i < n && i < y.length; i++) {
             if (form != null && i < form.length && form[i] != 0) continue;   // the forming point is its own stroke
             if (y[i] < -900f) { prev = -1; continue; }                        // a cycle the engine could not rate
+            if (prev >= 0 && x0[i] - x1[prev] > 0.5) prev = -1;                 // ... or a gap: no step across it
             if (prev >= 0) {
                 // ⚠ a DIFFERENCE OF MULTIPLES, like every "Nx" in this family -- the first cut subtracted the
                 // log2 values the line is drawn with, which left 2.0x -> 2.3x unmarked and marked 0.20x -> 0.25x
