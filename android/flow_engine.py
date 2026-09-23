@@ -556,6 +556,7 @@ def tick_lines(kind):
         m["dgain"] = b64(np.nan_to_num(np.asarray(L["dgain"], dtype=np.float64), nan=-999.0))
         m["dgap"] = b64(np.nan_to_num(np.asarray(L["dgap"], dtype=np.float64), nan=-999.0))
         m["spread"] = float(config.LIMP_DOM_SPREAD); m["gain"] = float(config.LIMP_DOM_GAIN)
+        m["step"] = float(config.LIMP_STEP)     # the step marks' threshold: the terminal and the tablet read ONE constant
     send(m)
 
 

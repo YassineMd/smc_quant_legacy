@@ -1300,7 +1300,7 @@ public final class ChartView extends View {
             // LINES IMPACT only: the single STEPS where this side moved 0.3x between TWO cycles. A climb
             // is thick in the side's own colour; a FALL is thick in GREY, because a side losing its impact
             // is not a signal FOR that side and teal or red would read as one (user 2026-09-23).
-            byte[] mk = imp ? runMark(y, L.n, L.form, L.gain) : null;
+            byte[] mk = imp ? runMark(y, L.n, L.form, L.step) : null;
             pl.setColor(side == 0 ? TEAL : RED); pl.setStrokeWidth(1.8f * d);
             path.reset(); path2.reset(); path3.reset();
             boolean open = false;
@@ -1371,8 +1371,12 @@ public final class ChartView extends View {
             if (form != null && i < form.length && form[i] != 0) continue;   // the forming point is its own stroke
             if (y[i] < -900f) { prev = -1; continue; }                        // a cycle the engine could not rate
             if (prev >= 0) {
-                double step = y[i] - y[prev];
-                mk[i] = step >= thr ? (byte) 1 : (step <= -thr ? (byte) -1 : (byte) 0);
+                // ⚠ a DIFFERENCE OF MULTIPLES, like every "Nx" in this family -- the first cut subtracted the
+                // log2 values the line is drawn with, which left 2.0x -> 2.3x unmarked and marked 0.20x -> 0.25x
+                double step = Math.pow(2.0, y[i]) - Math.pow(2.0, y[prev]);
+                // a hair of tolerance: 2.3 - 2.0 is 0.29999999999999982, and an exact 0.3x move must count
+                double t = thr - 1e-9;
+                mk[i] = step >= t ? (byte) 1 : (step <= -t ? (byte) -1 : (byte) 0);
             }
             prev = i;
         }

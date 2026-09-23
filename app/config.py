@@ -535,6 +535,19 @@ LIMP_DOM_ALPHA_HI = 95          # guides, and the pane's job is still the lines.
 # already using. Purple separates them by HUE, the way #66FF00 already does on the buy side.
 # ⚠ Both swatches arrived as lossy WebP: the purple samples #BD03FD but is LABELLED #BE03FD, and the label
 # is used. (The first red swatch drifted the same way, #FF000D for pure red.) The green was exact.
+# --- LINES IMPACT: the STEP marks (user 2026-09-23). A single move of at least LIMP_STEP between one cycle
+# and the next is drawn LIMP_STEP_W wide: in the side's own colour when it ROSE, grey when it FELL -- a side
+# losing its impact is not a signal FOR that side, and teal or red would read as one.
+# ⚠ ONE STEP, not a run: the first cut marked the whole monotone climb and the user replaced it -- "it should
+# be the increase/decrease just from 2 cycles so we will not color the whole increase/decrease".
+# ⚠ A DIFFERENCE OF MULTIPLES, like every "Nx" in this family: 2**new - 2**old, never the log2 step the lines
+# are drawn with. In log2, 2.0x -> 2.3x (+0.3x) would go unmarked and 0.20x -> 0.25x (+0.05x) would be marked;
+# the tablet's first cut did exactly that and is corrected in the same commit as this block.
+# ⚠ THE SMOOTHING SLIDER DECIDES HOW OFTEN THIS FIRES: the lines are a trailing mean, and a longer window
+# flattens exactly the single-cycle jumps this looks for.
+LIMP_STEP = 0.3
+LIMP_STEP_W = 4.0               # px, against LINES_W 1.8
+LIMP_LOSS_COL = "#7a828e"       # the grey of a FALL
 LIMP_DOM_BRIGHT_BUY = "#66FF00"
 LIMP_DOM_BRIGHT_SELL = "#BE03FD"
 # --- BREAKOUT BADGE on the PRICE pane (user 2026-09-21: "add a badge on the breakout candles where the candle side is

@@ -66,7 +66,7 @@ public final class FlowModel {
         public byte[] form = new byte[0];
         public byte[] dside = null;                 // LINES IMPACT only: +1 buyers band, -1 sellers, 0 none
         public float[] dgain = null, dgap = null;
-        public double spread = 0.3, gain = 0.3;
+        public double spread = 0.3, gain = 0.3, step = 0.3;
         public int smooth = 20;
     }
     public final Lines cint = new Lines(), cimp = new Lines();
@@ -260,6 +260,7 @@ public final class FlowModel {
             L.dside = ds; L.dgain = dg; L.dgap = gp;
             if (m.has("spread")) L.spread = m.optDouble("spread", 0.3);
             if (m.has("gain")) L.gain = m.optDouble("gain", 0.3);
+            if (m.has("step")) L.step = m.optDouble("step", 0.3);
             L.smooth = m.optInt("smooth", L.smooth);
             if ("cimp".equals(kind)) smCimp = L.smooth; else smCint = L.smooth;
             version++;

@@ -21863,6 +21863,33 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         if not self._loading_ui:
             self._save_ui_state()
 
+    @staticmethod
+    def _lines_steps(v, fin, kidx, thr):
+        """(a_up, b_up, a_dn, b_dn): the segments a -> b of one side's DRAWN line that moved `thr` or more.
+
+        ONE STEP between two cycles, never a run. Only a segment the line actually DRAWS can be marked: both
+        ends finished (the forming stretch is its own lighter stroke) and consecutive rows of the read -- a
+        jump in `kidx` is a cycle the pane could not rate, which is a BREAK in the line, not a step across it.
+
+        ⚠ Compared as a DIFFERENCE OF MULTIPLES, 2**v[b] - 2**v[a], on the TRUE values rather than the
+        clipped ones the line is drawn with -- a clip is a drawing limit, not a reading. `v` arrives in log2."""
+        v = np.asarray(v, dtype=np.float64)
+        f = np.flatnonzero(np.asarray(fin, dtype=bool) & np.isfinite(v))
+        e = np.zeros(0, dtype=np.int64)
+        if f.size < 2:
+            return e, e, e, e
+        a, b = f[:-1], f[1:]
+        k = np.asarray(kidx)
+        joined = (k[b] - k[a]) == 1
+        with np.errstate(over="ignore", invalid="ignore"):
+            step = np.exp2(v[b]) - np.exp2(v[a])
+        # a hair of tolerance at the threshold: 2.3 - 2.0 is 0.29999999999999982 in floating point, and "0.3x or
+        # more" has to include the user's own example of a move of exactly 0.3x (0.5x -> 0.8x)
+        _t = float(thr) - 1e-9
+        up = joined & (step >= _t)
+        dn = joined & (step <= -_t)
+        return a[up], b[up], a[dn], b[dn]
+
     def _lines_dom_bands(self, sm_b, sm_s, keep):
         """Per drawn cycle: (side, gap, gain) -- which side owns the band, how wide it is, how far the leader
         has climbed INSIDE it.
@@ -22866,6 +22893,21 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 width=float(config.LINES_W)))
             _cf.setZValue(6); pw.addItem(_cf); _lf.append(_cf)
         st["lines"] = tuple(_ln); st["form"] = tuple(_lf)
+        if _imp:
+            # the STEP marks: disjoint segments, one item per climb colour and ONE grey item for the falls of
+            # both sides -- `connect="pairs"` draws each (x0, x1) pair as its own segment, so a scatter of
+            # single steps anywhere on the pane is still one item and one draw call
+            _up = []
+            for _c in (config.IIMP_BUY_COL, config.IIMP_SELL_COL):
+                _it = pg.PlotCurveItem(x=[], y=[], connect="pairs",
+                                       pen=pg.mkPen(QtGui.QColor(_c), width=float(config.LIMP_STEP_W)))
+                _it.setZValue(7); pw.addItem(_it); _up.append(_it)
+            _dn = pg.PlotCurveItem(x=[], y=[], connect="pairs",
+                                   pen=pg.mkPen(QtGui.QColor(config.LIMP_LOSS_COL), width=float(config.LIMP_STEP_W)))
+            _dn.setZValue(7); pw.addItem(_dn)
+            st["steps"] = (tuple(_up), _dn)
+        else:
+            st["steps"] = None
         _g = pg.mkPen("#9aa4b2", width=1.0, style=QtCore.Qt.DashLine); _g.setCosmetic(True)
         for _v in (float(np.log2(max(1e-9, config.IIMP_LOW))), float(np.log2(max(1e-9, config.IIMP_HIGH)))):
             _gl = pg.InfiniteLine(angle=0, pos=_v, pen=_g)
@@ -23091,6 +23133,9 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 _it.setData([], [])
             for _it in tuple(st.get("dom") or ()):
                 _it.setOpts(x0=[], x1=[], y0=[], height=[])
+            if st.get("steps") is not None:
+                for _it in tuple(st["steps"][0]) + (st["steps"][1],):
+                    _it.setData([], [])
             st["sig"] = ("empty",)
             return
         x0, x1, form, sm_b, sm_s, kidx, sm_n, n_all = out
@@ -23113,6 +23158,23 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         else:
             for _it in st["lines"]:
                 _it.setData([], [])
+        if st.get("steps") is not None:
+            # LINES IMPACT: the single steps of 0.3x or more, drawn over the line at their DRAWN coordinates
+            (_ub, _us), _gr = st["steps"]
+            _falls = []
+            for _it, _sm, _yd in ((_ub, sm_b, yb), (_us, sm_s, ys)):
+                a_u, b_u, a_d, b_d = self._lines_steps(_sm, fin, kidx, config.LIMP_STEP)
+                for _a, _b, _tgt in ((a_u, b_u, _it), (a_d, b_d, None)):
+                    xs = np.empty(2 * _a.size); yv = np.empty(2 * _a.size)
+                    xs[0::2] = mid[_a]; xs[1::2] = mid[_b]
+                    yv[0::2] = _yd[_a]; yv[1::2] = _yd[_b]
+                    if _tgt is not None:
+                        _tgt.setData(xs, yv, connect="pairs")
+                    else:
+                        _falls.append((xs, yv))
+            _gx = np.concatenate([p[0] for p in _falls]) if _falls else np.zeros(0)
+            _gy = np.concatenate([p[1] for p in _falls]) if _falls else np.zeros(0)
+            _gr.setData(_gx, _gy, connect="pairs")
         if form.any():
             _k = int(np.flatnonzero(form)[-1])
             _j = int(_f[-1]) if _f.size else -1
@@ -24739,6 +24801,14 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         self._fratio_sig = None; self._fratio_t = 0.0
         self._iimp_show(bool(getattr(self, "_iimp_on", True)))      # ... and the Interest x Impact pane
         self._iimp_sig = None; self._iimp_t = 0.0
+        # ... and LINES INTEREST / LINES IMPACT. ⚠ This is the path a LAUNCH takes into Flow mode, and the two
+        # were missing from it when they shipped (8853c1c): they were wired into the in-place rebuild only, so a
+        # pane saved ON never came back after a restart -- the menu said on, the stack had nothing. Every gate
+        # before this one turned the panes on through the menu during the session, which is why none saw it.
+        for _k in self._LINES_KINDS:
+            self._lines_show(_k, self._lines_on(_k))
+            self._lp_(_k)["sig"] = None
+        self._lines_t = 0.0
         self._interp_show(bool(getattr(self, "_interp_on", True)))  # ... and the Interpretation feed
         self._flow_pane_apply()                                     # the pane itself may be toggled off
         self._liq_sig = None; self._liq_req = None; self._liq_pend = None; self._liq_pend_key = None
@@ -24764,6 +24834,8 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         self._spd_show(False)
         self._fratio_show(False)
         self._iimp_show(False)
+        for _k in self._LINES_KINDS:        # the two LINES panes leave with the rest -- they were missing here too
+            self._lines_show(_k, False)
         self._interp_show(False)
         self._flow_pane_lift()                                # every other mode draws on the main chart (idempotent)
         self._flow_curves = None
