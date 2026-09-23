@@ -825,7 +825,10 @@ HLH_TP_BLOCS = True             # label each bloc (time + volume)
 HLH_TP_TOTAL = True             # label the D area total
 HLH_TP_PEAK = False             # label the busiest bin
 HLH_SHOW_VA = True              # VAH / VAL of each bloc (the Block Lines)
-HLH_SHOW_POC_RUNS = True        # shade a run of >= HLH_POC_RUN_MIN klines that CLOSED above (or all below)
+HLH_SHOW_POC_RUNS = False       # ⚠ REMOVED 2026-09-23 at the user's word, from the tablet (7035ba2) and then the
+                                # terminal: the menu option is gone and every canvas builds with poc_runs=False.
+                                # bloc_poc_runs() and its drawing branch are kept as library code. Was: shade a
+                                # run of >= HLH_POC_RUN_MIN klines that CLOSED above (or all below)
 #                                 a bloc's POC -- acceptance on one side of it. Only a CLOSE on the other side
 #                                 divides a run (user 2026-09-20: the open plays no part, and a kline outside
 #                                 the bloc's price band still counts by its close). The area spans the run's

@@ -1228,15 +1228,10 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
                  "left edge at midnight: every final bloc by volume (lowest -> highest) with its span, time, "
                  "volume, high-low, MAX/MIN tag, overlaps and merges; the blocs per D with their VAH-VAL; and, "
                  "under finished days, day N vs day N-1 (VAH-VAL relations and the day merges).", True),
-                ("m10_hlh_pocruns", "· POC acceptance areas (\u2265 5 candles one side)",
-                 "Display only. Inside each bloc, shade every run of at least %d CONSECUTIVE candles that "
-                 "CLOSED on the same side of that bloc's own POC -- price accepting one side of it. Only a "
-                 "close on the other side (of the POC as drawn, or as it was when that candle formed) ends a "
-                 "run; the open plays no part. "
-                 "Each area spans the run's time and reaches from the POC out to the run's furthest price, so "
-                 "it shows how far the side got. Broad by nature: on 1m candles price holds one side of any "
-                 "single line for long stretches." % int(config.HLH_POC_RUN_MIN),
-                 bool(config.HLH_SHOW_POC_RUNS))):
+                ):
+                # (the "POC acceptance areas" sub-toggle, m10_hlh_pocruns, was REMOVED 2026-09-23 at the
+                # user's word -- tablet in 7035ba2, terminal after. A saved state still carrying the key is
+                # harmless: restore looks each key up with layer_checks.get() and skips one that is gone.)
             cb = QtWidgets.QCheckBox(text)
             cb.setChecked(bool(dflt))
             cb.setStyleSheet("QCheckBox{ padding-left:18px; color:#aeb4c0; font-size:10px; }")
