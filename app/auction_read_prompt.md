@@ -38,13 +38,16 @@ Left, top to bottom (panes can be hidden, so check which ones are there):
   - **▲ / ▼ Takeover marks**: one side took over the cycle;
   - the price badge at the right edge: the live price and the forming cycle's age.
 - **BUY / SELL FLOW**: taker $ per 60 s, buyers teal and sellers red. Where the lines cross is where cycles start.
+- **LIMIT ORDERS**: the resting bid $ and ask $ within ±N ticks of the mid, over time.
 - **INTEREST × IMPACT**: one bar per cycle, the same data as the per-cycle fields below.
   - Up teal = buyers led, down red = sellers led; the height is the leader's interest against its last N cycles.
   - Orange = price closed against the leader.
   - A filled bar = the push converted (reached at least its usual distance); how much of the bar is solid = the
     share of the push kept at the close. A hollow bar = it did not convert.
   - A dot beyond the bar = a heavy (filled dot) or thin (hollow dot) wall of resting orders in the way.
-- **LINES INTEREST / LINES IMPACT** (optional): each side's interest or impact as a smoothed line.
+- **LINES INTEREST / LINES IMPACT** (optional): each side's interest or impact as a smoothed line. LINES IMPACT
+  also tints a BAND wherever one side's line stands at least 0.3x above the other's, BRIGHT where that side got there
+  by climbing (+0.3x since the band opened) rather than by the other side falling away.
 - Right: the **INTERPRETATION** feed, one card per cycle, newest first: the state, the move in ticks, the tape
   (each side's aggressive $/s against its normal), the book, and the I×I strip (interest, impact, wall, kept) with
   a short "why". A card with a blue outline is the one I marked.
@@ -52,6 +55,12 @@ Left, top to bottom (panes can be hidden, so check which ones are there):
 ## 3. The data snapshot
 
 - `generated_utc`, `live_price`, `tick`, `cycle_lookback_n` (the N that every "x" ratio is measured against).
+- `flow_last_60s`: what the BUY / SELL FLOW pane prints at its right edge now: `buy_usd`, `sell_usd` over the last
+  `window_s` seconds, and the buyers' share `buy_pct`.
+- `resting_liquidity_radius_ticks`: the ±ticks around the mid that `resting_bid_usd` / `resting_ask_usd` count (the
+  LIMIT ORDERS pane may be drawn at a different radius).
+- `lines_smoothing_cycles`: the trailing-mean window (in cycles) of LINES INTEREST and LINES IMPACT, as I set them.
+- `big_player_min_usd`: the smallest Big Player event listed (my slider).
 - `value.hlh_volume_profile`: "on", "off" or "loading". When it is not "on", there is no value reference: zones
   are null, so say so and read the flow only.
 - `value.today`: the day's HLH profile as it stands now (60 rows, 70% value area, POC = the middle of the busiest
@@ -59,7 +68,9 @@ Left, top to bottom (panes can be hidden, so check which ones are there):
   - `poc`, `vah`, `val`, `minutes_of_profile`;
   - `poc_60min_ago` and `poc_moved_ticks_last_hour`: is value migrating?
   - `blocs`: the day's HLH D-blocs (name, poc, vah, val, from/to, and `tag` MAX/MIN for the biggest and smallest by
-    volume). This is the day's structure: where value was built, and when.
+    volume). This is the day's structure: where value was built, and when. Each bloc also has `low` / `high` (the
+    lowest low / highest high of its candles) and `val_outer` / `vah_outer` (its 90% value area, drawn dashed).
+- `value.earlier_days`: the previous days' blocs, one entry per day (`day`, `blocs` with the same fields).
 - `value.multi_day`: the latest HLH bloc merged across 2 or more finished days (poc, vah, val, days, from/to). This
   is the established multi-day value. It may be null.
 - `summary`: over the last `last_n` finished cycles, how often each label occurred per side, plus
@@ -97,6 +108,31 @@ Left, top to bottom (panes can be hidden, so check which ones are there):
   - `auction`: the cycle in one phrase. "Initiative, effective" = value being re-priced. "Initiative, absorbed" =
     value defended. "Contested: …" = both sides moved price their way, leader named first.
   - `why`: the I×I pane's own sentence for the cycle.
+  - The CARD, as the INTERPRETATION feed draws it:
+    - `card_state`: BREAKOUT buy / sell, BUYER ABSORBED, SELLER ABSORBED, VACUUM buy / sell, QUIET, forming (the
+      tablet writes it "Breakout · buy" etc.); `card_weak` = true when the card is marked "weak".
+    - `candle_colour`: the PRICE candle's colour and what it means.
+    - `card_move`: the card's price line (`116.46 -> 116.55   +9t`; for an absorbed cycle `lo` / `hi` then the
+      close); `card_move_word`: the word beside it (fast up, drifting down, 84% given back, fully reversed...).
+    - `flow_x` (the card's "flow 3.34x": the cycle's total aggressive $/s against its last N), `speed_x` (ticks/s
+      against the same side's last N).
+    - `tape_buyers_x` / `tape_sellers_x`: the card's tape bars.
+    - `book_buyers_pct` / `book_sellers_pct`: the card's book line ("buyers ▲23%" = +23): each side's resting
+      orders against their last N cycles.
+    - Absorbed cycles only: `absorbed_push_ticks`, `absorbed_given_back_ticks`, `absorbed_given_back_pct`.
+  - `buy_usd` / `sell_usd`: each side's taker $ in the cycle.
+  - `resting_bid_usd` / `resting_ask_usd`: the resting bid $ / ask $ within `resting_liquidity_radius_ticks` of
+    the mid, averaged over the cycle (15 s book snapshots; the same book the wall is read from).
+  - `lines_interest_buyers_x` / `lines_interest_sellers_x` and `lines_impact_buyers_x` / `lines_impact_sellers_x`:
+    the two LINES panes' values at that cycle. `impact_band`: "buyers", "sellers" or null; `impact_band_bright`.
+  - `big_players` (only when there were any): the Big Player events inside the cycle, largest first: `time_utc`,
+    `side`, `usd`, `price` (a sweep's END price), `kind` print / sweep (a sweep also has `low` / `high`: the range it
+    ate through). `big_players_more` counts any beyond the first 20.
+- Not in the data: the ▲ / ▼ Takeover marks, my drawings and paper positions. If I ask about them, say you cannot
+  see them.
+- History: the connector's `get_history` and `get_cycle` reach cycles older than the live ~6 h window (kept 30
+  days, recorded as each cycle settled, same fields). It only grows forward from when it started: say so if a
+  range is missing.
 
 ## 4. Rules
 

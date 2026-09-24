@@ -125,6 +125,11 @@ def blocs_value(rows) -> List[dict]:
         poc = H.bloc_poc(m)
         out.append({"name": str(m.name), "poc": float(poc) if poc is not None else None,
                     "vah": float(m.vah), "val": float(m.val),
+                    # its candles' lowest low / highest high, and the OUTER value area (HLH_VA2_PCT) drawn dashed
+                    "low": float(m.bLo) if m.bLo is not None else None,
+                    "high": float(m.bHi) if m.bHi is not None else None,
+                    "val_outer": float(m.val2) if m.val2 is not None else None,
+                    "vah_outer": float(m.vah2) if m.vah2 is not None else None,
                     "tA": float(m.tA) if m.tA is not None else None, "tB": float(m.tB) if m.tB is not None else None,
                     "merged": bool(m.merged), "days": (int(m.dLast - m.dFirst + 1)
                                                        if (m.dFirst is not None and m.dLast is not None) else 1),

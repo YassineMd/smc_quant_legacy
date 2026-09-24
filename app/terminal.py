@@ -20803,17 +20803,22 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                                   push_min=float(config.ABSORB_PUSH_MIN_TICKS),
                                   reject_weak=float(config.ABSORB_REJECT_WEAK),
                                   iimp=({_kk: _v[k] for _kk, _v in _ii.items()} if _ii is not None else None))
+        rows = self._interp_bright_demote(rows)
         # THE AUCTION READING (2026-09-24): computed with the cards' I x I reading and kept for the snapshot file (the
         # Claude connector, /auction-read) -- NEVER drawn on the cards (the card strip was removed at the user's word:
-        # "not really interested by what you added on the interpretation")
+        # "not really interested by what you added on the interpretation"). `ex` carries what the cards and the
+        # other panes show beside it (user 2026-09-24: "claude should have access to the other data"): each side's
+        # $ and the CARDS themselves (as drawn, bright demote included) by cycle start.
         if _ii is not None:
             try:
                 _au = self._interp_auction(t, t_end_c, done, px0, px1, pxh, pxl, _ii, now)
-                self._auction_ctx = (t, t_end_c, done, px0, px1, pxh, pxl, _ii, _au, now)
+                _ex = {"cbuy": np.asarray(cbuy, dtype=np.float64), "csell": np.asarray(csell, dtype=np.float64),
+                       "cards": {round(float(r_[0]), 2): r_ for r_ in rows}}
+                self._auction_ctx = (t, t_end_c, done, px0, px1, pxh, pxl, _ii, _au, _ex, now)
                 self._auction_snapshot_write()
-            except Exception as _ex:
-                print("AUCTION: %s" % _ex)
-        p.setRows(self._interp_bright_demote(rows))
+            except Exception as _ex_:
+                print("AUCTION: %s" % _ex_)
+        p.setRows(rows)
 
     def _stack_axis_sync(self) -> None:
         """ONE clock axis for the whole stack, on the BOTTOM-MOST visible pane (user 2026-09-11).
@@ -22929,7 +22934,10 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 "kept": np.where(rated, kept, nan), "contra": contra, "pb": np.where(rated, pb, nan),
                 "give": np.where(rated, R["give_pb"], nan), "why": why,
                 "reach": np.where(rated, reach, nan), "lmv": np.where(rated, lmv, nan), "short": rated & short,
-                "ib": np.where(rated, R["ar_b"], nan), "is": np.where(rated, R["ar_s"], nan)}
+                "ib": np.where(rated, R["ar_b"], nan), "is": np.where(rated, R["ar_s"], nan),
+                # UNMASKED, for the LINES panes' arithmetic in the auction snapshot (_lines_values)
+                "ar_b_raw": R["ar_b"], "ar_s_raw": R["ar_s"], "score_raw": score, "score_pb_raw": R["score_pb"],
+                "short_raw": short}
 
     def _interp_auction(self, t, t_end_c, done, px0, px1, pxh, pxl, ii, now):
         """LAYER 1 OF THE AUCTION READING (user 2026-09-24, app/auction.py): each cycle against TODAY's value (the
@@ -22974,8 +22982,11 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         now_ref = dv.at(cd.t, cd.h, cd.l, cd.v, [now + ks])[0]
         hour_ref = dv.at(cd.t, cd.h, cd.l, cd.v, [now - 3600.0 + ks])[0]
         blocs = AU.blocs_value(day[-1][5]) if day else []
+        # the EARLIER days the HLH chain computed (HLH_HIST_DAYS), each with its own blocs -- the chart draws two
+        earlier = [{"day": time.strftime("%Y-%m-%d", time.gmtime(float(pk[3].t_first))), "blocs": AU.blocs_value(pk[5])}
+                   for pk in day[:-1] if pk[3] is not None]
         return {"rows": rows, "refs": refs, "merged": merged, "now": now_ref, "hour_ago": hour_ref, "blocs": blocs,
-                "hlh": "on"}
+                "earlier": earlier, "hlh": "on"}
 
     def _auction_snapshot_build(self, ctx, sel=None, max_cycles=None) -> dict:
         """THE AUCTION SNAPSHOT: today's and the multi-day value, the recent summary, the newest cycles in the
@@ -22984,7 +22995,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         newest `max_cycles` (default AUCTION_SNAPSHOT_CYCLES) is added on its own; never older than the feed's own
         window (the cycles before it are only the baseline). Descriptive: everything in it is what the panes show."""
         from . import auction as AU
-        t, t_end_c, done, px0, px1, pxh, pxl, ii, au, now = ctx
+        t, t_end_c, done, px0, px1, pxh, pxl, ii, au, ex, now = ctx
         tick = float(config.TICK_SIZE)
         fin = lambda v: v is not None and np.isfinite(v)
         rnd = lambda v, d=2: (round(float(v), d) if fin(v) else None)
@@ -23000,6 +23011,8 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             _j = int(np.argmin(np.abs(np.asarray(t, dtype=np.float64) - float(sel))))
             if abs(float(t[_j]) - float(sel)) < 1.0:
                 ksel = _j
+
+        X = self._auction_extras(t, t_end_c, done, ii, ex, k0, now)
 
         def row(k):
             a = au["rows"][k]
@@ -23028,34 +23041,43 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 "wall_vs_normal_x": rnd(ii["wall"][k]),
                 "buyers": a["buy"], "sellers": a["sell"], "auction": a["verdict"],
                 "why": str(ii["why"][k] or "")}
+            r.update(X(k))
             if k == ksel:
                 r["user_selected"] = True
             return r
         cyc = [row(k) for k in range(k0, n)]
         nr = au.get("now"); hr = au.get("hour_ago"); mg = au.get("merged")
+        def bloc(b):
+            return {"name": b["name"], "poc": rnd(b["poc"]), "vah": rnd(b["vah"]), "val": rnd(b["val"]),
+                    "low": rnd(b.get("low")), "high": rnd(b.get("high")),
+                    "val_outer": rnd(b.get("val_outer")), "vah_outer": rnd(b.get("vah_outer")),
+                    "from_utc": iso(b["tA"]) if b["tA"] else None, "to_utc": iso(b["tB"]) if b["tB"] else None,
+                    "merged": b["merged"], "days": b["days"], "tag": b["tag"]}
         today = None
         if nr:
             today = {"poc": rnd(nr[0]), "vah": rnd(nr[1]), "val": rnd(nr[2]), "minutes_of_profile": int(nr[3]),
                      "poc_60min_ago": rnd(hr[0]) if hr else None,
                      "poc_moved_ticks_last_hour": (int(round((nr[0] - hr[0]) / tick)) if hr else None),
-                     "blocs": [{"name": b["name"], "poc": rnd(b["poc"]), "vah": rnd(b["vah"]), "val": rnd(b["val"]),
-                                "from_utc": iso(b["tA"]) if b["tA"] else None,
-                                "to_utc": iso(b["tB"]) if b["tB"] else None,
-                                "merged": b["merged"], "days": b["days"], "tag": b["tag"]}
-                               for b in (au.get("blocs") or [])]}
+                     "blocs": [bloc(b) for b in (au.get("blocs") or [])]}
         multi = None
         if mg:
             multi = {"poc": rnd(mg["poc"]), "vah": rnd(mg["vah"]), "val": rnd(mg["val"]), "bloc": mg["name"],
                      "days": mg["days"], "from_utc": iso(mg["tA"]) if mg.get("tA") else None, "to_utc": iso(mg["tB"])}
         lp = self._engine_live_px()
         hs = str(au.get("hlh", "on"))
-        val = {"hlh_volume_profile": hs, "today": today, "multi_day": multi}
+        val = {"hlh_volume_profile": hs, "today": today, "multi_day": multi,
+               "earlier_days": [{"day": e["day"], "blocs": [bloc(b) for b in e["blocs"]]} for e in (au.get("earlier") or [])]}
         if hs != "on":
             val["note"] = ("the HLH Volume Profile layer is OFF, so there is no value reference: zones are null"
                            if hs == "off" else "the HLH klines are still loading: no value reference yet")
         snap = {"generated_utc": iso(now), "symbol": str(config.SYMBOL), "tick": tick,
                 "live_price": rnd(lp) if lp is not None else None,
                 "cycle_lookback_n": int(self._lb_n()),
+                "flow_last_60s": self._auction_flow_now(),
+                "resting_liquidity_radius_ticks": int(config.IIMP_WALL_RADIUS),
+                "lines_smoothing_cycles": {"interest": int(self._lines_smooth_n("cint")),
+                                           "impact": int(self._lines_smooth_n("cimp"))},
+                "big_player_min_usd": X.bp_min,
                 "value": val,
                 "summary": AU.summary(au["rows"], t, t_end_c, now, last_n=int(config.AUCTION_SUMMARY_N))}
         if sel is not None:
@@ -23092,8 +23114,9 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         self._auction_snap_t = now
         import os as _os
         try:
-            txt = self._auction_snapshot_text(self._auction_snapshot_build(
-                ctx, sel=self.__dict__.get("_auction_mark"), max_cycles=int(config.AUCTION_FILE_CYCLES)))
+            snap = self._auction_snapshot_build(ctx, sel=self.__dict__.get("_auction_mark"),
+                                                max_cycles=int(config.AUCTION_FILE_CYCLES))
+            txt = self._auction_snapshot_text(snap)
             path = str(config.AUCTION_SNAPSHOT_PATH)
             _os.makedirs(_os.path.dirname(path), exist_ok=True)
             tmp = path + ".tmp"
@@ -23102,6 +23125,214 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             _os.replace(tmp, path)
         except Exception as ex:
             print("AUCTION SNAPSHOT: %s" % ex)
+            return
+        try:
+            self._auction_history_append(snap, now)
+        except Exception as ex:
+            print("AUCTION HISTORY: %s" % ex)
+
+    def _auction_history_append(self, snap: dict, now: float) -> None:
+        """THE CYCLE HISTORY (user 2026-09-24: Claude should reach "anything before the engine's ~6 h window"). Every
+        SETTLED row of the snapshot -- finished AUCTION_HISTORY_SETTLE_SECS ago or more, so its walls and ratings have
+        landed -- is appended ONCE to AUCTION_HISTORY_DIR/YYYY-MM-DD.jsonl (UTC day of its start), one JSON row per
+        line, the same fields as the snapshot's cycles. It starts with the window the engine holds at its first write
+        and grows forward; files older than AUCTION_HISTORY_DAYS are deleted. The rows are the reading AS IT WAS when
+        the cycle settled (causal: a later bloc or baseline never rewrites them)."""
+        import os as _os, json as _json, calendar as _cal
+        # NOT BEFORE THE READING IS COMPLETE: a restart's first writes are unrated for minutes (the wall grid catches
+        # up) and a row, once written, is never rewritten -- so: a warm-up after the first write, the wall grid
+        # reaching back to the oldest cycle in the snapshot, the HLH klines loaded
+        t_first = self.__dict__.setdefault("_auction_hist_t0", now)
+        if now - float(t_first) < float(config.AUCTION_HISTORY_WARMUP_SECS):
+            return
+        if (snap.get("value") or {}).get("hlh_volume_profile") == "loading":
+            return
+        _cy = snap.get("cycles_oldest_first") or ()
+        if not _cy or self._wall_lo is None:
+            return
+        _t_old = float(_cal.timegm(time.strptime(_cy[0]["start_utc"], "%Y-%m-%d %H:%M:%S")))
+        if int(self._wall_lo) > int(np.floor(_t_old / float(config.IIMP_WALL_COL_SECS))) - 1:
+            return
+        d = str(config.AUCTION_HISTORY_DIR)
+        seen = self.__dict__.get("_auction_hist_seen")
+        if seen is None:
+            seen = set()
+            _os.makedirs(d, exist_ok=True)
+            for day in (time.strftime("%Y-%m-%d", time.gmtime(now - 86400.0)), time.strftime("%Y-%m-%d", time.gmtime(now))):
+                fp = _os.path.join(d, day + ".jsonl")
+                if _os.path.exists(fp):
+                    with open(fp, encoding="utf-8") as fh:
+                        for ln in fh:
+                            try:
+                                seen.add(_json.loads(ln)["start_utc"])
+                            except Exception:
+                                continue
+            self._auction_hist_seen = seen
+        settle = float(config.AUCTION_HISTORY_SETTLE_SECS)
+        out = {}
+        for r in snap.get("cycles_oldest_first") or ():
+            s0 = r.get("start_utc")
+            if not r.get("finished") or not s0 or s0 in seen:
+                continue
+            t0 = float(_cal.timegm(time.strptime(s0, "%Y-%m-%d %H:%M:%S")))
+            age = now - (t0 + float(r.get("dur_s") or 0))
+            if age < settle or (not r.get("leader") and age < float(config.AUCTION_HISTORY_UNRATED_SECS)):
+                continue
+            rr = {k_: v_ for k_, v_ in r.items() if k_ != "user_selected"}
+            out.setdefault(s0[:10], []).append(_json.dumps(rr, ensure_ascii=False, separators=(",", ":"), allow_nan=False))
+            seen.add(s0)
+        for day, lines in out.items():
+            with open(_os.path.join(d, day + ".jsonl"), "a", encoding="utf-8") as fh:
+                fh.write("\n".join(lines) + "\n")
+        if len(seen) > 20000:                              # two days of starts are plenty to dedupe against
+            keep = time.strftime("%Y-%m-%d", time.gmtime(now - 86400.0))
+            self._auction_hist_seen = {s_ for s_ in seen if s_[:10] >= keep}
+        if now - float(self.__dict__.get("_auction_hist_prune_t", 0.0)) > 3600.0:
+            self._auction_hist_prune_t = now
+            cut = time.strftime("%Y-%m-%d", time.gmtime(now - 86400.0 * float(config.AUCTION_HISTORY_DAYS)))
+            for fn in _os.listdir(d):
+                if fn.endswith(".jsonl") and fn[:10] < cut:
+                    try:
+                        _os.remove(_os.path.join(d, fn))
+                    except Exception:
+                        pass
+
+    def _auction_flow_now(self):
+        """The BUY / SELL FLOW pane's right-edge reading: taker $ per side over the last flow window (60 s), ending at
+        the store's live edge -- what the pane's two labels print ("$1.20M (67%)")."""
+        st = self._flow
+        sp = st.span() if st is not None else None
+        if sp is None:
+            return None
+        win = float(self._flow_win)
+        x, b, s = st.series(float(sp[1]) - 1.0, float(sp[1]), win, max_pts=4)
+        if not np.size(x):
+            return None
+        bu, se = float(b[-1]), float(s[-1])
+        tot = bu + se
+        return {"window_s": int(round(win)), "buy_usd": round(bu), "sell_usd": round(se),
+                "buy_pct": round(100.0 * bu / tot, 1) if tot > 0 else None}
+
+    def _auction_extras(self, t, t_end_c, done, ii, ex, k0, now):
+        """Per cycle, what the other panes and the cards show beside the auction reading (user 2026-09-24: "claude
+        should have access to the other data"): the CARD (state, candle colour, move line, flow / speed / tape /
+        book, the absorbed push), each side's $, the resting liquidity, the LINES INTEREST / LINES IMPACT values and
+        band, and the Big Player events inside the cycle. Returns a callable k -> dict; .bp_min = the threshold."""
+        from . import flow_interp as _FI
+        n = int(np.size(t))
+        fin = lambda v: v is not None and np.isfinite(v)
+        rnd = lambda v, d=2: (round(float(v), d) if fin(v) else None)
+        ex = ex or {}
+        cards = ex.get("cards") or {}
+        cb = ex.get("cbuy"); cs = ex.get("csell")
+        # -- the RESTING liquidity per cycle: the mean of the canonical wall grid's 15 s columns over the cycle, at
+        # IIMP_WALL_RADIUS. The grid covers the whole loaded history whatever the view (the LIMIT ORDERS pane's
+        # own means follow the view, and measured 31 of 188 cycles filled).
+        C = float(config.IIMP_WALL_COL_SECS)
+        g = self._wall_grid
+
+        def resting(k):
+            a = int(np.floor(float(t[k]) / C))
+            b = max(a, int(np.ceil(float(t_end_c[k]) / C)) - 1)
+            sb = sa = 0.0; m = 0
+            for c in range(a, b + 1):
+                v = g.get(c)
+                if v is not None and v[2] > 0:
+                    sa += v[0]; sb += v[1]; m += 1
+            return (sb / m, sa / m) if m else (None, None)
+        # -- the LINES panes: the panes' own arithmetic over the whole read, at their own smoothing
+        li_b = li_s = lm_b = lm_s = None; dside = dgain = None; kidx = None
+        try:
+            dn = np.asarray(done, dtype=bool)
+            form = ~dn
+            li_b, li_s, _r1 = self._lines_values("cint", dn, form, ii["ar_b_raw"], ii["ar_s_raw"])
+            lm_b, lm_s, _r2 = self._lines_values("cimp", dn, form, ii["ar_b_raw"], ii["ar_s_raw"],
+                                                 ii["score_raw"], ii["score_pb_raw"], ii["short_raw"])
+            keep = _r2 & np.isfinite(lm_b) & np.isfinite(lm_s)
+            kidx = np.full(n, -1, dtype=np.int64)
+            kidx[np.flatnonzero(keep)] = np.arange(int(keep.sum()))
+            dside, _gap, dgain = self._lines_dom_bands(lm_b, lm_s, keep)
+        except Exception as _e:
+            print("AUCTION LINES: %s" % _e)
+        # -- the Big Player events, each in the cycle it happened in (the store is fed whatever the toggle: _bp_always)
+        try:
+            thr = float(self.menu.big_player_min_usd())
+        except Exception:
+            thr = float(config.BIGPLAYER_MIN_USD)
+        bp = {}
+        try:
+            sw_on = bool(self.menu.layer_state("m10_bigplayer_sweeps"))
+            if n and (self._bp_trades or getattr(self, "_bp_sweeps", None)):
+                starts = np.asarray(t, dtype=np.float64)
+                for e in self._bp_events(float(t[k0]), float(now), float(now) + 1e-6, sw_on):
+                    if e[3] < thr:
+                        continue
+                    k = int(np.searchsorted(starts, float(e[0]), side="right")) - 1
+                    if k < k0 or k >= n:
+                        continue
+                    _ms = int(float(e[0]) * 1000.0) % 1000
+                    ev = {"time_utc": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(float(e[0]))) + (".%03d" % _ms),
+                          "side": "buy" if e[1] > 0 else "sell", "usd": int(round(float(e[3]))),
+                          "price": round(float(e[2]), 4), "kind": "sweep" if e[4] == "sw" else "print"}
+                    if e[4] == "sw":
+                        ev["low"] = round(float(e[5]), 4); ev["high"] = round(float(e[6]), 4)
+                    bp.setdefault(k, []).append(ev)
+        except Exception as _e:
+            print("AUCTION BIGPLAYER: %s" % _e)
+        COL = {_FI.C_ABSORB_BUY: "orange (buyers absorbed)", _FI.C_BREAK_BUY: "green (breakout up)",
+               _FI.C_BREAK_SELL: "red (breakout down)", _FI.C_VACUUM: "salmon (vacuum)", _FI.C_QUIET: "gray (quiet)",
+               _FI.C_FORMING: "forming", _FI.C_ABSORB_SELL: "blue (sellers absorbed)",
+               _FI.C_BREAK_BUY_X: "bright green (breakout up while buyers' lead was absorbed)",
+               _FI.C_BREAK_SELL_X: "bright purple (breakout down while sellers' lead was absorbed)"}
+        bmax = int(config.AUCTION_BP_MAX_PER_CYCLE)
+        lg = float(config.LIMP_DOM_GAIN)
+
+        def x2(v):
+            return round(float(2.0 ** float(v)), 2) if fin(v) else None
+
+        def extra(k):
+            r = {}
+            c = cards.get(round(float(t[k]), 2))
+            if c is not None:
+                raw = c[13] if len(c) > 13 and isinstance(c[13], dict) else {}
+                r["card_state"] = str(c[3])
+                r["card_weak"] = (not bool(c[7])) if int(c[6]) != _FI.ST_FORMING else None
+                r["candle_colour"] = COL.get(int(c[9]), str(c[9]))
+                r["card_move"] = " ".join(str(c[10]).split())
+                r["card_move_word"] = str(c[12]) or None
+                r["flow_x"] = rnd(raw.get("vr")); r["speed_x"] = rnd(raw.get("sr"))
+                r["tape_buyers_x"] = rnd(raw.get("buy")); r["tape_sellers_x"] = rnd(raw.get("sell"))
+                bb, ba = raw.get("bid"), raw.get("ask")
+                r["book_buyers_pct"] = int(round((float(bb) - 1.0) * 100.0)) if fin(bb) else None
+                r["book_sellers_pct"] = int(round((float(ba) - 1.0) * 100.0)) if fin(ba) else None
+                if int(c[6]) == _FI.ST_ABSORB and fin(raw.get("push")):
+                    r["absorbed_push_ticks"] = int(round(float(raw["push"])))
+                    r["absorbed_given_back_ticks"] = int(round(float(raw["give"]))) if fin(raw.get("give")) else None
+                    r["absorbed_given_back_pct"] = int(round(100.0 * float(raw["gb"]))) if fin(raw.get("gb")) else None
+            if cb is not None and k < np.size(cb):
+                r["buy_usd"] = int(round(float(cb[k]))) if fin(cb[k]) else None
+                r["sell_usd"] = int(round(float(cs[k]))) if fin(cs[k]) else None
+            rb_, ra_ = resting(k)
+            r["resting_bid_usd"] = int(round(rb_)) if rb_ is not None else None
+            r["resting_ask_usd"] = int(round(ra_)) if ra_ is not None else None
+            if li_b is not None:
+                r["lines_interest_buyers_x"] = x2(li_b[k]); r["lines_interest_sellers_x"] = x2(li_s[k])
+                r["lines_impact_buyers_x"] = x2(lm_b[k]); r["lines_impact_sellers_x"] = x2(lm_s[k])
+                j = int(kidx[k]) if kidx is not None else -1
+                if j >= 0 and dside is not None and int(dside[j]) != 0:
+                    r["impact_band"] = "buyers" if int(dside[j]) > 0 else "sellers"
+                    r["impact_band_bright"] = bool(fin(dgain[j]) and float(dgain[j]) >= lg)
+                else:
+                    r["impact_band"] = None
+            evs = bp.get(k)
+            if evs:
+                evs = sorted(evs, key=lambda e_: -e_["usd"])
+                r["big_players"] = evs[:bmax]
+                if len(evs) > bmax:
+                    r["big_players_more"] = len(evs) - bmax
+            return r
+        extra.bp_min = int(round(thr))
+        return extra
 
     def _auction_mark_set(self, t0=None) -> None:
         """The cycle the user marked on the tablet (a card or a candle; None = cleared). The file is rewritten at once,
@@ -24072,32 +24303,12 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         dur = np.maximum(t_end_c - t, 1e-9)
         ar_b = _interp_prev(np.maximum(cbuy, 0.0) / dur, done, n_lb, n_mn, include_open=True)
         ar_s = _interp_prev(np.maximum(csell, 0.0) / dur, done, n_lb, n_mn, include_open=True)
-        with np.errstate(divide="ignore", invalid="ignore"):
-            imb = np.where((ar_b > 0) & (ar_s > 0) & np.isfinite(ar_b) & np.isfinite(ar_s),
-                           np.log2(np.maximum(ar_b, 1e-12) / np.maximum(ar_s, 1e-12)), np.nan)
-        lead_buy = np.isfinite(imb) & (imb >= 0.0)
         sm_n = self._lines_smooth_n(kind)
         if kind == "cint":
-            rated = (done | form_all) & np.isfinite(imb)
-            with np.errstate(divide="ignore", invalid="ignore"):
-                _ib = np.where(rated, np.log2(np.maximum(ar_b, 1e-12)), np.nan)
-                _is = np.where(rated, np.log2(np.maximum(ar_s, 1e-12)), np.nan)
-            sm_b = self._lines_smooth(_ib, rated, sm_n, n_mn)
-            sm_s = self._lines_smooth(_is, rated, sm_n, n_mn)
+            sm_b, sm_s, rated = self._lines_values(kind, done, form_all, ar_b, ar_s)
         else:
             R = self._iimp_rate(t, t_end_c, done, cbuy, csell, px0, px1, pxh, pxl, n_lb, n_mn)
-            score = R["score"]
-            rated = (done | form_all) & np.isfinite(imb) & np.isfinite(score)
-            # EACH SIDE ON EVERY CYCLE (user 2026-09-24): its reach score where it led, its PUSH-BACK score where it
-            # did not. The non-leader used to be held flat, so a side that absorbed the leader and drove price back
-            # showed nothing at all. Held forward only across a cycle with no reading.
-            score_pb = R["score_pb"]
-            _ln2 = float(np.log(2.0))
-            _sc = np.where(R["short"], np.nan, score)          # a SHORT push is no reading for its leader: held
-            _ib = np.where(lead_buy, _sc, score_pb) / _ln2
-            _is = np.where(~lead_buy, _sc, score_pb) / _ln2
-            sm_b = self._lines_hold(self._lines_smooth(_ib, rated & np.isfinite(_ib), sm_n, n_mn))
-            sm_s = self._lines_hold(self._lines_smooth(_is, rated & np.isfinite(_is), sm_n, n_mn))
+            sm_b, sm_s, rated = self._lines_values(kind, done, form_all, ar_b, ar_s, R["score"], R["score_pb"], R["short"])
         # the y fit's sample: every rated cycle of the READ, not only the drawn ones (see _lines_draw)
         _okf = rated & np.isfinite(sm_b) & np.isfinite(sm_s)
         self._lp_(kind)["fitall"] = np.concatenate([sm_b[_okf], sm_s[_okf]])
@@ -24106,6 +24317,37 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             return None
         return (t[keep], t_end_c[keep], form_all[keep], sm_b[keep], sm_s[keep],
                 np.flatnonzero(keep), sm_n, int(np.size(t)))
+
+    def _lines_values(self, kind, done, form_all, ar_b, ar_s, score=None, score_pb=None, short=None):
+        """(sm_b, sm_s, rated): the LINES INTEREST ("cint") / LINES IMPACT ("cimp") values per cycle, log2, at this
+        pane's own smoothing -- ONE arithmetic for the panes (_lines_series) and the auction snapshot the Claude
+        connector reads (user 2026-09-24), so the two cannot disagree. IMPACT needs the I x I rating's score,
+        score_pb and short (_iimp_rate)."""
+        n_mn = self._lb_min_n()
+        sm_n = self._lines_smooth_n(kind)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            imb = np.where((ar_b > 0) & (ar_s > 0) & np.isfinite(ar_b) & np.isfinite(ar_s),
+                           np.log2(np.maximum(ar_b, 1e-12) / np.maximum(ar_s, 1e-12)), np.nan)
+        lead_buy = np.isfinite(imb) & (imb >= 0.0)
+        if kind == "cint":
+            rated = (done | form_all) & np.isfinite(imb)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                _ib = np.where(rated, np.log2(np.maximum(ar_b, 1e-12)), np.nan)
+                _is = np.where(rated, np.log2(np.maximum(ar_s, 1e-12)), np.nan)
+            sm_b = self._lines_smooth(_ib, rated, sm_n, n_mn)
+            sm_s = self._lines_smooth(_is, rated, sm_n, n_mn)
+        else:
+            rated = (done | form_all) & np.isfinite(imb) & np.isfinite(score)
+            # EACH SIDE ON EVERY CYCLE (user 2026-09-24): its reach score where it led, its PUSH-BACK score where it
+            # did not. The non-leader used to be held flat, so a side that absorbed the leader and drove price back
+            # showed nothing at all. Held forward only across a cycle with no reading.
+            _ln2 = float(np.log(2.0))
+            _sc = np.where(short, np.nan, score)                # a SHORT push is no reading for its leader: held
+            _ib = np.where(lead_buy, _sc, score_pb) / _ln2
+            _is = np.where(~lead_buy, _sc, score_pb) / _ln2
+            sm_b = self._lines_hold(self._lines_smooth(_ib, rated & np.isfinite(_ib), sm_n, n_mn))
+            sm_s = self._lines_hold(self._lines_smooth(_is, rated & np.isfinite(_is), sm_n, n_mn))
+        return sm_b, sm_s, rated
 
     def _lines_draw(self, kind, now: float) -> None:
         st = self._lp_(kind)
@@ -25958,7 +26200,10 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         # the candle canvas keeps these same bins fed), so with Big Player on it REPLACES this drain instead
         # of racing it. Without this the Big Player store is never filled in Flow mode and the marks on the
         # PRICE pane would be permanently empty.
-        if self.menu.layer_state("m10_bigplayer"):
+        # _bp_always: the tablet ENGINE sets it (user 2026-09-24: the Claude connector reads the Big Player prints
+        # per cycle, whatever the tablet's toggle). _bp_feed ingests every batch into _flow too, so it REPLACES the
+        # drain below rather than racing it -- the one-drainer rule above holds either way.
+        if self.menu.layer_state("m10_bigplayer") or self.__dict__.get("_bp_always"):
             try:
                 self._bp_feed()
             except Exception:

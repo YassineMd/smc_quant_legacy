@@ -923,6 +923,9 @@ def engine_tick():
         traceback.print_exc()
 
 
+# the Big Player store is fed whatever the tablet's toggle: the Claude connector's snapshot lists the prints of every
+# cycle (user 2026-09-24). _scan_flow then drains the tape through _bp_feed, which feeds _flow too (one drainer).
+w._bp_always = True
 timer = QtCore.QTimer(); timer.setInterval(int(ARGS.tick_ms)); timer.timeout.connect(engine_tick); timer.start()
 log("engine running -- start the tablet app (adb reverse tcp:%d tcp:%d)" % (ARGS.port, ARGS.port))
 try:

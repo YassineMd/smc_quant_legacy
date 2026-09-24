@@ -164,9 +164,21 @@ DATA_DIR = os.path.join(PROJECT_DIR, "data")
 AUCTION_SNAPSHOT_PATH = os.path.join(PROJECT_DIR, "data", "auction_snapshot.json")
 AUCTION_SNAPSHOT_SECS = 20.0        # written at most this often
 AUCTION_SNAPSHOT_CYCLES = 80        # the builder's default: the newest this many cycles
+AUCTION_BP_MAX_PER_CYCLE = 20       # Big Player events listed per cycle (largest first; the count says if more)
 AUCTION_FILE_CYCLES = 400           # ... and in the FILE the Claude connector reads (the whole feed window, capped)
 AUCTION_ACTIVE_MIN = 1.0            # a side is ACTIVE at or above its own normal aggressive $/s
 AUCTION_SUMMARY_N = 12              # the recent stretch the summary counts over (finished rated cycles)
+# THE CYCLE HISTORY (user 2026-09-24: Claude should reach "anything before the engine's ~6 h window"): every SETTLED
+# snapshot row is appended once to <dir>/YYYY-MM-DD.jsonl (UTC day of the cycle's start) and kept this many days.
+# Settled = finished at least this long ago, so its wall columns (fetched 15 s after, final by 45 s) have landed.
+AUCTION_HISTORY_DIR = os.path.join(PROJECT_DIR, "data", "auction_history")
+AUCTION_HISTORY_DAYS = 30
+AUCTION_HISTORY_SETTLE_SECS = 120.0
+# ... an UNRATED row (no I x I reading: its wall or baseline is missing) waits this long in case it gets rated; and
+# nothing is recorded until this long after the first snapshot, the wall grid covers the window and the HLH klines
+# are in: MEASURED 2026-09-24, a restart's first writes were all unrated for ~4 min (the grid catching up)
+AUCTION_HISTORY_UNRATED_SECS = 900.0
+AUCTION_HISTORY_WARMUP_SECS = 300.0
 FOOTPRINTS_FILE = os.path.join(DATA_DIR, "server_footprints.json")  # legacy JSON (migration source)
 HISTORY_DB = os.path.join(DATA_DIR, "history.db")  # SQLite state store (instant rehydration)
 
