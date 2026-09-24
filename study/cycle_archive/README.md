@@ -21,7 +21,18 @@ one immutable file:
 
 **Run it at least every 2 days.** The pane rows start one lookback (4 h at N = 20) into the window, so one harvest
 covers about 68 h; harvests more than ~2.8 days apart leave a gap. `run_collect.cmd` is the wrapper a scheduled task
-calls; it appends to `study/cycle_archive/logs/`.
+calls; it appends to `study/cycle_archive/logs/collect_YYYYMM.log`.
+
+**The daily task** (user 2026-09-24): `register_daily_task.ps1` registers **"SMC Cycle Archive Harvest"** for the current
+user -- daily at 18:00 PC time, and at the next chance if the PC was off then (StartWhenAvailable), minimized, only
+while logged on (no stored password), one at a time, stopped after 45 min. `-Remove` deletes it; `-At HH:MM` moves it.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File study\cycle_archiveegister_daily_task.ps1
+Get-ScheduledTaskInfo -TaskName "SMC Cycle Archive Harvest"      # LastRunTime / LastTaskResult / NextRunTime
+```
+
+The PC has to be on and logged on at least once every ~2 days, or the archive gets a gap (the loader reports it).
 
 ## What a harvest holds
 
