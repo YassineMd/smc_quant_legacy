@@ -84,6 +84,13 @@ BAR_COL = ("#FF9500", "#00C853", "#FF1F1F", "#E2574C", "#6B7A82", "#4E5C64", "#2
 TXT_DARK = ("#FFB84D", "#2BE86B", "#FF5A5A", "#F0857C", "#9AAAB2", "#6B7A82", "#7FB2FF", "#9CFF57", "#E57BFF")
 TXT_LIGHT = ("#A85C00", "#00822F", "#C40D0D", "#A8382F", "#5A666D", "#6B7A82", "#0B4FA8", "#3F7F00", "#8E00B0")
 
+# the card's I x I strip wears the I x I PANE's own three colours (config.IIMP_BUY_COL / IIMP_SELL_COL /
+# IIMP_CONTRA_COL), so the miniature bar on a card and the bar in the pane are one object; text tints per theme
+IIMP_BAR = {"buy": "#26a69a", "sell": "#ef5350", "contra": "#ff9f43"}
+IIMP_TXT_DARK = {"buy": "#4dd0c1", "sell": "#ff7b78", "contra": "#ffb366"}
+IIMP_TXT_LIGHT = {"buy": "#00796b", "sell": "#c62828", "contra": "#c96a00"}
+IIMP_WALL_HIGH, IIMP_WALL_LOW = 1.06, 0.94      # config.IIMP_WALL_HIGH / IIMP_WALL_LOW: the pane's dot rule
+
 # the price move, coloured by the move itself: green up, red down, grey when it ended where it started
 MOVE_DARK = ("#FF5A5A", "#7A828C", "#2BE86B")
 MOVE_LIGHT = ("#C40D0D", "#77808A", "#00822F")
@@ -512,7 +519,7 @@ def build_rows(t, t_end, done, move, side_dom, vol_ratio, speed_ratio,
                bid_ratio, ask_ratio, buy_ratio, sell_ratio, flat_ticks, weak_below, max_rows,
                now=None, live=True, px_start=None, px_end=None, px_dec=2,
                slow_c=0.65, fast_c=1.50, px_hi=None, px_lo=None,
-               tick=0.01, push_min=2.0, reject_weak=0.68):
+               tick=0.01, push_min=2.0, reject_weak=0.68, iimp=None):
     """One display row per cycle, NEWEST FIRST. Pure function of arrays -- no Qt, so it is directly testable.
 
     Every string is built here, once per rebuild, so paintEvent only ever draws pre-made text."""
@@ -546,10 +553,20 @@ def build_rows(t, t_end, done, move, side_dom, vol_ratio, speed_ratio,
         push = give = frac = float("nan")
         if st == ST_ABSORB:
             push, give, frac = rejection(side == "buy", p0, p1, ph, pl, float(tick), float(push_min))
-        return {"st": int(st), "side": side or "", "mv": float(mv[k]), "flat": bool(flat[k]), "dur": float(dur),
-                "px0": p0, "px1": p1, "hi": ph, "lo": pl, "vr": _at(vr, k), "sr": _at(sr, k),
-                "buy": _at(buy_ratio, k), "sell": _at(sell_ratio, k), "bid": _at(bid_ratio, k),
-                "ask": _at(ask_ratio, k), "push": push, "give": give, "gb": frac}
+        out = {"st": int(st), "side": side or "", "mv": float(mv[k]), "flat": bool(flat[k]), "dur": float(dur),
+               "px0": p0, "px1": p1, "hi": ph, "lo": pl, "vr": _at(vr, k), "sr": _at(sr, k),
+               "buy": _at(buy_ratio, k), "sell": _at(sell_ratio, k), "bid": _at(bid_ratio, k),
+               "ask": _at(ask_ratio, k), "push": push, "give": give, "gb": frac}
+        if iimp is not None:
+            # the I x I PANE's reading of this cycle (user 2026-09-24): the card's summary strip and its short why.
+            # FLAT keys, never a nested dict: the engine turns NaN into null one level deep, and Android's JSON
+            # parser rejects NaN -- a nested NaN would drop the whole message.
+            out.update({"i_lead": int(iimp["lead"][k]), "i_mult": _at(iimp["mult"], k), "i_imp": _at(iimp["imp"], k),
+                        "i_good": bool(iimp["good"][k]), "i_wall": _at(iimp["wall"], k),
+                        "i_kept": _at(iimp["kept"], k), "i_contra": bool(iimp["contra"][k]),
+                        "i_pb": _at(iimp["pb"], k), "i_give": _at(iimp["give"], k),
+                        "i_why": str(iimp["why"][k] or "")})
+        return out
 
     def _contra(k):
         """The I x I pane's orange for this row: its tape ratios ARE the pane's interest (same lookback)."""
@@ -833,7 +850,7 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
     # a chip, the price move as the headline, the effort x result QUADRANT the state is read from, the tape as
     # two bars around each side's own normal, the book as arrows. Cards share one height, so every index <->
     # pixel mapping stays a lookup in `_ys`; only the hour dividers make the offsets uneven.
-    CARD_H = 112
+    CARD_H = 186       # 112 + the I x I strip (2026-09-24)
     CARD_GAP = 6
     SEP_H = 22
     TOP = 22            # the pane's title band
@@ -997,8 +1014,10 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
         def mk(base, pt, bold=False):
             q = QtGui.QFont(base); q.setPointSizeF(pt); q.setBold(bold); return q
         sans = QtGui.QFont()
+        cap = mk(sans, 6.5, True); cap.setLetterSpacing(QtGui.QFont.PercentageSpacing, 112)
         self._cf = f = {"chip": mk(sans, 8, True), "meta": mk(mono, 8), "big": mk(sans, 15, True),
-                        "small": mk(mono, 8), "label": mk(sans, 8), "tiny": mk(sans, 7), "sep": mk(mono, 7)}
+                        "small": mk(mono, 8), "label": mk(sans, 8), "tiny": mk(sans, 7), "sep": mk(mono, 7),
+                        "cap": cap, "val": mk(sans, 9, True), "why": mk(sans, 8)}
         return f
 
     def _chip_text(self, st, name, raw):
@@ -1277,3 +1296,131 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
             sw = str(mv_word)
             p.setPen(det)
             p.drawText(QtCore.QPointF(qx + q / 2 - fmt.horizontalAdvance(sw) / 2, qy + q + 25), sw)
+        self._draw_iimp_strip(p, F, raw, x, y, cw, dim, det)
+
+    @staticmethod
+    def _wrap(text, fm, width, max_lines):
+        """Greedy word wrap into at most `max_lines`; the last line is elided with an ellipsis if text remains."""
+        words = str(text).split()
+        lines, cur = [], ""
+        for i, w_ in enumerate(words):
+            t_ = (cur + " " + w_) if cur else w_
+            if fm.horizontalAdvance(t_) <= width:
+                cur = t_
+                continue
+            if cur:
+                lines.append(cur)
+            cur = w_
+            if len(lines) == max_lines - 1:
+                cur = " ".join([cur] + words[i + 1:])
+                break
+        if cur:
+            lines.append(cur)
+        if len(lines) > max_lines:
+            lines = lines[:max_lines]
+        if lines:
+            lines[-1] = fm.elidedText(lines[-1], QtCore.Qt.ElideRight, int(width))
+        return lines
+
+    def _draw_iimp_strip(self, p, F, raw, x, y, cw, dim, det):
+        """THE I x I READING of the cycle, under the book row (user 2026-09-24: "add the summary that i see on top
+        (interest, impact, wall and kept) in the interpretation, and just below it ... the why ... one or two
+        sentences ... beautifully incorporated"). Left: the pane's own bar in MINIATURE -- the side's colour (orange
+        when price went the other way), the outline = it reached, the solid share from the 1x line = what was kept,
+        the wall dot past its tip. Right: four tiles. Under: the why, two lines at most."""
+        dk = self._dark
+        sy = y + 110
+        p.setPen(QtGui.QPen(QtGui.QColor("#262d34" if dk else "#e6e9ec"), 1))
+        p.drawLine(QtCore.QPointF(x + 14, sy), QtCore.QPointF(x + cw - 14, sy))
+        nan = float("nan")
+
+        def g(k):
+            try:
+                v = float(raw.get(k, nan))
+                return v if math.isfinite(v) else nan
+            except Exception:
+                return nan
+        lead = int(raw.get("i_lead") or 0) if isinstance(raw, dict) else 0
+        if lead == 0:
+            p.setFont(F["label"]); p.setPen(dim)
+            p.drawText(QtCore.QPointF(x + 16, sy + 30),
+                       "I×I  not rated yet -- it needs a few cycles of history and the book at the open")
+            return
+        buy = lead > 0
+        contra = bool(raw.get("i_contra")); good = bool(raw.get("i_good"))
+        key = "contra" if contra else ("buy" if buy else "sell")
+        bc = QtGui.QColor(IIMP_BAR[key])
+        tc = QtGui.QColor((IIMP_TXT_DARK if dk else IIMP_TXT_LIGHT)[key])
+        ink = QtGui.QColor("#e6ebf0" if dk else "#1a1a1a")
+        mult = g("i_mult"); imp = g("i_imp"); wall = g("i_wall"); kept = g("i_kept")
+
+        # ---- the bar in miniature, around its own 1x line
+        mx = x + 17.0; mid = sy + 27.0; half = 18.0
+        p.setPen(QtGui.QPen(QtGui.QColor("#4a545c" if dk else "#b4bcc3"), 1))
+        p.drawLine(QtCore.QPointF(mx - 5, mid), QtCore.QPointF(mx + 15, mid))
+        hb = 3.0
+        if math.isfinite(mult) and mult > 0:
+            hb = max(3.0, min(half - 4.0, (half - 4.0) * abs(math.log2(mult)) / 1.4))
+        top_ = mid - hb if buy else mid
+        rect = QtCore.QRectF(mx, top_, 11.0, hb)
+        if good:
+            f_ = min(max(kept, 0.0), 1.0) if (not contra and math.isfinite(kept)) else 1.0
+            if f_ > 0:
+                sh = hb * f_
+                srect = QtCore.QRectF(mx, mid - sh, 11.0, sh) if buy else QtCore.QRectF(mx, mid, 11.0, sh)
+                fc = QtGui.QColor(bc); fc.setAlpha(205)
+                p.fillRect(srect, fc)
+            p.setPen(QtGui.QPen(bc, 1.0 if f_ >= 1.0 else 1.4))
+        else:
+            p.setPen(QtGui.QPen(bc, 1.4))
+        p.setBrush(QtCore.Qt.NoBrush)
+        p.drawRect(rect)
+        if math.isfinite(wall) and (wall >= IIMP_WALL_HIGH or wall <= IIMP_WALL_LOW):
+            wy = (top_ - 5.0) if buy else (top_ + hb + 5.0)
+            wc = QtGui.QColor("#dcdcdc" if dk else "#8a939b")
+            p.setPen(QtGui.QPen(wc, 1.2))
+            p.setBrush(wc if wall >= IIMP_WALL_HIGH else QtCore.Qt.NoBrush)
+            p.drawEllipse(QtCore.QPointF(mx + 5.5, wy), 2.6, 2.6)
+            p.setBrush(QtCore.Qt.NoBrush)
+
+        # ---- four tiles
+        def fx(v):
+            if not math.isfinite(v):
+                return "–"
+            return ("%.0f×" % v) if v >= 10 else ("%.2f×" % v)
+        tx0 = x + 42.0
+        tw = (x + cw - 14.0 - tx0) / 4.0
+        wtag = ("wall" if math.isfinite(wall) and wall >= IIMP_WALL_HIGH else
+                "open" if math.isfinite(wall) and wall <= IIMP_WALL_LOW else "")
+        tiles = (("INTEREST", ("BUY " if buy else "SELL ") + fx(mult), tc),
+                 ("IMPACT", fx(imp), ink if good else dim),
+                 ("WALL", fx(wall), ink),
+                 # below zero the close went AGAINST the leader: "none" reads plainer than "-330%" (the why says how far)
+                 ("KEPT", ("none" if kept < 0 else "%d%%" % int(round(100.0 * kept))) if math.isfinite(kept) else "–",
+                  dim if (math.isfinite(kept) and kept < 0) else ink))
+        fmv = QtGui.QFontMetrics(F["val"])
+        for i, (lab, val, col) in enumerate(tiles):
+            lx = tx0 + i * tw
+            p.setFont(F["cap"]); p.setPen(dim)
+            p.drawText(QtCore.QPointF(lx, sy + 16), lab)
+            p.setFont(F["val"]); p.setPen(col)
+            p.drawText(QtCore.QPointF(lx, sy + 32), val)
+            if lab == "WALL" and wtag:
+                p.setFont(F["tiny"]); p.setPen(dim)
+                p.drawText(QtCore.QPointF(lx + fmv.horizontalAdvance(val) + 4, sy + 32), wtag)
+            if lab == "KEPT":
+                bw_ = max(12.0, tw - 16.0)
+                tr = QtCore.QRectF(lx, sy + 37, bw_, 3.0)
+                p.setPen(QtCore.Qt.NoPen); p.setBrush(QtGui.QColor("#262d34" if dk else "#eceef0"))
+                p.drawRoundedRect(tr, 1.5, 1.5)
+                if math.isfinite(kept) and kept > 0:
+                    p.setBrush(bc)
+                    p.drawRoundedRect(QtCore.QRectF(lx, sy + 37, bw_ * min(1.0, kept), 3.0), 1.5, 1.5)
+                p.setBrush(QtCore.Qt.NoBrush)
+
+        # ---- the why, two lines at most
+        why = str(raw.get("i_why") or "")
+        if why:
+            p.setFont(F["why"]); p.setPen(det)
+            for j, ln in enumerate(self._wrap(why, QtGui.QFontMetrics(F["why"]), cw - 32, 2)):
+                p.drawText(QtCore.QPointF(x + 16, sy + 54 + j * 13), ln)

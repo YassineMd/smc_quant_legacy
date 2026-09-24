@@ -50,6 +50,11 @@ public final class InterpView extends View {
     private static final int ST_ABSORB = 0, ST_BREAK = 1, ST_VACUUM = 2, ST_QUIET = 3;
     private static final int C_ABSORB_BUY = 0, C_BREAK_BUY = 1, C_VACUUM = 3, C_QUIET = 4;
     private static final int BUY_BAR = Color.parseColor("#26A69A"), SELL_BAR = Color.parseColor("#EF5350");
+    // the card's I x I strip wears the I x I PANE's own colours (flow_interp.IIMP_BAR): buy / sell / contra, + text tints
+    private static final int[] IIMP_BAR = {Color.parseColor("#26a69a"), Color.parseColor("#ef5350"), Color.parseColor("#ff9f43")};
+    private static final int[] IIMP_TXT_DARK = {Color.parseColor("#4dd0c1"), Color.parseColor("#ff7b78"), Color.parseColor("#ffb366")};
+    private static final int[] IIMP_TXT_LIGHT = {Color.parseColor("#00796b"), Color.parseColor("#c62828"), Color.parseColor("#c96a00")};
+    private static final double WALL_HIGH = 1.06, WALL_LOW = 0.94;     // config.IIMP_WALL_HIGH / _LOW
     public boolean dark = true;
 
     public void setDark(boolean dark) { this.dark = dark; setBackgroundColor(Color.parseColor(dark ? "#141414" : "#ffffff")); invalidate(); }
@@ -64,7 +69,7 @@ public final class InterpView extends View {
         this.model = model;
         d = getResources().getDisplayMetrics().density;
         PAD = 10 * d; TOPY = PAD + 40 * d;             // the first card clears the hamburger button (46 dp)
-        CARD_H = 114 * d; CARD_GAP = 7 * d; SEP_H = 24 * d;
+        CARD_H = 192 * d; CARD_GAP = 7 * d; SEP_H = 24 * d;       // 114 + the I x I strip (2026-09-24)
         dashed = new DashPathEffect(new float[]{4 * d, 3 * d}, 0);
         setBackgroundColor(Color.parseColor("#141414"));
         fling = new OverScroller(ctx);
@@ -350,6 +355,114 @@ public final class InterpView extends View {
         text(c, ft, qx + q / 2 - width(ft, sans, 9.5f) / 2, qy + q + 13 * d, sans, 9.5f, dim);
         if (r.mvWord != null && !r.mvWord.isEmpty() && r.st != ST_ABSORB)
             text(c, r.mvWord, qx + q / 2 - width(r.mvWord, sans, 9.5f) / 2, qy + q + 25 * d, sans, 9.5f, det);
+        drawStrip(c, r, x, y, cw, dim, det);
+    }
+
+    /** Greedy word wrap into at most `maxLines`, the last one cut with an ellipsis if text remains. */
+    private List<String> wrap(String s, Typeface tf, float size, float w, int maxLines) {
+        pText.setTypeface(tf); pText.setTextSize(size * d);
+        String[] words = s.trim().split("\\s+");
+        List<String> out = new ArrayList<>(); StringBuilder cur = new StringBuilder();
+        for (int i = 0; i < words.length; i++) {
+            String t = cur.length() == 0 ? words[i] : cur + " " + words[i];
+            if (pText.measureText(t) <= w) { cur.setLength(0); cur.append(t); continue; }
+            if (cur.length() > 0) out.add(cur.toString());
+            cur.setLength(0); cur.append(words[i]);
+            if (out.size() == maxLines - 1) {
+                for (int j = i + 1; j < words.length; j++) cur.append(' ').append(words[j]);
+                break;
+            }
+        }
+        if (cur.length() > 0) out.add(cur.toString());
+        while (out.size() > maxLines) out.remove(out.size() - 1);
+        if (!out.isEmpty()) {
+            String last = out.get(out.size() - 1);
+            if (pText.measureText(last) > w) {
+                while (last.length() > 1 && pText.measureText(last + "…") > w) last = last.substring(0, last.length() - 1);
+                out.set(out.size() - 1, last.trim() + "…");
+            }
+        }
+        return out;
+    }
+
+    private static String fx(double v) {
+        if (!ok(v)) return "–";
+        return v >= 10 ? String.format(Locale.US, "%.0f×", v) : String.format(Locale.US, "%.2f×", v);
+    }
+
+    /** THE I x I READING of the cycle under the book row (user 2026-09-24): the pane's own bar in MINIATURE (side
+     * colour, orange when price went the other way; outline = it reached, solid share from the 1x line = what was
+     * kept; the wall dot past its tip), four tiles -- interest, impact, wall, kept -- and the why in two lines at most.
+     * The terminal's flow_interp._draw_iimp_strip, in dp. */
+    private void drawStrip(Canvas c, FlowModel.Row r, float x, float y, float cw, int dim, int det) {
+        float sy = y + 113 * d;
+        pLine.setStyle(Paint.Style.STROKE); pLine.setPathEffect(null); pLine.setStrokeWidth(1 * d);
+        pLine.setColor(col(dark ? "#262d34" : "#e6e9ec"));
+        c.drawLine(x + 14 * d, sy, x + cw - 14 * d, sy, pLine);
+        if (r.iLead == 0) {
+            text(c, "I×I  not rated yet -- it needs a few cycles of history and the book at the open", x + 16 * d, sy + 30 * d, sans, 10.5f, dim);
+            return;
+        }
+        boolean buy = r.iLead > 0;
+        int key = r.iContra ? 2 : (buy ? 0 : 1);
+        int bc = IIMP_BAR[key], tc = (dark ? IIMP_TXT_DARK : IIMP_TXT_LIGHT)[key];
+        int ink = col(dark ? "#e6ebf0" : "#1a1a1a");
+        // ---- the bar in miniature, around its own 1x line
+        float mx = x + 17 * d, mid = sy + 28 * d, half = 19 * d, bw = 12 * d;
+        pLine.setColor(col(dark ? "#4a545c" : "#b4bcc3")); pLine.setStrokeWidth(1 * d);
+        c.drawLine(mx - 5 * d, mid, mx + bw + 4 * d, mid, pLine);
+        float hb = 3 * d;
+        if (ok(r.iMult) && r.iMult > 0)
+            hb = (float) Math.max(3 * d, Math.min(half - 4 * d, (half - 4 * d) * Math.abs(Math.log(r.iMult) / Math.log(2)) / 1.4));
+        float top = buy ? mid - hb : mid;
+        if (r.iGood) {
+            double f = (!r.iContra && ok(r.iKept)) ? Math.max(0.0, Math.min(1.0, r.iKept)) : 1.0;
+            if (f > 0) {
+                float sh = (float) (hb * f);
+                pFill.setColor(alpha(bc, 205));
+                if (buy) c.drawRect(mx, mid - sh, mx + bw, mid, pFill); else c.drawRect(mx, mid, mx + bw, mid + sh, pFill);
+            }
+            pLine.setStrokeWidth((f >= 1.0 ? 1.0f : 1.4f) * d);
+        } else {
+            pLine.setStrokeWidth(1.4f * d);
+        }
+        pLine.setColor(bc); c.drawRect(mx, top, mx + bw, top + hb, pLine);
+        if (ok(r.iWall) && (r.iWall >= WALL_HIGH || r.iWall <= WALL_LOW)) {
+            float wy = buy ? top - 5 * d : top + hb + 5 * d;
+            int wc = col(dark ? "#dcdcdc" : "#8a939b");
+            if (r.iWall >= WALL_HIGH) { pFill.setColor(wc); c.drawCircle(mx + bw / 2, wy, 2.8f * d, pFill); }
+            pLine.setColor(wc); pLine.setStrokeWidth(1.2f * d); c.drawCircle(mx + bw / 2, wy, 2.8f * d, pLine);
+        }
+        // ---- four tiles
+        float tx0 = x + 46 * d, tw = (x + cw - 14 * d - tx0) / 4f;
+        String wtag = ok(r.iWall) ? (r.iWall >= WALL_HIGH ? "wall" : (r.iWall <= WALL_LOW ? "open" : "")) : "";
+        boolean keptNone = ok(r.iKept) && r.iKept < 0;       // the close went AGAINST the leader: the why says how far
+        String[] labs = {"INTEREST", "IMPACT", "WALL", "KEPT"};
+        String[] vals = {(buy ? "BUY " : "SELL ") + fx(r.iMult), fx(r.iImp), fx(r.iWall),
+                         ok(r.iKept) ? (keptNone ? "none" : Math.round(100 * r.iKept) + "%") : "–"};
+        int[] cols = {tc, r.iGood ? ink : dim, ink, keptNone ? dim : ink};
+        for (int i = 0; i < 4; i++) {
+            float lx = tx0 + i * tw;
+            pText.setLetterSpacing(0.09f);
+            text(c, labs[i], lx, sy + 17 * d, bold, 9f, dim);
+            pText.setLetterSpacing(0f);
+            text(c, vals[i], lx, sy + 35 * d, bold, 13f, cols[i]);
+            if (i == 2 && !wtag.isEmpty()) text(c, wtag, lx + width(vals[i], bold, 13f) + 4 * d, sy + 35 * d, sans, 9.5f, dim);
+            if (i == 3) {
+                float kw = Math.max(12 * d, tw - 18 * d);
+                pFill.setColor(col(dark ? "#262d34" : "#eceef0"));
+                rf.set(lx, sy + 40 * d, lx + kw, sy + 43.5f * d); c.drawRoundRect(rf, 1.7f * d, 1.7f * d, pFill);
+                if (ok(r.iKept) && r.iKept > 0) {
+                    pFill.setColor(bc);
+                    rf.set(lx, sy + 40 * d, lx + kw * (float) Math.min(1.0, r.iKept), sy + 43.5f * d); c.drawRoundRect(rf, 1.7f * d, 1.7f * d, pFill);
+                }
+            }
+        }
+        // ---- the why, two lines at most
+        if (r.iWhy != null && !r.iWhy.isEmpty()) {
+            List<String> ln = wrap(r.iWhy, sans, 10.5f, cw - 32 * d, 2);
+            for (int j = 0; j < ln.size(); j++) text(c, ln.get(j), x + 16 * d, sy + 59 * d + j * 14.5f * d, sans, 10.5f, det);
+        }
     }
 
     private void ratioBar(Canvas c, float bx, float by, double v, int fill, int dim, int det) {

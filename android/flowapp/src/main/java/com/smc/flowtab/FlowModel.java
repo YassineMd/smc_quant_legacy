@@ -85,6 +85,9 @@ public final class FlowModel {
         public double mv = Double.NaN, px0 = Double.NaN, px1 = Double.NaN, hi = Double.NaN, lo = Double.NaN,
                 vr = Double.NaN, sr = Double.NaN, buy = Double.NaN, sell = Double.NaN, bid = Double.NaN, ask = Double.NaN,
                 push = Double.NaN, gb = Double.NaN;
+        // the I x I PANE's reading of the cycle (2026-09-24): lead +1 buyers / -1 sellers / 0 not rated
+        public int iLead; public boolean iGood, iContra; public String iWhy = "";
+        public double iMult = Double.NaN, iImp = Double.NaN, iWall = Double.NaN, iKept = Double.NaN, iPb = Double.NaN, iGive = Double.NaN;
     }
     private static double num(JSONObject o, String k) {
         return (o == null || o.isNull(k) || !o.has(k)) ? Double.NaN : o.optDouble(k, Double.NaN);
@@ -375,6 +378,10 @@ public final class FlowModel {
                     row.mv = num(x, "mv"); row.px0 = num(x, "px0"); row.px1 = num(x, "px1"); row.hi = num(x, "hi"); row.lo = num(x, "lo");
                     row.vr = num(x, "vr"); row.sr = num(x, "sr"); row.buy = num(x, "buy"); row.sell = num(x, "sell");
                     row.bid = num(x, "bid"); row.ask = num(x, "ask"); row.push = num(x, "push"); row.gb = num(x, "gb");
+                    row.iLead = x.optInt("i_lead", 0); row.iGood = x.optBoolean("i_good", false); row.iContra = x.optBoolean("i_contra", false);
+                    row.iWhy = x.isNull("i_why") ? "" : x.optString("i_why", "");
+                    row.iMult = num(x, "i_mult"); row.iImp = num(x, "i_imp"); row.iWall = num(x, "i_wall");
+                    row.iKept = num(x, "i_kept"); row.iPb = num(x, "i_pb"); row.iGive = num(x, "i_give");
                 }
                 out.add(row);
             }

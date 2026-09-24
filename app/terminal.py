@@ -20787,6 +20787,11 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         if pxh.size != t.size or pxl.size != t.size:
             pxh = pxl = np.full(int(t.size), np.nan)
         _dec = max(0, min(8, int(round(-np.log10(max(float(config.TICK_SIZE), 1e-9))))))
+        # the I x I pane's reading of each cycle, for the card's summary strip and its short WHY (2026-09-24)
+        try:
+            _ii = self._interp_iimp(t, t_end_c, done, cbuy, csell, px0, px1, pxh, pxl)
+        except Exception:
+            _ii = None
         k = np.flatnonzero(vis)
         rows = _interp_build_rows(t[k], t_end_c[k], done[k], mv[k], side[k],
                                   vol_ratio[k], spd_ratio[k], rb[k], ra[k], buy_r[k], sell_r[k],
@@ -20796,7 +20801,8 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                                   slow_c=float(config.SPEED_SLOW), fast_c=float(config.SPEED_FAST),
                                   px_hi=pxh[k], px_lo=pxl[k], tick=float(config.TICK_SIZE),
                                   push_min=float(config.ABSORB_PUSH_MIN_TICKS),
-                                  reject_weak=float(config.ABSORB_REJECT_WEAK))
+                                  reject_weak=float(config.ABSORB_REJECT_WEAK),
+                                  iimp=({_kk: _v[k] for _kk, _v in _ii.items()} if _ii is not None else None))
         p.setRows(self._interp_bright_demote(rows))
 
     def _stack_axis_sync(self) -> None:
@@ -21020,6 +21026,16 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                         return True
                 except RuntimeError:
                     pass
+        # ... and the cycle CANDLES (their bright colours need the pane's fill) and the INTERPRETATION cards
+        # (their I x I strip), 2026-09-24
+        for _a in ("_px_plot", "interp_panel"):
+            _pw = self.__dict__.get(_a)
+            if _pw is not None:
+                try:
+                    if _pw.isVisible():
+                        return True
+                except RuntimeError:
+                    pass
         try:
             return bool(self._px_iib_wanted())
         except Exception:
@@ -21187,6 +21203,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             self._rc_drop_from((k_first + 1) * float(config.IIMP_WALL_COL_SECS),
                                (k_last + 2) * float(config.IIMP_WALL_COL_SECS) + _reach)
         self._iimp_sig = None; self._iimp_t = 0.0
+        self._interp_sig = None                   # the cards quote the same ratings (2026-09-24)
         for _k in self._LINES_KINDS:
             self._lp_(_k)["sig"] = None
         self._lines_t = 0.0
@@ -22763,6 +22780,104 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         # the PUSHING side's own history: buyers push back on sell-led cycles, so the side flag is ~lead
         return self._iimp_score(resid, ~lb, done, n_lb, n_mn), give
 
+    def _iimp_rate(self, t, t_end_c, done, cbuy, csell, px0, px1, pxh, pxl, n_lb, n_mn):
+        """The I x I pane's per-cycle RATINGS -- ONE implementation for every reader (2026-09-24): the pane itself,
+        LINES IMPACT and the Interpretation cards, so a card can never quote a number the pane does not draw.
+        `t_end_c` comes already clamped to now for a live forming cycle."""
+        t = np.asarray(t, dtype=np.float64)
+        dur = np.maximum(np.asarray(t_end_c, dtype=np.float64) - t, 1e-9)
+        ar_b = _interp_prev(np.maximum(cbuy, 0.0) / dur, done, n_lb, n_mn, include_open=True)
+        ar_s = _interp_prev(np.maximum(csell, 0.0) / dur, done, n_lb, n_mn, include_open=True)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            imb = np.where((ar_b > 0) & (ar_s > 0) & np.isfinite(ar_b) & np.isfinite(ar_s),
+                           np.log2(np.maximum(ar_b, 1e-12) / np.maximum(ar_s, 1e-12)), np.nan)
+        # ⚠ THE BAR IS ONE SIDE'S STORY: the side the HEIGHT names owns the reach, the effort, the wall and the
+        # baseline. Using the cycle's own crossing side for the fill made a bar describe two different sides at
+        # once, and they differ on about one cycle in four (user 2026-09-16).
+        lead_buy = np.isfinite(imb) & (imb >= 0.0)
+        wall_raw = self._iimp_wall(t, lead_buy)
+        wall = self._lob_ratio(wall_raw, done, n_lb, n_mn, include_open=True)
+        own_b, secs_b = self._iimp_climb(t, t_end_c, lead_buy, done)
+        reach = np.where(lead_buy, pxh - px0, px0 - pxl) / float(config.TICK_SIZE)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            y_r = np.log1p(np.maximum(reach, 0.0))
+            cb_, cd_, cw_ = config.IIMP_COEF_BUY
+            sb_, sd_, sw_ = config.IIMP_COEF_SELL
+            pred = np.where(lead_buy,
+                            cb_ * np.log(np.maximum(own_b, 1.0)) + cd_ * np.log(np.maximum(secs_b, 1.0))
+                            + cw_ * np.log1p(np.maximum(wall_raw, 0.0)),
+                            sb_ * np.log(np.maximum(own_b, 1.0)) + sd_ * np.log(np.maximum(secs_b, 1.0))
+                            + sw_ * np.log1p(np.maximum(wall_raw, 0.0)))
+            resid = y_r - pred
+        # the score: this cycle's residual against the median of the previous N cycles OF THE SAME SIDE, so a
+        # buy cycle is judged against buy cycles (the Volume and Speed panes' rule)
+        score = self._iimp_score(resid, lead_buy, done, n_lb, n_mn)
+        score_pb, give_pb = self._iimp_pb_score(t, t_end_c, done, lead_buy, px1, pxh, pxl, n_lb, n_mn)
+        return {"dur": dur, "ar_b": ar_b, "ar_s": ar_s, "imb": imb, "lead_buy": lead_buy, "wall_raw": wall_raw,
+                "wall": wall, "reach": reach, "score": score, "score_pb": score_pb, "give_pb": give_pb}
+
+    def _iimp_why_short(self, lead_buy, contra, good, imp, wall, kept, lmv, give, pb) -> str:
+        """The card's WHY (user 2026-09-24: "much shorter than what i have on the window, like one or two
+        sentences"): the explanation panel's reading of the same four facts, plus the other side's answer."""
+        fin = lambda v: v is not None and np.isfinite(v)
+        side = "Buyers" if lead_buy else "Sellers"
+        other = "sellers" if lead_buy else "buyers"
+        hi = fin(wall) and wall >= float(config.IIMP_WALL_HIGH)
+        lo = fin(wall) and wall <= float(config.IIMP_WALL_LOW)
+        pbt = (" (%.2g×)" % pb) if fin(pb) else ""
+        if contra:
+            s1 = "%s pushed but lost the cycle: price closed %dt against them." % (side, abs(int(round(lmv))))
+            if hi:
+                s2 = "A heavy book at the open (%.2g×) absorbed the %s." % (wall, "buying" if lead_buy else "selling")
+            elif fin(give):
+                s2 = "%s absorbed it and drove price back %dt%s." % (other.capitalize(), int(round(give)), pbt)
+            else:
+                s2 = ""
+            return s1 + (" " + s2 if s2 else "")
+        if not fin(imp):
+            return "%s led; not enough history yet to rate the push." % side
+        if good:
+            s1 = "%s led and reached %.2g× their usual distance%s." % (
+                side, imp, " through a heavy book" if hi else (", helped by a thin book" if lo else ""))
+        else:
+            s1 = "%s led but didn't convert: %.2g× their usual reach%s." % (side, imp, ", into a heavy book" if hi else "")
+        if fin(kept) and kept <= float(config.IIMP_KEEP_LOW) and fin(give):
+            s2 = "They kept only %d%%: %s absorbed it and pushed back %dt%s." % (
+                int(round(100.0 * kept)), other, int(round(give)), pbt)
+        elif fin(kept) and kept >= float(config.IIMP_KEEP_HIGH):
+            # a short push that held reads as a contradiction if it is quoted like a strong one
+            s2 = ("They held %d%% of it to the close." % int(round(100.0 * kept)) if good
+                  else "What they did reach, they held to the close.")
+        else:
+            s2 = ""
+        return s1 + (" " + s2 if s2 else "")
+
+    def _interp_iimp(self, t, t_end_c, done, cbuy, csell, px0, px1, pxh, pxl):
+        """The I x I pane's reading of every cycle, for the Interpretation CARDS (user 2026-09-24: "add the summary
+        that i see on top (interest, impact, wall and kept) in the interpretation, and just below it ... the why"):
+        column arrays aligned with `t`, lead 0 where the pane cannot rate the cycle."""
+        n_lb = self._lb_n(); n_mn = self._lb_min_n()
+        R = self._iimp_rate(t, t_end_c, done, cbuy, csell, px0, px1, pxh, pxl, n_lb, n_mn)
+        lb = R["lead_buy"]; score = R["score"]; reach = R["reach"]
+        rated = np.isfinite(R["imb"]) & np.isfinite(score)
+        mvt = (np.asarray(px1, dtype=np.float64) - np.asarray(px0, dtype=np.float64)) / float(config.TICK_SIZE)
+        lmv = np.where(lb, mvt, -mvt)
+        with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+            kept = np.where(np.isfinite(reach) & np.isfinite(lmv) & (reach >= float(config.IIMP_KEEP_MIN_TICKS)),
+                            lmv / np.maximum(reach, 1e-9), np.nan)
+            imp = np.exp(score); pb = np.exp(R["score_pb"]); mult = 2.0 ** np.abs(R["imb"])
+        contra = rated & np.isfinite(mvt) & ((lb & (mvt < 0)) | (~lb & (mvt > 0)))
+        good = rated & (score >= 0.0)
+        nan = np.nan
+        why = np.array([self._iimp_why_short(bool(lb[i]), bool(contra[i]), bool(good[i]), float(imp[i]),
+                                             float(R["wall"][i]), float(kept[i]), float(lmv[i]),
+                                             float(R["give_pb"][i]), float(pb[i])) if rated[i] else ""
+                        for i in range(int(np.size(t)))], dtype=object)
+        return {"lead": np.where(rated, np.where(lb, 1, -1), 0), "mult": np.where(rated, mult, nan),
+                "imp": np.where(rated, imp, nan), "good": good, "wall": np.where(rated, R["wall"], nan),
+                "kept": np.where(rated, kept, nan), "contra": contra, "pb": np.where(rated, pb, nan),
+                "give": np.where(rated, R["give_pb"], nan), "why": why}
+
     @staticmethod
     def _cycle_last_bins(t_end, done, base: int, n: int):
         """Each cycle's LAST store bin, the flow store's rule (FlowStore._cross_scan, 2026-09-23): a FINISHED
@@ -23211,33 +23326,10 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         if live and not bool(done[-1]):
             form_all[-1] = True
             t_end_c[-1] = max(float(t[-1]), min(float(now), float(t_end_c[-1])))
-        dur = np.maximum(t_end_c - t, 1e-9)
-        ar_b = _interp_prev(np.maximum(cbuy, 0.0) / dur, done, n_lb, n_mn, include_open=True)
-        ar_s = _interp_prev(np.maximum(csell, 0.0) / dur, done, n_lb, n_mn, include_open=True)
-        with np.errstate(divide="ignore", invalid="ignore"):
-            imb = np.where((ar_b > 0) & (ar_s > 0) & np.isfinite(ar_b) & np.isfinite(ar_s),
-                           np.log2(np.maximum(ar_b, 1e-12) / np.maximum(ar_s, 1e-12)), np.nan)
-        # ⚠ THE BAR IS ONE SIDE'S STORY: the side the HEIGHT names owns the reach, the effort, the wall and the
-        # baseline. Using the cycle's own crossing side for the fill made a bar describe two different sides at
-        # once, and they differ on about one cycle in four (user 2026-09-16).
-        lead_buy = np.isfinite(imb) & (imb >= 0.0)
-        wall_raw = self._iimp_wall(t, lead_buy)
-        wall = self._lob_ratio(wall_raw, done, n_lb, n_mn, include_open=True)
-        own_b, secs_b = self._iimp_climb(t, t_end_c, lead_buy, done)
-        reach = np.where(lead_buy, pxh - px0, px0 - pxl) / float(config.TICK_SIZE)
-        with np.errstate(divide="ignore", invalid="ignore"):
-            y_r = np.log1p(np.maximum(reach, 0.0))
-            cb_, cd_, cw_ = config.IIMP_COEF_BUY
-            sb_, sd_, sw_ = config.IIMP_COEF_SELL
-            pred = np.where(lead_buy,
-                            cb_ * np.log(np.maximum(own_b, 1.0)) + cd_ * np.log(np.maximum(secs_b, 1.0))
-                            + cw_ * np.log1p(np.maximum(wall_raw, 0.0)),
-                            sb_ * np.log(np.maximum(own_b, 1.0)) + sd_ * np.log(np.maximum(secs_b, 1.0))
-                            + sw_ * np.log1p(np.maximum(wall_raw, 0.0)))
-            resid = y_r - pred
-        # the score: this cycle's residual against the median of the previous N cycles OF THE SAME SIDE, so a
-        # buy cycle is judged against buy cycles (the Volume and Speed panes' rule)
-        score = self._iimp_score(resid, lead_buy, done, n_lb, n_mn)
+        # every rating comes from _iimp_rate -- the one implementation LINES IMPACT and the cards read too
+        R = self._iimp_rate(t, t_end_c, done, cbuy, csell, px0, px1, pxh, pxl, n_lb, n_mn)
+        dur = R["dur"]; ar_b = R["ar_b"]; ar_s = R["ar_s"]; imb = R["imb"]; lead_buy = R["lead_buy"]
+        wall = R["wall"]; reach = R["reach"]; score = R["score"]
         keep = (done | form_all) & np.isfinite(imb) & np.isfinite(score) & (t >= vx0)
         # the forming row's AGE is in the signature: a second with no prints still stretches its duration, and
         # without it a quiet stretch would freeze the live bar until the next trade
@@ -23279,7 +23371,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         _scl = np.where(np.isfinite(score[keep]), score[keep], 0.0) / _ln2      # the leader's impact, in log2
         # ... and the OTHER side's PUSH-BACK where it did not lead (user 2026-09-24) -- it used to be a flat 1x, so a
         # side that absorbed the leader and drove price back got no credit at all
-        score_pb, give_pb = self._iimp_pb_score(t, t_end_c, done, lead_buy, px1, pxh, pxl, n_lb, n_mn)
+        score_pb, give_pb = R["score_pb"], R["give_pb"]
         _sclp = np.where(np.isfinite(score_pb[keep]), score_pb[keep], 0.0) / _ln2
         _lb = np.log2(np.maximum(ar_b[keep], 1e-12)) + np.where(up, _scl, _sclp)
         _ls = np.log2(np.maximum(ar_s[keep], 1e-12)) + np.where(~up, _scl, _sclp)
@@ -23760,25 +23852,13 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             sm_b = self._lines_smooth(_ib, rated, sm_n, n_mn)
             sm_s = self._lines_smooth(_is, rated, sm_n, n_mn)
         else:
-            wall_raw = self._iimp_wall(t, lead_buy)
-            own_b, secs_b = self._iimp_climb(t, t_end_c, lead_buy, done)
-            reach = np.where(lead_buy, pxh - px0, px0 - pxl) / float(config.TICK_SIZE)
-            with np.errstate(divide="ignore", invalid="ignore"):
-                y_r = np.log1p(np.maximum(reach, 0.0))
-                cb_, cd_, cw_ = config.IIMP_COEF_BUY
-                sb_, sd_, sw_ = config.IIMP_COEF_SELL
-                pred = np.where(lead_buy,
-                                cb_ * np.log(np.maximum(own_b, 1.0)) + cd_ * np.log(np.maximum(secs_b, 1.0))
-                                + cw_ * np.log1p(np.maximum(wall_raw, 0.0)),
-                                sb_ * np.log(np.maximum(own_b, 1.0)) + sd_ * np.log(np.maximum(secs_b, 1.0))
-                                + sw_ * np.log1p(np.maximum(wall_raw, 0.0)))
-                resid = y_r - pred
-            score = self._iimp_score(resid, lead_buy, done, n_lb, n_mn)
+            R = self._iimp_rate(t, t_end_c, done, cbuy, csell, px0, px1, pxh, pxl, n_lb, n_mn)
+            score = R["score"]
             rated = (done | form_all) & np.isfinite(imb) & np.isfinite(score)
             # EACH SIDE ON EVERY CYCLE (user 2026-09-24): its reach score where it led, its PUSH-BACK score where it
             # did not. The non-leader used to be held flat, so a side that absorbed the leader and drove price back
             # showed nothing at all. Held forward only across a cycle with no reading.
-            score_pb, _gv = self._iimp_pb_score(t, t_end_c, done, lead_buy, px1, pxh, pxl, n_lb, n_mn)
+            score_pb = R["score_pb"]
             _ln2 = float(np.log(2.0))
             _ib = np.where(lead_buy, score, score_pb) / _ln2
             _is = np.where(~lead_buy, score, score_pb) / _ln2
