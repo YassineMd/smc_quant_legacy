@@ -88,9 +88,11 @@ class DayValue:
                 vv = np.asarray(v[i0:i1], dtype=np.float64)
                 ok = np.isfinite(vv) & (vv > 0)
                 r = day_profile(hh[ok], ll[ok], vv[ok], self.rows, self.va_pct)
-                self._memo[key] = None if r is None else (r[0], r[1], r[2], i1 - i0)
-                if len(self._memo) > 20000:
+                # ⚠ bound the memo BEFORE storing: clearing it after the store (as first written) threw away the value
+                # just computed and the read below raised KeyError on the 20,001st distinct key (found by the S7 study)
+                if len(self._memo) >= 20000:
                     self._memo.clear()
+                self._memo[key] = None if r is None else (r[0], r[1], r[2], i1 - i0)
             out.append(self._memo[key])
         return out
 
