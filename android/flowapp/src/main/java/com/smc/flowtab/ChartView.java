@@ -40,8 +40,11 @@ public final class ChartView extends View {
     }
 
     public static final int PANE_PRICE = 0, PANE_FLOW = 1, PANE_LIQ = 2, PANE_IIMP = 3,
-            PANE_CINT = 4, PANE_CIMP = 5;
-    public static final int PANE_N = 6;
+            PANE_CINT = 4, PANE_CIMP = 5, PANE_WVG = 6;
+    public static final int PANE_N = 7;
+    // the order the panes STACK in, top to bottom. WANTS vs GETS sits right under INTEREST x IMPACT (user 2026-09-24)
+    // but keeps the next free INDEX, so the saved pane heights ("pane_wt", by index) stay the user's
+    private static final int[] ORDER = {PANE_PRICE, PANE_FLOW, PANE_LIQ, PANE_IIMP, PANE_WVG, PANE_CINT, PANE_CIMP};
     private final FlowModel M;
     private Host host;
     private final float d;
@@ -67,15 +70,15 @@ public final class ChartView extends View {
     private long lastViewSent = 0;
     // y fits with dead-bands, per pane
     private double pxLo = Double.NaN, pxHi = Double.NaN, flowTop = 0, liqTop = 0, iimpTop = 0;
-    private final RectF[] pane = {new RectF(), new RectF(), new RectF(), new RectF(), new RectF(), new RectF()};
+    private final RectF[] pane = {new RectF(), new RectF(), new RectF(), new RectF(), new RectF(), new RectF(), new RectF()};
     private final boolean[] paneOn = new boolean[PANE_N];
     // the panes' shares of the height (the splitter). The two LINES panes start small: they are off by
     // default, so these only matter once the user turns one on.
-    private final float[] paneWt = {0.28f, 0.30f, 0.12f, 0.18f, 0.06f, 0.06f};
+    private final float[] paneWt = {0.28f, 0.30f, 0.12f, 0.18f, 0.06f, 0.06f, 0.12f};
     private int rsUpper = -1, rsLower = -1; private float rsY0; private float rsW0, rsW1, rsTot, rsAvail;
     // each pane fits its own y until the user pans or zooms it (then it is theirs, like the terminal's
     // _px_yauto); a double tap on an axis hands every pane back to its fit
-    private final boolean[] yAuto = {true, true, true, true, true, true};
+    private final boolean[] yAuto = {true, true, true, true, true, true, true};
     private final double[] yLo = new double[PANE_N], yHi = new double[PANE_N],
             lastLo = new double[PANE_N], lastHi = new double[PANE_N];
     private final double[] lineTop = new double[PANE_N];       // each line pane's HELD y scale (0 = not yet fitted)
@@ -208,7 +211,7 @@ public final class ChartView extends View {
     private int[] boundaryAt(float x, float y) {
         if (fullscreen >= 0 || x >= plotR) return null;
         int prev = -1;
-        for (int p = 0; p < PANE_N; p++) {
+        for (int p : ORDER) {
             if (!paneOn[p]) continue;
             if (prev >= 0 && Math.abs(pane[prev].bottom - y) < 14 * d) return new int[]{prev, p};
             prev = p;
@@ -247,6 +250,10 @@ public final class ChartView extends View {
             slY0 = new float[PANE_N], slY1 = new float[PANE_N];
     private int slDrag = -1;
     public boolean showCint = false, showCimp = false;
+    public boolean showWvg = true;          // WANTS vs GETS (user 2026-09-24)
+    // its SMOOTHING SLIDER (user 2026-09-24: "add the smoothing slider"): the mean of the last N finished cycles, done
+    // HERE (the pane is the tablet's own), saved in the prefs; 1 = the raw points
+    public int smWvg = 1;
     public boolean showDomPrice = true;     // LINES IMPACT's areas on the PRICE chart (menu toggle, user 2026-09-23)
     // paints
     private final Paint pl = new Paint(Paint.ANTI_ALIAS_FLAG), pf = new Paint(Paint.ANTI_ALIAS_FLAG), pt = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -322,6 +329,7 @@ public final class ChartView extends View {
     /** The tools live on the PRICE pane: they map through its current axes. */
     public void initTools(android.content.SharedPreferences prefs, PriceTools.Events events) {
         this.prefs = prefs; loadWeights();
+        smWvg = Math.max(1, prefs.getInt("wvg_smooth", 1));
         tools = new PriceTools(d, prefs, new PriceTools.Map() {
             @Override public float xPx(double t) { return ChartView.this.xPx(t); }
             @Override public float yPx(double p) { return (float) (pxTop + (pxYh - p) / Math.max(1e-12, pxYh - pxYl) * pxHgt); }
@@ -438,12 +446,12 @@ public final class ChartView extends View {
     private void layoutPanes() {
         int W = getWidth(), H = getHeight();
         plotR = W - AXIS_W; timeY = H - TAXIS_H;
-        boolean[] on = {showPrice, showFlow, showLiq, showIimp, showCint, showCimp};
+        boolean[] on = {showPrice, showFlow, showLiq, showIimp, showCint, showCimp, showWvg};
         float[] wt = paneWt;
         if (fullscreen >= 0 && on[fullscreen]) { for (int p = 0; p < PANE_N; p++) on[p] = p == fullscreen; }
         float tot = 0; for (int p = 0; p < PANE_N; p++) if (on[p]) tot += wt[p];
         float y = 0; float avail = timeY;
-        for (int p = 0; p < PANE_N; p++) {
+        for (int p : ORDER) {
             paneOn[p] = on[p];
             if (!on[p]) { pane[p].set(0, 0, 0, 0); continue; }
             float hgt = tot > 0 ? avail * wt[p] / tot : 0;
@@ -486,6 +494,7 @@ public final class ChartView extends View {
             s.mode = M.iimpMode; s.iN = M.iN; s.iX0 = M.iX0; s.iX1 = M.iX1; s.iV = M.iV; s.iMult = M.iMult; s.iScore = M.iScore; s.iWall = M.iWall; s.iKept = M.iKept;
             s.iSbuy = M.iSbuy; s.iSsell = M.iSsell; s.iLiib = M.iLiib; s.iLiis = M.iLiis; s.iUp = M.iUp; s.iContra = M.iContra; s.iGood = M.iGood; s.iForm = M.iForm;
             s.iLyb = M.iLyb; s.iLys = M.iLys; s.iSmn = M.iSmn; s.iPback = M.iPback; s.iReach = M.iReach; s.iMv = M.iMv;
+            s.iArb = M.iArb; s.iArs = M.iArs;
             s.connected = M.connected;
             s.cint = M.cint; s.cimp = M.cimp;
             s.hlhOn = M.hlhOn && showHlh; s.hlhNote = M.hlhNote; s.hlhPics = M.hlhPics; s.hlhLabels = M.hlhLabels; s.hlhDashes = M.hlhDashes;
@@ -511,6 +520,7 @@ public final class ChartView extends View {
         if (paneOn[PANE_FLOW]) drawFlow(c, s, now);
         if (paneOn[PANE_LIQ]) drawLiq(c, s);
         if (paneOn[PANE_IIMP]) drawIimp(c, s, now);
+        if (paneOn[PANE_WVG]) drawWvg(c, s);
         if (paneOn[PANE_CINT]) drawLinesPane(c, s, PANE_CINT);
         if (paneOn[PANE_CIMP]) drawLinesPane(c, s, PANE_CIMP);
         if (showLines) drawCycleLines(c, s);
@@ -530,7 +540,7 @@ public final class ChartView extends View {
         double livePx, win, tick; int formCol, dec;
         double[] lqX; float[] lqB, lqA;
         double[] tkBuy, tkSell, tkForm;
-        String mode; int iN, iSmn; double[] iX0, iX1; float[] iV, iMult, iScore, iWall, iKept, iSbuy, iSsell, iLiib, iLiis, iLyb, iLys, iPback, iReach, iMv; byte[] iUp, iContra, iGood, iForm;
+        String mode; int iN, iSmn; double[] iX0, iX1; float[] iV, iMult, iScore, iWall, iKept, iSbuy, iSsell, iLiib, iLiis, iLyb, iLys, iPback, iReach, iMv, iArb, iArs; byte[] iUp, iContra, iGood, iForm;
         boolean connected;
         FlowModel.Lines cint, cimp;
         boolean hlhOn; String hlhNote; List<FlowModel.HlhPic> hlhPics; List<FlowModel.HlhLabel> hlhLabels; List<FlowModel.HlhDash> hlhDashes;
@@ -1257,7 +1267,7 @@ public final class ChartView extends View {
         else if (crossPane == PANE_IIMP) {
             boolean signed = "Buyer".equals(s.mode) || "Seller".equals(s.mode) || "Lines Buyer/Seller".equals(s.mode);
             vt = fmtMult(Math.pow(2, signed ? v : Math.abs(v)));
-        } else if (crossPane == PANE_CINT || crossPane == PANE_CIMP) {
+        } else if (crossPane == PANE_CINT || crossPane == PANE_CIMP || crossPane == PANE_WVG) {
             // ⚠ both LINES panes are SIGNED log2 MULTIPLES, like the axis they draw. Without this they fell
             // through to the dollar branch below and the badge read "$1.2M" over a 1.2x line (user 2026-09-23).
             // Any pane added here has to declare its units or it silently inherits dollars.
@@ -1296,6 +1306,133 @@ public final class ChartView extends View {
     // full-height block wherever one side stands at least `spread` above the other, BRIGHT where that
     // side won the gap by climbing rather than by the other falling away under it.
     // ------------------------------------------------------------------------------------------------
+    // ------------------------------------------------------------------ WANTS vs GETS (user 2026-09-24)
+    // One point per FINISHED cycle, from the I x I pane's own numbers (no new data):
+    //   WANTS = log2(buyers' interest / sellers' interest)                         -- solid blue
+    //   GETS  = log2(buyers' impact / sellers' impact), a side's impact = its reach multiple if it LED ("short push" /
+    //           "no push" = 0.25), else its PUSH-BACK multiple                     -- dashed orange
+    // both clipped to +-3; above zero = buyers, below = sellers. A red ring on the zero line marks a cycle whose two
+    // lines have OPPOSITE signs; thicker when the disagreement runs 2+ consecutive cycles.
+    private static final int WVG_WANTS = Color.parseColor("#2979ff"), WVG_GETS = Color.parseColor("#ff9100"),
+            WVG_RING = Color.parseColor("#ef4444");
+    private static final double WVG_CLIP = 3.0, WVG_SHORT = 0.25, WVG_KEEP_MIN = 4.0;   // config.IIMP_KEEP_MIN_TICKS
+
+    private void drawWvg(Canvas c, Snap s) {
+        RectF r = pane[PANE_WVG];
+        title(c, r, "WANTS vs GETS  ·  log2 buyers / sellers: interest (solid) vs impact (dashed)");
+        float top = r.top + TITLE_H, hgt = r.bottom - top;
+        double[] rg = yRange(PANE_WVG, -WVG_CLIP * 1.08, WVG_CLIP * 1.08);
+        double ylo = rg[0], yhi = rg[1], range = Math.max(1e-9, yhi - ylo);
+        notePane(PANE_WVG, top, hgt, ylo, yhi);
+        int n = s.iX0 == null ? 0 : Math.min(s.iN, s.iX0.length);
+        double[] want = new double[n], get = new double[n];
+        for (int i = 0; i < n; i++) {
+            want[i] = Double.NaN; get[i] = Double.NaN;
+            boolean formi = s.iForm != null && i < s.iForm.length && s.iForm[i] != 0;
+            if (formi) continue;
+            double ab = at(s.iArb, i), as = at(s.iArs, i);
+            if (ab > 0 && as > 0) want[i] = clip(Math.log(ab / as) / LN2);
+            double sc = at(s.iScore, i), rch = at(s.iReach, i), pb = at(s.iPback, i);
+            double lead = !Double.isNaN(rch) && rch < WVG_KEEP_MIN ? WVG_SHORT : (Double.isNaN(sc) ? Double.NaN : Math.exp(sc));
+            boolean buyLed = s.iUp != null && i < s.iUp.length && s.iUp[i] != 0;
+            double bi = buyLed ? lead : pb, si = buyLed ? pb : lead;
+            if (bi > 0 && si > 0) get[i] = clip(Math.log(bi / si) / LN2);
+        }
+        int sm = Math.max(1, smWvg);
+        want = smoothRuns(want, s.iX0, s.iX1, n, sm);
+        get = smoothRuns(get, s.iX0, s.iX1, n, sm);
+        c.save(); c.clipRect(r.left, top, r.right, r.bottom);
+        float y0 = (float) (top + yhi / range * hgt);
+        pl.setPathEffect(null); pl.setColor(cMid); pl.setStrokeWidth(1 * d);
+        c.drawLine(r.left, y0, plotR, y0, pl);
+        pt.setTypeface(Typeface.MONOSPACE); pt.setTextSize(9 * d); pt.setFakeBoldText(false); pt.setColor(cTitle);
+        c.drawText("↑ buyers", r.left + 6 * d, top + 11 * d, pt);           // the corners: the rings sit on zero
+        c.drawText("↓ sellers", r.left + 6 * d, r.bottom - 5 * d, pt);
+        // the two lines, broken where a value is missing or a cycle is missing in time
+        for (int k = 0; k < 2; k++) {
+            double[] y = k == 0 ? want : get;
+            path.reset();
+            boolean open = false; int pi = -1;
+            for (int i = 0; i < n; i++) {
+                if (Double.isNaN(y[i])) { open = false; continue; }
+                if (open && pi >= 0 && s.iX0[i] - s.iX1[pi] > 0.5) open = false;
+                float px = xPx(0.5 * (s.iX0[i] + s.iX1[i]));
+                float py = (float) (top + (yhi - y[i]) / range * hgt);
+                if (!open) { path.moveTo(px, py); open = true; } else path.lineTo(px, py);
+                pi = i;
+            }
+            pl.setStrokeWidth(1.8f * d);
+            if (k == 0) { pl.setColor(WVG_WANTS); pl.setPathEffect(null); }
+            else { pl.setColor(WVG_GETS); pl.setPathEffect(new DashPathEffect(new float[]{6 * d, 4 * d}, 0)); }
+            c.drawPath(path, pl);
+        }
+        pl.setPathEffect(null);
+        // the rings: opposite signs; thicker inside a run of 2+ consecutive (touching) disagreeing cycles
+        boolean[] dis = new boolean[n];
+        for (int i = 0; i < n; i++)
+            dis[i] = !Double.isNaN(want[i]) && !Double.isNaN(get[i]) && want[i] * get[i] < 0;
+        for (int i = 0; i < n; i++) {
+            if (!dis[i]) continue;
+            boolean prevRun = i > 0 && dis[i - 1] && s.iX0[i] - s.iX1[i - 1] <= 0.5;
+            boolean nextRun = i + 1 < n && dis[i + 1] && s.iX0[i + 1] - s.iX1[i] <= 0.5;
+            boolean run = prevRun || nextRun;
+            float px = xPx(0.5 * (s.iX0[i] + s.iX1[i]));
+            pl.setColor(WVG_RING); pl.setStrokeWidth((run ? 2.6f : 1.3f) * d);
+            c.drawCircle(px, y0, (run ? 5.5f : 4.5f) * d, pl);
+        }
+        c.restore();
+        drawSmoothSlider(c, PANE_WVG, r, sm);
+        // the axis in the pane's own words: the side, and how many times the other (log2 steps)
+        pt.setTypeface(Typeface.MONOSPACE); pt.setTextSize(9 * d); pt.setColor(cTitle);
+        pl.setColor(cSep); pl.setStrokeWidth(1 * d);
+        c.drawLine(plotR, top, plotR, r.bottom, pl);
+        int stepV = hgt / (range / 1.0) >= 16 * d ? 1 : 2;
+        for (int v = -2; v <= 2; v += stepV) {
+            float y = (float) (top + (yhi - v) / range * hgt);
+            if (y < top + 4 * d || y > r.bottom - 2 * d) continue;
+            c.drawLine(plotR, y, plotR + 4 * d, y, pl);
+            String lab = v == 0 ? "1×" : (v > 0 ? "B " : "S ") + (1 << Math.abs(v)) + "×";
+            c.drawText(lab, plotR + 7 * d, y + 3 * d, pt);
+        }
+        // the bottom-right readout: the last finished cycle
+        for (int i = n - 1; i >= 0; i--) {
+            if (Double.isNaN(want[i]) && Double.isNaN(get[i])) continue;
+            String txt = String.format(Locale.US, "wants %s  ·  gets %s%s%s", sideMult(want[i]), sideMult(get[i]), dis[i] ? "  ·  they disagree" : "",
+                    sm > 1 ? "  ·  " + sm + "-cycle mean" : "");
+            pt.setTypeface(Typeface.MONOSPACE); pt.setTextSize(10 * d);
+            pt.setColor(dis[i] ? WVG_RING : cTitle);
+            c.drawText(txt, plotR - pt.measureText(txt) - 6 * d, r.bottom - 5 * d, pt);
+            break;
+        }
+    }
+
+    /** The mean of the last N valid points, restarted where a cycle is missing in time (the line breaks there too).
+     *  N = 1 returns the points untouched. */
+    private static double[] smoothRuns(double[] y, double[] x0, double[] x1, int n, int N) {
+        if (N <= 1) return y;
+        double[] out = new double[n];
+        double[] buf = new double[N];
+        int cnt = 0, head = 0, prev = -1; double sum = 0;
+        for (int i = 0; i < n; i++) {
+            out[i] = Double.NaN;
+            if (Double.isNaN(y[i])) continue;
+            if (prev >= 0 && x0[i] - x1[prev] > 0.5) { cnt = 0; head = 0; sum = 0; }
+            if (cnt == N) { sum -= buf[head]; } else cnt++;
+            buf[head] = y[i]; sum += y[i]; head = (head + 1) % N;
+            out[i] = sum / cnt; prev = i;
+        }
+        return out;
+    }
+
+    private static double at(float[] a, int i) { return (a == null || i >= a.length || a[i] < -900f) ? Double.NaN : a[i]; }
+
+    private static double clip(double v) { return Math.max(-WVG_CLIP, Math.min(WVG_CLIP, v)); }
+
+    private static String sideMult(double v) {
+        if (Double.isNaN(v)) return "-";
+        return v >= 0 ? "buyers " + fmtMult(Math.pow(2, v)) : "sellers " + fmtMult(Math.pow(2, -v));
+    }
+
     private void drawLinesPane(Canvas c, Snap s, int p) {
         boolean imp = (p == PANE_CIMP);
         FlowModel.Lines L = imp ? s.cimp : s.cint;
@@ -1541,7 +1678,7 @@ public final class ChartView extends View {
             for (int p = 0; p < PANE_N; p++) {
                 if (!paneOn[p] || slX1[p] <= slX0[p]) continue;
                 if (p == PANE_IIMP && !"Lines Buyer/Seller".equals(M.iimpMode)) continue;
-                if (p != PANE_IIMP && p != PANE_CINT && p != PANE_CIMP) continue;
+                if (p != PANE_IIMP && p != PANE_CINT && p != PANE_CIMP && p != PANE_WVG) continue;
                 if (x >= slX0[p] && x <= slX1[p] && y >= slY0[p] && y <= slY1[p]) { slDrag = p; break; }
             }
             if (slDrag < 0) return false;
@@ -1551,6 +1688,10 @@ public final class ChartView extends View {
             float x0 = slX0[slDrag] + 8 * d, x1 = slX1[slDrag] - 8 * d;
             int lo = Math.max(1, M.smoothMin), hi = Math.max(lo + 1, M.smoothMax);
             int v = lo + Math.round((hi - lo) * Math.max(0f, Math.min(1f, (x - x0) / Math.max(1f, x1 - x0))));
+            if (slDrag == PANE_WVG) {                               // WANTS vs GETS smooths here, not in the engine
+                if (v != smWvg) { smWvg = v; if (prefs != null) prefs.edit().putInt("wvg_smooth", v).apply(); invalidate(); }
+                return true;
+            }
             String k = slDrag == PANE_IIMP ? "iimp" : (slDrag == PANE_CINT ? "cint" : "cimp");
             int cur = slDrag == PANE_IIMP ? M.smIimp : (slDrag == PANE_CINT ? M.smCint : M.smCimp);
             if (v != cur) {
