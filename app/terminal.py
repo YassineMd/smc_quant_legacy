@@ -22977,11 +22977,12 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         return {"rows": rows, "refs": refs, "merged": merged, "now": now_ref, "hour_ago": hour_ref, "blocs": blocs,
                 "hlh": "on"}
 
-    def _auction_snapshot_build(self, ctx, sel=None) -> dict:
+    def _auction_snapshot_build(self, ctx, sel=None, max_cycles=None) -> dict:
         """THE AUCTION SNAPSHOT: today's and the multi-day value, the recent summary, the newest cycles in the
         auction's words -- from the context the last feed read kept (_auction_ctx). `sel` = the start of the cycle
         the user marked (tablet card / candle): that row carries "user_selected", and a marked cycle older than the
-        newest AUCTION_SNAPSHOT_CYCLES is added on its own. Descriptive: everything in it is what the panes show."""
+        newest `max_cycles` (default AUCTION_SNAPSHOT_CYCLES) is added on its own; never older than the feed's own
+        window (the cycles before it are only the baseline). Descriptive: everything in it is what the panes show."""
         from . import auction as AU
         t, t_end_c, done, px0, px1, pxh, pxl, ii, au, now = ctx
         tick = float(config.TICK_SIZE)
@@ -22989,7 +22990,11 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         rnd = lambda v, d=2: (round(float(v), d) if fin(v) else None)
         iso = lambda s: time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(float(s)))
         n = int(np.size(t))
-        k0 = max(0, n - int(config.AUCTION_SNAPSHOT_CYCLES))
+        k0 = max(0, n - int(config.AUCTION_SNAPSHOT_CYCLES if max_cycles is None else max_cycles))
+        _s0 = self.__dict__.get("_interp_show0")
+        if _s0 is not None and n:
+            k0 = max(k0, int(np.searchsorted(np.asarray(t, dtype=np.float64), float(_s0) - 1e-6, side="left")))
+        k0 = min(k0, max(0, n - 1))
         ksel = None
         if sel is not None and n:
             _j = int(np.argmin(np.abs(np.asarray(t, dtype=np.float64) - float(sel))))
@@ -23074,18 +23079,21 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                              for c_ in snap.get("cycles_oldest_first") or [])
         return top[:-1].rstrip() + ',\n "cycles_oldest_first": [\n  ' + lines + "\n ]\n}\n"
 
-    def _auction_snapshot_write(self) -> None:
-        """config.AUCTION_SNAPSHOT_PATH (what /auction-read fetches), atomically, at most every AUCTION_SNAPSHOT_SECS."""
+    def _auction_snapshot_write(self, force: bool = False) -> None:
+        """config.AUCTION_SNAPSHOT_PATH -- what the Claude CONNECTOR (android/auction_mcp.py) and /auction-read read --
+        atomically, at most every AUCTION_SNAPSHOT_SECS (force = now). The whole feed window (AUCTION_FILE_CYCLES
+        cap), and the cycle marked on the tablet (_auction_mark, set by the engine's "mark" command)."""
         ctx = self.__dict__.get("_auction_ctx")
         if ctx is None:
             return
         now = float(ctx[-1])
-        if now - float(self.__dict__.get("_auction_snap_t", 0.0)) < float(config.AUCTION_SNAPSHOT_SECS):
+        if not force and now - float(self.__dict__.get("_auction_snap_t", 0.0)) < float(config.AUCTION_SNAPSHOT_SECS):
             return
         self._auction_snap_t = now
         import os as _os
         try:
-            txt = self._auction_snapshot_text(self._auction_snapshot_build(ctx))
+            txt = self._auction_snapshot_text(self._auction_snapshot_build(
+                ctx, sel=self.__dict__.get("_auction_mark"), max_cycles=int(config.AUCTION_FILE_CYCLES)))
             path = str(config.AUCTION_SNAPSHOT_PATH)
             _os.makedirs(_os.path.dirname(path), exist_ok=True)
             tmp = path + ".tmp"
@@ -23094,6 +23102,12 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             _os.replace(tmp, path)
         except Exception as ex:
             print("AUCTION SNAPSHOT: %s" % ex)
+
+    def _auction_mark_set(self, t0=None) -> None:
+        """The cycle the user marked on the tablet (a card or a candle; None = cleared). The file is rewritten at once,
+        so "explain the cycle I marked" in the Claude app reads the mark of the moment, not of 20 s ago."""
+        self._auction_mark = None if t0 is None else float(t0)
+        self._auction_snapshot_write(force=True)
 
     def _auction_share(self, sel=None) -> dict:
         """THE "SEND TO CLAUDE" PACK (user 2026-09-24: "my tablet can communicate the info with the Claude app"): the
@@ -23104,7 +23118,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         ctx = self.__dict__.get("_auction_ctx")
         if ctx is None:
             raise RuntimeError("no cycles read yet -- the Interpretation feed has not run")
-        snap = self._auction_snapshot_build(ctx, sel=sel)
+        snap = self._auction_snapshot_build(ctx, sel=sel, max_cycles=int(config.AUCTION_SNAPSHOT_CYCLES))
         try:
             with open(str(config.AUCTION_PROMPT_PATH), encoding="utf-8") as fh:
                 prompt = fh.read()

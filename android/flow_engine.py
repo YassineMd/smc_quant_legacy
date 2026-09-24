@@ -37,6 +37,8 @@ WIRE (newline-delimited JSON; arrays are base64 of little-endian float32 unless 
   <- tog     {k, v}                                                         k: lines | hlh | bigplayer | takeover
   <- explain {k}                                                            k = the cycle's start (x0)
   <- claude  {id, sel?}                                                     sel = the marked cycle's start (x0)
+  <- mark    {t0 | null}                                                    the marked card / candle changed: kept in the
+             snapshot FILE the Claude connector reads (android/auction_mcp.py)
 Exit codes: 2 = no daemon."""
 import os, sys, time, json, shutil, tempfile, socket, threading, queue, base64, argparse, traceback, math, zlib
 
@@ -824,6 +826,13 @@ def on_cmd(c):
         _i = w.__dict__.get("_flow_bf_inflight")
         send({"t": "bfstate", "queue": _q, "inflight": [float(_i[0]), float(_i[1])] if _i else None,
               "rev_hist": int(getattr(w._flow, "rev_hist", -1)), "span": list(w._flow.span() or [])})
+    elif k == "mark":
+        # the user marked (or cleared) a cycle on the tablet: the Claude CONNECTOR's "the cycle I marked" (2026-09-24)
+        try:
+            v = c.get("t0")
+            w._auction_mark_set(float(v) if v is not None else None)
+        except Exception:
+            traceback.print_exc()
     elif k == "claude":
         # THE "SEND TO CLAUDE" BUTTON (user 2026-09-24: "my tablet can communicate the info with the Claude app on
         # my tablet"): the tablet shares a screenshot + this pack with the Claude app. Built fresh on the GUI thread

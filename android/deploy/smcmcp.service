@@ -1,0 +1,28 @@
+# /etc/systemd/system/smcmcp.service -- the Claude app's CONNECTOR (android/auction_mcp.py), 2026-09-24
+# Read-only MCP server on 127.0.0.1:8770; Caddy (HTTPS, secret path) is the only way in. See android/FLOW_VM.md.
+[Unit]
+Description=SMC Auction MCP server (read-only, 127.0.0.1:8770, behind Caddy) for the Claude app connector
+After=network-online.target smcflow.service
+
+[Service]
+User=yassine_mdouari
+WorkingDirectory=/home/yassine_mdouari/smcflow
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/yassine_mdouari/mcpvenv/bin/python android/auction_mcp.py --port 8770
+Restart=always
+RestartSec=5
+# the daemon and the engine come first on this box
+MemoryMax=250M
+CPUWeight=20
+# it only READS two files: nothing else is writable to it
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

@@ -105,7 +105,7 @@ public final class MainActivity extends Activity implements EngineClient.Listene
             }
             return false;
         });
-        interp.setListener(r -> chart.focusCycle(r.t0, r.t1));
+        interp.setListener(r -> { chart.focusCycle(r.t0, r.t1); markChanged(); });
         root = new FrameLayout(this);
         root.setBackgroundColor(Color.parseColor("#141414"));
         root.addView(row, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
@@ -151,6 +151,8 @@ public final class MainActivity extends Activity implements EngineClient.Listene
         feed.sendToggle("hlh", chart.showHlh);
         feed.sendToggle("bigplayer", chart.showBp);
         feed.sendToggle("bw", bw);
+        markKnown = false;                          // the engine may have restarted: tell it the mark again
+        if (interp != null) markChanged();
     }
 
     /** Chart Style + which top-right buttons show: Simple BW themes every pane, the feed and the ground. */
@@ -347,7 +349,19 @@ public final class MainActivity extends Activity implements EngineClient.Listene
         divider.setVisibility(interp.getVisibility());
     }
 
-    @Override public void onCycleTap(double t0) { interp.select(t0); }
+    @Override public void onCycleTap(double t0) { interp.select(t0); markChanged(); }
+
+    /** The marked cycle (interp.selT0) goes to the engine whenever it changes -- the Claude connector's "the cycle I
+     *  marked". Sent only on a change, and again on every reconnect (sendToggles). */
+    private double markSent = Double.NaN;
+    private boolean markKnown = false;
+    private void markChanged() {
+        double m = interp.selT0;
+        boolean same = markKnown && (Double.isNaN(m) ? Double.isNaN(markSent) : (!Double.isNaN(markSent) && Math.abs(m - markSent) < 1e-6));
+        if (same) return;
+        markSent = m; markKnown = true;
+        feed.sendMark(m);
+    }
 
     @Override public void onSmooth(String kind, int n) { feed.sendSmooth(kind, n); }
 

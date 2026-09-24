@@ -82,6 +82,16 @@ public final class EngineClient extends Thread {
         try { JSONObject o = new JSONObject(); o.put("t", "explain"); o.put("k", k); send(o); } catch (Exception ignored) { }
     }
 
+    /** The marked card / candle changed (NaN = cleared): the engine keeps it in the snapshot the Claude connector
+     *  reads, so "explain the cycle I marked" works from the Claude app. */
+    public void sendMark(double t0) {
+        try {
+            JSONObject o = new JSONObject(); o.put("t", "mark");
+            o.put("t0", Double.isNaN(t0) ? JSONObject.NULL : (Object) t0);
+            send(o);
+        } catch (Exception ignored) { }
+    }
+
     /** The "send to Claude" button: ask the engine for the reading instructions + a fresh auction snapshot. sel = the
      *  marked cycle's start (NaN = none). The reply carries the same id. */
     public void sendClaude(int id, double sel) {

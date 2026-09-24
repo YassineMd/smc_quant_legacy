@@ -94,6 +94,35 @@ echo 'vm.swappiness=10' | sudo tee /etc/sysctl.d/99-swap.conf
 safety net the daemon box has had since 2026-08-24. After it: 1,101 MB used, 2 GB swap free, disk 64%,
 tablet redrawing at 8-9 ms a frame. If it wedges again the next step is fewer layers on the engine (HLH and
 Big Player are the heavy ones) or e2-medium.
+## The Claude connector (2026-09-24)
+
+The Claude app reads the live market itself through a **custom connector** (a remote MCP server) on this box:
+
+```
+Claude (Anthropic's servers) --HTTPS--> Caddy :443  --/<secret>/mcp only-->  smcmcp 127.0.0.1:8770  --reads-->  data/auction_snapshot.json
+                                         (everything else: 404)                (android/auction_mcp.py)          app/auction_read_prompt.md
+```
+
+- **Data**: the engine rewrites `data/auction_snapshot.json` every 20 s (`terminal._auction_snapshot_write`,
+  the feed's whole 6 h window, <= 400 cycles), with or without a tablet connected, and AT ONCE when the tablet's
+  marked card / candle changes (`{"t":"mark"}` -> `_auction_mark_set`).
+- **smcmcp.service** (`android/deploy/smcmcp.service`): `/home/yassine_mdouari/mcpvenv` (mcp 1.30.0, 65 MB, its own
+  venv), stateless Streamable HTTP, plain JSON, 127.0.0.1 only, read-only systemd sandbox, ~53 MB RSS. Four
+  read-only tools: `get_reading_instructions`, `get_auction_snapshot(last_n_cycles)`, `get_marked_cycle`,
+  `get_cycle(time_utc)`.
+- **Caddy 2.6.2** (Debian package, `caddy.service`): `/etc/caddy/Caddyfile` from `android/deploy/Caddyfile.template`,
+  root:caddy 0640, no access log. Host `34-155-14-220.sslip.io` (sslip.io resolves it to the reserved IP); Let's
+  Encrypt certificate obtained and renewed by Caddy (ports 80/443 = the VM's `http-server` / `https-server` tags).
+  The Debian default config is kept as `/etc/caddy/Caddyfile.debian-default`.
+- **The secret** lives ONLY in `/etc/caddy/Caddyfile` (`sudo grep -o '/[^ ]*/mcp' /etc/caddy/Caddyfile | head -1`).
+  The connector URL is `https://34-155-14-220.sslip.io/<secret>/mcp`. **Rotate** it: new token -> re-render the
+  template -> `sudo caddy validate --adapter caddyfile --config /etc/caddy/Caddyfile` -> `sudo systemctl reload caddy`
+  -> update the connector's URL in Claude's settings. **Turn it off**: `sudo systemctl disable --now smcmcp caddy`.
+- **Update the server**: `gcloud compute scp android/auction_mcp.py smc-quant-eu:/home/yassine_mdouari/smcflow/android/`
+  then `sudo systemctl restart smcmcp`. Test from anywhere:
+  `curl -s -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' https://34-155-14-220.sslip.io/<secret>/mcp`
+- If the IP ever changes, the hostname changes with it (`<a-b-c-d>.sslip.io`): edit the Caddyfile and the connector URL.
+
 ## Known limits
 
 - The engine pings the client every 10 s from a thread of its own, because its GUI thread can stall for tens of

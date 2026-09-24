@@ -165,7 +165,8 @@ AUCTION_SNAPSHOT_PATH = os.path.join(PROJECT_DIR, "data", "auction_snapshot.json
 # by the engine for the Claude app and by the /auction-read skill
 AUCTION_PROMPT_PATH = os.path.join(ROOT_DIR, "auction_read_prompt.md")
 AUCTION_SNAPSHOT_SECS = 20.0        # written at most this often
-AUCTION_SNAPSHOT_CYCLES = 80        # the newest this many cycles go in it
+AUCTION_SNAPSHOT_CYCLES = 80        # the newest this many cycles go in a "send to Claude" share
+AUCTION_FILE_CYCLES = 400           # ... and in the FILE the Claude connector reads (the whole feed window, capped)
 AUCTION_ACTIVE_MIN = 1.0            # a side is ACTIVE at or above its own normal aggressive $/s
 AUCTION_SUMMARY_N = 12              # the recent stretch the summary counts over (finished rated cycles)
 FOOTPRINTS_FILE = os.path.join(DATA_DIR, "server_footprints.json")  # legacy JSON (migration source)
