@@ -67,7 +67,6 @@ public final class MainActivity extends Activity implements EngineClient.Listene
         chart.showIimp = prefs.getBoolean("iimp", true);
         chart.showCint = prefs.getBoolean("cint", false);   // new panes, off until the user asks
         chart.showCimp = prefs.getBoolean("cimp", false);
-        chart.showWvg = prefs.getBoolean("wvg", true);        // WANTS vs GETS (user 2026-09-24)
         chart.showDomPrice = prefs.getBoolean("domprice", true);
         chart.showTakeover = prefs.getBoolean("takeover", true);
         chart.showHlh = prefs.getBoolean("hlh", false);
@@ -289,7 +288,6 @@ public final class MainActivity extends Activity implements EngineClient.Listene
         toggle(col, "Buy/Sell Flow", "flow", chart.showFlow, v -> chart.showFlow = v);
         toggle(col, "Limit orders", "liq", chart.showLiq, v -> chart.showLiq = v);
         toggle(col, "Interest × Impact", "iimp", chart.showIimp, v -> chart.showIimp = v);
-        toggle(col, "Wants vs Gets", "wvg", chart.showWvg, v -> chart.showWvg = v);
         toggle(col, "Lines Interest", "cint", chart.showCint, v -> chart.showCint = v);
         toggle(col, "Lines Impact", "cimp", chart.showCimp, v -> chart.showCimp = v);
         toggle(col, "Interpretation", "interp", interp.getVisibility() == View.VISIBLE, v -> { interp.setVisibility(v && chart.getFullscreen() < 0 ? View.VISIBLE : View.GONE); divider.setVisibility(interp.getVisibility()); });
