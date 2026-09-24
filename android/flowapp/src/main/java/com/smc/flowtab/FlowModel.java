@@ -469,6 +469,20 @@ public final class FlowModel {
         synchronized (lock) { bpOn = on; bpSw = m.optBoolean("sw", false); bpLmax = m.optInt("lmax", 60); bpBub = bub; bpDia = dia; version++; }
     }
 
+    // the MARKET POSITION FADE (user 2026-09-24): the newest HLH day bloc, as the engine's "hvp" sends it (tick_hvp)
+    public boolean hvpOn = false; public double hvpLo = Double.NaN, hvpHi = Double.NaN; public int hvpDir = 0;
+    public String hvpName = "";
+
+    public void onHvp(JSONObject m) {
+        boolean on = m.optBoolean("on", false);
+        synchronized (lock) {
+            hvpOn = on;
+            hvpLo = on ? m.optDouble("lo", Double.NaN) : Double.NaN; hvpHi = on ? m.optDouble("hi", Double.NaN) : Double.NaN;
+            hvpDir = on ? m.optInt("dir", 0) : 0; hvpName = on ? m.optString("name", "") : "";
+            version++;
+        }
+    }
+
     public void onExplain(JSONObject m) {
         synchronized (lock) { explainK = m.optDouble("k"); explainHtml = m.optString("html", ""); version++; }
     }

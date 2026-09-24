@@ -26,6 +26,7 @@ public final class PriceTools {
         float xPx(double t); float yPx(double p); double xVal(float px); double yVal(float py);
         RectF pane(); float plotRight(); double tick(); int dec(); double now(); double live();
         float viewRight(); int tzOff(); boolean bw();
+        int hvpFade();                               // -1 fade BUY, +1 fade SELL, 0 neither (fadeFor)
     }
     public interface Events { void toast(String msg); void changed(); }
 
@@ -372,6 +373,20 @@ public final class PriceTools {
         c.restore();
     }
 
+    /** THE MARKET POSITION FADE (user 2026-09-24: "fade buy button if market went below the recent HLH VP or even
+     *  created a lower HLH VP / fade sell button if market went above or even created a higher HLHVP"), against the
+     *  NEWEST HLH day bloc (the engine's tick_hvp): -1 = fade BUY, +1 = fade SELL, 0 = neither.
+     *  Outside the bloc the PRICE decides: under its low fades BUY, over its high fades SELL (low / high = its candles'
+     *  lowest low / highest high, the user's choice). Inside it, how the bloc was CREATED decides: dir -1 = its POC
+     *  under the previous bloc's VAL fades BUY, +1 = over the previous VAH fades SELL. "The latest move wins": never
+     *  both. A faded button still places its bracket -- the fade is a warning, not a lock. */
+    public static int fadeFor(double px, double lo, double hi, int dir) {
+        if (Double.isNaN(px) || Double.isNaN(lo) || Double.isNaN(hi)) return 0;
+        if (px < lo) return -1;
+        if (px > hi) return 1;
+        return dir < 0 ? -1 : (dir > 0 ? 1 : 0);
+    }
+
     /** The toolbar (top left of the pane) and the BUY / SELL pair (bottom left), on top of everything. */
     public void drawButtons(Canvas c) {
         RectF r = m.pane();
@@ -393,10 +408,16 @@ public final class PriceTools {
         if (showMarket) {
             float w = 54 * d, h = 22 * d, y = r.bottom - h - 6 * d, xr = m.viewRight() - 6 * d;
             sellBtn.set(xr - w, y, xr, y + h); buyBtn.set(xr - 2 * w - 5 * d, y, xr - w - 5 * d, y + h);
-            pf.setColor(Color.parseColor("#1e8f5a")); c.drawRoundRect(buyBtn, 4 * d, 4 * d, pf);
-            pf.setColor(Color.parseColor("#b63a3a")); c.drawRoundRect(sellBtn, 4 * d, 4 * d, pf);
-            pt.setColor(Color.WHITE); pt.setTextSize(10 * d);
+            int fade = m.hvpFade();
+            boolean bwg = m.bw();                        // faded = gray, dimmer text, on either ground
+            int fFill = bwg ? Color.parseColor("#d4d4d4") : Color.parseColor("#3a3d42");
+            int fText = bwg ? Color.parseColor("#9a9a9a") : Color.parseColor("#80868b");
+            pf.setColor(fade < 0 ? fFill : Color.parseColor("#1e8f5a")); c.drawRoundRect(buyBtn, 4 * d, 4 * d, pf);
+            pf.setColor(fade > 0 ? fFill : Color.parseColor("#b63a3a")); c.drawRoundRect(sellBtn, 4 * d, 4 * d, pf);
+            pt.setTextSize(10 * d);
+            pt.setColor(fade < 0 ? fText : Color.WHITE);
             c.drawText("\u25b2 BUY", buyBtn.left + (w - pt.measureText("\u25b2 BUY")) / 2, y + 15 * d, pt);
+            pt.setColor(fade > 0 ? fText : Color.WHITE);
             c.drawText("\u25bc SELL", sellBtn.left + (w - pt.measureText("\u25bc SELL")) / 2, y + 15 * d, pt);
         } else { buyBtn.setEmpty(); sellBtn.setEmpty(); }
         pt.setFakeBoldText(false);

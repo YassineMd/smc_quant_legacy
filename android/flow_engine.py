@@ -29,6 +29,9 @@ WIRE (newline-delimited JSON; arrays are base64 of little-endian float32 unless 
   -> hlh     {on, note, pics: [{k, x0, x1, ops?}], labels, dashes}         the HLH Volume Profile geometry (a pic's
              ops are sent once per pic identity; the tablet keeps them by k) -- see RecPainter
   -> bp      {on, sw, bub: [[x, price, usd, side, px]], dia: [[x, lo, hi, usd, buy, px]], lmax}  Big Player marks
+  -> hvp     {on, name, lo, hi, poc, prev, dir}                             the NEWEST HLH day bloc: its low / high, and
+             dir = -1 created LOWER (its POC under the previous bloc's VAL), +1 HIGHER (over its VAH), 0 neither --
+             the tablet fades the Market Position BUY / SELL against it (see tick_hvp)
   <- hi      {}                                                             first line from the tablet
   <- view    {x0, x1, follow}                                               the tablet's x range (epoch seconds)
   <- mode    {v}                                                            the I x I dropdown
@@ -399,6 +402,7 @@ class State:
     iimp_id = None; interp_id = None; liq_sig = None; tko_id = None
     lines_sig = {"cint": None, "cimp": None}   # the two split panes, each keyed on what it last sent
     hlh_out = None; hlh_t = 0.0; hlh_xm = None; hlh_pics = {}
+    hvp_sent = None           # the last "hvp" payload (resent only when it changes)
     bw = True                 # the tablet's Chart Style: the HLH labels are built for a white or a dark ground
     bp_sig = None
     view = None; follow = True
@@ -660,6 +664,7 @@ def tick_hlh(now):
         if S.hlh_out is not False:
             S.hlh_out = False; S.hlh_pics = {}
             send({"t": "hlh", "on": False})
+        tick_hvp(None, False, now)
         return
     if now - S.hlh_t < 1.0:
         return
@@ -678,6 +683,7 @@ def tick_hlh(now):
     # the terminal keeps its own "POC acceptance areas" option exactly as the user has it, and nothing about the
     # blocs, the POC line, the merges or the colours changes -- the option is display-only by design.
     out = st.build("tab", S.hlh_xm, bloc, not S.bw, week_on, now, badges=bdg, tables=tab, poc_runs=False, bars=bars)
+    tick_hvp(st, week_on, now)
     if out is S.hlh_out:
         return
     S.hlh_out = out
@@ -694,6 +700,45 @@ def tick_hlh(now):
                int(lb.fg.rgba()), lb.font] for lb in out[1]]
     dashes = [[round(d.xa, 3), round(d.xb, 3), round(d.y, 5), int(d.col.rgba())] for d in out[3]]
     send({"t": "hlh", "on": True, "note": out[2], "pics": pics, "labels": labels, "dashes": dashes})
+
+
+def tick_hvp(st, week_on, now):
+    """THE MARKET POSITION FADE (user 2026-09-24: "fade buy button if market went below the recent HLH VP or even
+    created a lower HLH VP / fade sell button if market went above or even created a higher HLHVP"). Sent here: the
+    NEWEST HLH day bloc -- the drawn row whose candles end latest -- with its LOW / HIGH (its candles' lowest low /
+    highest high: the user's choice over VAL / VAH or the outer VA), its POC, and how it was CREATED against the
+    bloc before it: dir -1 = lower (its POC under the previous bloc's VAL), +1 = higher (over the previous VAH), 0 =
+    neither (the user's choice over any POC shift). The tablet compares its own live price every frame
+    (PriceTools.fadeFor): outside the bloc the price decides, inside it dir does -- "the latest move wins" (the
+    user's choice over fading both when the two disagree). Day blocs only: the week toggle's blocs span the week.
+    st None / HLH off / no bloc -> {"on": false}, both buttons plain."""
+    msg = {"t": "hvp", "on": False}
+    try:
+        if st is not None:
+            rows = [m for pk in st.periods(week_on, now) if not pk[0] for m in (pk[5] or ())]
+            ok = [m for m in rows if m is not None and m.tB is not None and m.bLo is not None and m.bHi is not None
+                  and m.vah is not None and m.val is not None]
+            if ok:
+                ok.sort(key=lambda m: (float(m.tB), float(m.tA) if m.tA is not None else 0.0))
+                rec = ok[-1]
+                prev = ok[-2] if len(ok) > 1 else None
+                poc = _hlh.H.bloc_poc(rec)
+                dr = 0
+                if prev is not None and poc is not None:
+                    if float(poc) < float(prev.val):
+                        dr = -1
+                    elif float(poc) > float(prev.vah):
+                        dr = 1
+                msg = {"t": "hvp", "on": True, "name": str(rec.name), "lo": float(rec.bLo), "hi": float(rec.bHi),
+                       "poc": float(poc) if poc is not None else None,
+                       "prev": str(prev.name) if prev is not None else None, "dir": dr}
+    except Exception:
+        traceback.print_exc()
+        msg = {"t": "hvp", "on": False}
+    if msg != S.hvp_sent:
+        S.hvp_sent = msg
+        send(msg)
+        log("hvp %s" % ({k: v for k, v in msg.items() if k != "t"},))
 
 
 def tick_bp(now):
@@ -761,7 +806,7 @@ def on_cmd(c):
             cl.ready = True
         S.bins_sent = None; S.cyc_full_needed = True; S.iimp_id = None; S.interp_id = None; S.liq_sig = None; S.tko_id = None
         S.lines_sig = {"cint": None, "cimp": None}
-        S.hlh_out = None; S.hlh_pics = {}; S.bp_sig = None
+        S.hlh_out = None; S.hlh_pics = {}; S.bp_sig = None; S.hvp_sent = None
         hello()
         log("hi from the tablet -- sending everything")
     elif k == "view":
