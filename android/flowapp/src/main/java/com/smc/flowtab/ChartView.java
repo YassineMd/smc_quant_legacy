@@ -517,6 +517,7 @@ public final class ChartView extends View {
         drawSelection(c, s, now);
         drawCrosshair(c, s);
         drawTimeAxis(c);
+        drawCrossClock(c);
         drawGrips(c);
         if (!s.connected) {
             pt.setTextSize(13 * d); pt.setColor(cTitle); pt.setTypeface(Typeface.MONOSPACE);
@@ -1264,7 +1265,16 @@ public final class ChartView extends View {
             vt = fmtMult(Math.pow(2, v));
         } else vt = (v < 0 ? "-" : "") + usdShort(Math.abs(v));
         tagBadge(c, plotR, crossY, vt, 1.0f, 0.5f);
-        // the CLOCK badge at the bottom of the hovered pane
+    }
+
+    /** The crosshair's CLOCK badge, on the time strip at the very BOTTOM whichever pane the pen is over (user
+     *  2026-09-24: "it should show at the very bottom, currently it shows at the price chart" -- it sat at the foot of
+     *  the hovered pane). Painted after the time axis so the axis labels do not cover it. */
+    private void drawCrossClock(Canvas c) {
+        if (!crossOn || !crossBadges || Double.isNaN(crossX) || fullscreen >= 0 && !paneOn[fullscreen]) return;
+        if (crossPane < 0 || !paneOn[crossPane]) return;
+        float cx = xPx(crossX);
+        if (cx < 0 || cx > plotR) return;
         int tz; synchronized (M.lock) { tz = M.tzOff; }
         java.util.Calendar cal = tz == Integer.MIN_VALUE ? java.util.Calendar.getInstance()
                 : java.util.Calendar.getInstance(new java.util.SimpleTimeZone(tz * 1000, "PC"));
@@ -1273,7 +1283,7 @@ public final class ChartView extends View {
                 new String[]{"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"}[cal.get(java.util.Calendar.DAY_OF_WEEK) - 1],
                 cal.get(java.util.Calendar.DAY_OF_MONTH), cal.get(java.util.Calendar.YEAR),
                 cal.get(java.util.Calendar.HOUR_OF_DAY), cal.get(java.util.Calendar.MINUTE));
-        if (cx >= 0 && cx <= plotR) tagBadge(c, cx, r.bottom, xt, 0.5f, 1.0f);
+        tagBadge(c, cx, timeY + TAXIS_H * 0.5f, xt, 0.5f, 0.5f);
     }
 
     /** The terminal's TextItem badge: #141414 on #dcdcdc, anchored by (ax, ay) as pyqtgraph anchors are. */
