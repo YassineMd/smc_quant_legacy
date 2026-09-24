@@ -156,6 +156,14 @@ if getattr(sys, "frozen", False):
 else:
     PROJECT_DIR = os.path.dirname(ROOT_DIR)
 DATA_DIR = os.path.join(PROJECT_DIR, "data")
+# THE AUCTION SNAPSHOT (layer 1 of the user's auction reading, 2026-09-24): what /auction-read hands a Claude conversation
+# -- today's and the multi-day value, the recent summary, the last cycles in the auction's words. A FIXED path under the
+# project (the tablet engine runs on a temp DATA_DIR): on the VM /home/yassine_mdouari/smcflow/data/, here data/.
+AUCTION_SNAPSHOT_PATH = os.path.join(PROJECT_DIR, "data", "auction_snapshot.json")
+AUCTION_SNAPSHOT_SECS = 20.0        # written at most this often
+AUCTION_SNAPSHOT_CYCLES = 80        # the newest this many cycles go in it
+AUCTION_ACTIVE_MIN = 1.0            # a side is ACTIVE at or above its own normal aggressive $/s
+AUCTION_SUMMARY_N = 12              # the recent stretch the summary counts over (finished rated cycles)
 FOOTPRINTS_FILE = os.path.join(DATA_DIR, "server_footprints.json")  # legacy JSON (migration source)
 HISTORY_DB = os.path.join(DATA_DIR, "history.db")  # SQLite state store (instant rehydration)
 

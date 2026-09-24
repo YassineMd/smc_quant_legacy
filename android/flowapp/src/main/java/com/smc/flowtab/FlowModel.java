@@ -89,6 +89,10 @@ public final class FlowModel {
         public int iLead; public boolean iGood, iContra; public String iWhy = "";
         public double iMult = Double.NaN, iImp = Double.NaN, iWall = Double.NaN, iKept = Double.NaN, iPb = Double.NaN, iGive = Double.NaN;
         public double iReach = Double.NaN, iLmv = Double.NaN; public boolean iShort;     // a push under 4 ticks (2026-09-24)
+        // the AUCTION reading (layer 1, 2026-09-24): zone vs today's / the multi-day value (-1 = none), ticks from
+        // each POC, each side's label, the cycle in one phrase. hasAuction = the engine sent it at all.
+        public boolean hasAuction; public int aZone = -1, aMzone = -1; public double aDist = Double.NaN, aMdist = Double.NaN;
+        public String aBuy = "", aSell = "", aVerdict = "";
     }
     private static double num(JSONObject o, String k) {
         return (o == null || o.isNull(k) || !o.has(k)) ? Double.NaN : o.optDouble(k, Double.NaN);
@@ -384,6 +388,14 @@ public final class FlowModel {
                     row.iMult = num(x, "i_mult"); row.iImp = num(x, "i_imp"); row.iWall = num(x, "i_wall");
                     row.iKept = num(x, "i_kept"); row.iPb = num(x, "i_pb"); row.iGive = num(x, "i_give");
                     row.iReach = num(x, "i_reach"); row.iLmv = num(x, "i_lmv"); row.iShort = x.optBoolean("i_short", false);
+                    row.hasAuction = x.has("a_zone");
+                    if (row.hasAuction) {
+                        row.aZone = x.optInt("a_zone", -1); row.aMzone = x.optInt("a_mzone", -1);
+                        row.aDist = num(x, "a_dist"); row.aMdist = num(x, "a_mdist");
+                        row.aBuy = x.isNull("a_buy") ? "" : x.optString("a_buy", "");
+                        row.aSell = x.isNull("a_sell") ? "" : x.optString("a_sell", "");
+                        row.aVerdict = x.isNull("a_verdict") ? "" : x.optString("a_verdict", "");
+                    }
                 }
                 out.add(row);
             }

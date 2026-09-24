@@ -20803,6 +20803,29 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                                   push_min=float(config.ABSORB_PUSH_MIN_TICKS),
                                   reject_weak=float(config.ABSORB_REJECT_WEAK),
                                   iimp=({_kk: _v[k] for _kk, _v in _ii.items()} if _ii is not None else None))
+        # LAYER 1 OF THE AUCTION READING (2026-09-24): each card gets its location against today's / the multi-day
+        # value and both sides' activity; the whole read goes to the /auction-read snapshot
+        if _ii is not None:
+            try:
+                _au = self._interp_auction(t, t_end_c, done, px0, px1, pxh, pxl, _ii, now)
+            except Exception as _ex:
+                _au = None
+                print("AUCTION: %s" % _ex)
+            if _au is not None:
+                _pos = {round(float(t[_q]), 3): int(_q) for _q in k.tolist()}
+                for _r in rows:
+                    _q = _pos.get(round(float(_r[0]), 3))
+                    if _q is None or not isinstance(_r[13], dict):
+                        continue
+                    _a = _au["rows"][_q]
+                    _r[13].update({"a_zone": -1 if _a["zone"] is None else int(_a["zone"]),
+                                   "a_mzone": -1 if _a["mzone"] is None else int(_a["mzone"]),
+                                   "a_dist": float(_a["dist"]), "a_mdist": float(_a["mdist"]),
+                                   "a_buy": _a["buy"], "a_sell": _a["sell"], "a_verdict": _a["verdict"]})
+                try:
+                    self._auction_snapshot_write(t, t_end_c, done, px0, px1, pxh, pxl, _ii, _au, now)
+                except Exception as _ex:
+                    print("AUCTION SNAPSHOT: %s" % _ex)
         p.setRows(self._interp_bright_demote(rows))
 
     def _stack_axis_sync(self) -> None:
@@ -22918,7 +22941,120 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 "imp": np.where(rated, imp, nan), "good": good, "wall": np.where(rated, R["wall"], nan),
                 "kept": np.where(rated, kept, nan), "contra": contra, "pb": np.where(rated, pb, nan),
                 "give": np.where(rated, R["give_pb"], nan), "why": why,
-                "reach": np.where(rated, reach, nan), "lmv": np.where(rated, lmv, nan), "short": rated & short}
+                "reach": np.where(rated, reach, nan), "lmv": np.where(rated, lmv, nan), "short": rated & short,
+                "ib": np.where(rated, R["ar_b"], nan), "is": np.where(rated, R["ar_s"], nan)}
+
+    def _interp_auction(self, t, t_end_c, done, px0, px1, pxh, pxl, ii, now):
+        """LAYER 1 OF THE AUCTION READING (user 2026-09-24, app/auction.py): each cycle against TODAY's value (the
+        day's HLH profile as it stood when the cycle started) and the MULTI-DAY value (the latest HLH bloc merged
+        across finished days), and each side's activity as responsive / initiative, effective / absorbed / quiet.
+        Returns None while the HLH layer is OFF (its klines feed is never started from here) or its klines are not
+        in hand. The HLH overlay is asked with the week toggle it is drawn with, so the two readers share one cache."""
+        from . import auction as AU
+        _tg = self._hlh_toggles()
+        if not bool(_tg[0]):
+            return None
+        st = self._hlh_state()
+        week_on = bool(_tg[1])
+        st.ensure_feeds(week_on, now)
+        pers = st.periods(week_on, now)
+        f = st.feeds.get(config.HLH_DAY_TF)
+        cd = f.snapshot() if f is not None else None
+        if cd is None or len(cd) == 0:
+            return None
+        ks = float(config.TF_SECONDS.get(config.HLH_DAY_TF, 60))
+        dv = self.__dict__.get("_auction_dv")
+        if dv is None:
+            dv = self._auction_dv = AU.DayValue(rows=int(config.HLH_ROWS), va_pct=float(config.HLH_VA_PCT),
+                                                tz=str(config.HLH_TZ), kline_secs=ks)
+        refs = dv.at(cd.t, cd.h, cd.l, cd.v, t)                       # the value each cycle STARTED against
+        day = [pk for pk in pers if not pk[0]]
+        fin_rows = [m for pk in day[:-1] for m in (pk[5] or [])]
+        merged = AU.merged_value(fin_rows)
+        mid = 0.5 * (np.asarray(pxh, dtype=np.float64) + np.asarray(pxl, dtype=np.float64))
+        rows = AU.classify(mid, refs, merged, ii["ib"], ii["is"], ii["lead"], ii["good"], ii["pb"], ii["give"],
+                           float(config.TICK_SIZE), active_min=float(config.AUCTION_ACTIVE_MIN),
+                           give_min=float(config.IIMP_KEEP_MIN_TICKS))
+        now_ref = dv.at(cd.t, cd.h, cd.l, cd.v, [now + ks])[0]
+        hour_ref = dv.at(cd.t, cd.h, cd.l, cd.v, [now - 3600.0 + ks])[0]
+        blocs = AU.blocs_value(day[-1][5]) if day else []
+        return {"rows": rows, "refs": refs, "merged": merged, "now": now_ref, "hour_ago": hour_ref, "blocs": blocs}
+
+    def _auction_snapshot_write(self, t, t_end_c, done, px0, px1, pxh, pxl, ii, au, now) -> None:
+        """THE AUCTION SNAPSHOT for /auction-read (config.AUCTION_SNAPSHOT_PATH): today's and the multi-day value, the
+        recent summary, the newest cycles in the auction's words. Written atomically, at most every
+        AUCTION_SNAPSHOT_SECS. Descriptive: everything in it is what the panes already show."""
+        if now - float(self.__dict__.get("_auction_snap_t", 0.0)) < float(config.AUCTION_SNAPSHOT_SECS):
+            return
+        self._auction_snap_t = now
+        import json as _json
+        import os as _os
+        from . import auction as AU
+        tick = float(config.TICK_SIZE)
+        fin = lambda v: v is not None and np.isfinite(v)
+        rnd = lambda v, d=2: (round(float(v), d) if fin(v) else None)
+        iso = lambda s: time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(float(s)))
+        n = int(np.size(t))
+        k0 = max(0, n - int(config.AUCTION_SNAPSHOT_CYCLES))
+        cyc = []
+        for k in range(k0, n):
+            a = au["rows"][k]
+            ld = int(ii["lead"][k])
+            rt = au["refs"][k]
+            cyc.append({
+                "start_utc": iso(t[k]), "dur_s": int(round(float(t_end_c[k]) - float(t[k]))), "finished": bool(done[k]),
+                "open": rnd(px0[k]), "high": rnd(pxh[k]), "low": rnd(pxl[k]), "close": rnd(px1[k]),
+                "move_ticks": (int(round((float(px1[k]) - float(px0[k])) / tick)) if fin(px1[k]) and fin(px0[k]) else None),
+                "today_poc_then": rnd(rt[0]) if rt else None,
+                "today_zone": AU.ZONES[a["zone"]] if a["zone"] is not None else None,
+                "ticks_from_today_poc": (int(round(a["dist"])) if fin(a["dist"]) else None),
+                "multi_day_zone": AU.ZONES[a["mzone"]] if a["mzone"] is not None else None,
+                "ticks_from_multi_day_poc": (int(round(a["mdist"])) if fin(a["mdist"]) else None),
+                "interest_buyers_x": rnd(ii["ib"][k]), "interest_sellers_x": rnd(ii["is"][k]),
+                "leader": ("buyers" if ld > 0 else "sellers") if ld != 0 else None,
+                "leader_impact": (self._iimp_impact_txt(float(ii["imp"][k]), float(ii["reach"][k]), bool(ii["short"][k]))
+                                  if ld != 0 else None),
+                "leader_converted": bool(ii["good"][k]) if ld != 0 else None,
+                "leader_reach_ticks": (int(round(float(ii["reach"][k]))) if fin(ii["reach"][k]) else None),
+                "leader_kept": (self._iimp_kept_txt(float(ii["kept"][k]), float(ii["reach"][k]), float(ii["lmv"][k]))
+                                if ld != 0 else None),
+                "price_went_against_leader": bool(ii["contra"][k]) if ld != 0 else None,
+                "other_side_push_back": (("%.2gx (%dt)" % (float(ii["pb"][k]), int(round(float(ii["give"][k])))))
+                                         if fin(ii["pb"][k]) and fin(ii["give"][k]) else None),
+                "wall_vs_normal_x": rnd(ii["wall"][k]),
+                "buyers": a["buy"], "sellers": a["sell"], "auction": a["verdict"],
+                "why": str(ii["why"][k] or "")})
+        nr = au.get("now"); hr = au.get("hour_ago"); mg = au.get("merged")
+        today = None
+        if nr:
+            today = {"poc": rnd(nr[0]), "vah": rnd(nr[1]), "val": rnd(nr[2]), "minutes_of_profile": int(nr[3]),
+                     "poc_60min_ago": rnd(hr[0]) if hr else None,
+                     "poc_moved_ticks_last_hour": (int(round((nr[0] - hr[0]) / tick)) if hr else None),
+                     "blocs": [{"name": b["name"], "poc": rnd(b["poc"]), "vah": rnd(b["vah"]), "val": rnd(b["val"]),
+                                "from_utc": iso(b["tA"]) if b["tA"] else None,
+                                "to_utc": iso(b["tB"]) if b["tB"] else None,
+                                "merged": b["merged"], "days": b["days"], "tag": b["tag"]}
+                               for b in (au.get("blocs") or [])]}
+        multi = None
+        if mg:
+            multi = {"poc": rnd(mg["poc"]), "vah": rnd(mg["vah"]), "val": rnd(mg["val"]), "bloc": mg["name"],
+                     "days": mg["days"], "from_utc": iso(mg["tA"]) if mg.get("tA") else None, "to_utc": iso(mg["tB"])}
+        lp = self._engine_live_px()
+        snap = {"generated_utc": iso(now), "symbol": str(config.SYMBOL), "tick": tick,
+                "live_price": rnd(lp) if lp is not None else None,
+                "cycle_lookback_n": int(self._lb_n()),
+                "value": {"today": today, "multi_day": multi},
+                "summary": AU.summary(au["rows"], t, t_end_c, now, last_n=int(config.AUCTION_SUMMARY_N)),
+                "cycles_oldest_first": cyc}
+        try:
+            path = str(config.AUCTION_SNAPSHOT_PATH)
+            _os.makedirs(_os.path.dirname(path), exist_ok=True)
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                _json.dump(snap, fh, indent=1, allow_nan=False, ensure_ascii=False)
+            _os.replace(tmp, path)
+        except Exception as ex:
+            print("AUCTION SNAPSHOT: %s" % ex)
 
     @staticmethod
     def _cycle_last_bins(t_end, done, base: int, n: int):
