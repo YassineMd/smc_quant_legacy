@@ -32,9 +32,17 @@ calls; it appends to `study/cycle_archive/logs/`.
 | `colours` | each candle's cached state colour on the PRICE pane |
 | `badges` | the Takeover marks **as the terminal drew them** (+1 buy, −1 sell) |
 | `recomputed` | the same rule recomputed from the harvested numbers — `meta.takeover` compares the two |
-| `walls`, `books` | both sides' resting $ at each cycle's open, and the book means over it |
+| `wall_grid`, `wall_prov` | **the canonical 15 s wall grid** the terminal's I×I reads: every column of the window, `(col, ask $, bid $, mid)` at `IIMP_WALL_RADIUS` (column `k` covers `[k·15 s, (k+1)·15 s)`), and the columns still provisional. Recompute any cycle's wall under any cycle rule: column `floor(t/15) − 1`, asks for a buy cycle, bids for a sell one (`load_cycles.wall_at`) |
+| `walls` | both sides' resting $ at each cycle's open, read from that grid by the terminal's own `_iimp_wall` |
+| `books` | always empty since 2026-09-23 (the per-cycle book cache was retired) |
 | `bin_buy, bin_sell, bin_px, bin_pxh, bin_pxl` | the store's 1-second bins (bin `i` is second `meta.bin_base + i`) — the price path for first-touch TP / SL |
 | `meta` | rule constants, lookback, flow window, commit, the walk's log |
+
+⚠ **Harvests before 2026-09-24** read a per-cycle wall cache the terminal retired on 2026-09-23: from then on they saved
+no walls, and they read their oldest views before the wall grid had reached back there. From 2026-09-24 the collector
+waits for the whole grid first and saves it. ⚠ **`cycles_20260921_203803`** was taken before the flow-bins double-count
+fix (2026-09-22): checked against clean data, its 09-21 19:00 UTC hour holds exactly 2× the $ (prices unaffected);
+its first ~45 h (09-18 20:38 → 09-20 17:46) cannot be checked against anything.
 
 ## Load it
 
@@ -44,6 +52,7 @@ A = load_archive(verbose=True)     # one row per cycle, harvests merged, coverag
 ```
 
 `python study/cycle_archive/load_cycles.py --pull` first mirrors the bucket into `data/` (additive).
+`load_wall_grid()` merges the harvests' wall grids (a final reading beats a provisional one) and lists the gaps.
 
 A cycle seen by several harvests is taken from the one where it sits deepest past that harvest's window start. **Gaps
 are listed and must be excluded from any test** — a mark that could not be drawn is a missing signal, not a quiet tape.

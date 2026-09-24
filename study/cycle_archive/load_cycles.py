@@ -7,10 +7,17 @@ strategy test needs before it starts -- coverage, gaps, and how much the same cy
     python study/cycle_archive/load_cycles.py            # print the report
     python study/cycle_archive/load_cycles.py --pull     # first mirror gs://.../cycles/ into data/ (additive)
 
-MERGE RULE. Harvests overlap (each is the daemon's rolling 72 h). A cycle seen by several is taken from the harvest in
-which it sits DEEPEST past that harvest's own window start: its baselines (the previous N cycles, the previous N
-same-side cycles) then stand on the most history, and a number read a few hours into a window is the one the live
-terminal would have shown. The first `lookback` hours of every harvest carry no pane rows at all, by construction.
+MERGE RULE. Harvests overlap (each is the daemon's rolling 72 h). A cycle seen by several is taken from a harvest
+whose WALL GRID was complete when its views were read (2026-09-24 on; the earlier collector read its oldest views before
+the grid had reached them, and 22 of 793 shared cycles came out different), and among those from the one in which it
+sits DEEPEST past that harvest's own window start: its baselines (the previous N cycles, the previous N same-side
+cycles) then stand on the most history, and a number read a few hours into a window is the one the live terminal would
+have shown. The first `lookback` hours of every harvest carry no pane rows at all, by construction.
+
+⚠ The pane numbers are those of the harvest's OWN commit (cycle rule, impact coefficients): harvests before 2026-09-23
+used the old cycle rule and harvests before the 2026-09-24 refit the old coefficients -- their numbers differ from later
+ones for the SAME cycle (all 73 shared cycles of the 09-21 and 09-24 harvests do). A test must stay within one rule, or
+recompute every number from the harvested 1 s bins and wall grid.
 
 ⚠ A GAP is any stretch no harvest covered with pane rows. Cycles there are in the table (from the uncapped reads of
 the neighbouring harvests, where those reach) but have no interest x impact numbers -- and a Takeover mark that could
@@ -56,6 +63,7 @@ def load_archive(verbose=False):
     spans = []
     for hi, (f, z, meta) in enumerate(hs):
         cols = cols or list(meta["iimp_cols"])
+        quality = 1 if meta.get("wall_grid_complete") else 0
         a0 = float(meta["store"][0])
         ci = {c: i for i, c in enumerate(meta["iimp_cols"])}
         R = z["iimp"]
@@ -74,8 +82,8 @@ def load_archive(verbose=False):
                 seen.setdefault(k, []).append((hi, float(r[ci["liib"]]), float(r[ci["liis"]])))
             depth = float(t[j]) - a0
             cur = rows.get(k)
-            # a row WITH pane numbers beats one without; among equals the deeper one wins
-            rank = (1 if r is not None else 0, depth)
+            # a row WITH pane numbers beats one without; then a harvest with a complete wall grid; then the deeper one
+            rank = (1 if r is not None else 0, quality, depth)
             if cur is None or rank > cur[0]:
                 rows[k] = (rank, hi, tuple(float(z[c][j]) for c in CYC), r, colr.get(k, -9), bdg.get(k, 0))
     ks = sorted(rows)
@@ -124,7 +132,58 @@ def load_archive(verbose=False):
     return out
 
 
+def load_wall_grid(verbose=False):
+    """Every harvest's 15 s WALL GRID merged: {"col", "ask", "bid", "mid"} arrays sorted by column (column k covers
+    [k*C, (k+1)*C)), "C", "radius", and "gaps" (runs of missing columns, in unix seconds). A FINAL reading beats a
+    provisional one; among equals the later harvest wins. A cycle's wall is the terminal's rule: column floor(t / C) - 1,
+    asks for a buy cycle, bids for a sell one (see wall_at). Harvests before 2026-09-24 carry no grid."""
+    best = {}
+    C = None; radius = None
+    for hi, (f, z, meta) in enumerate(_harvests()):
+        if "wall_grid" not in z.files or not z["wall_grid"].size:
+            continue
+        C = float(meta.get("wall_col_secs", 15.0)) if C is None else C
+        radius = int(meta.get("wall_radius", 25)) if radius is None else radius
+        prov = set(int(k) for k in z["wall_prov"]) if "wall_prov" in z.files else set()
+        for k, ask, bid, mid in z["wall_grid"]:
+            k = int(k)
+            rank = (0 if k in prov else 1, hi)
+            if k not in best or rank > best[k][0]:
+                best[k] = (rank, float(ask), float(bid), float(mid))
+    ks = sorted(best)
+    out = {"col": np.array(ks, dtype=np.int64), "C": C, "radius": radius}
+    for i, nm in enumerate(("ask", "bid", "mid")):
+        out[nm] = np.array([best[k][i + 1] for k in ks], dtype=np.float64)
+    gaps = []
+    for a, b in zip(ks[:-1], ks[1:]):
+        if b - a > 1:
+            gaps.append(((a + 1) * C, b * C))
+    out["gaps"] = gaps
+    if verbose:
+        hms = lambda x: time.strftime("%Y-%m-%d %H:%M", time.gmtime(x))
+        print("WALL GRID: %d columns%s; gaps: %s" % (len(ks), "" if not ks else " %s -> %s UTC" % (hms(ks[0] * C), hms((ks[-1] + 1) * C)),
+              "none" if not gaps else "; ".join("%s -> %s" % (hms(a), hms(b)) for a, b in gaps)))
+    return out
+
+
+def wall_at(grid, t, is_buy):
+    """The far side's resting $ at each cycle's OPEN from a merged grid -- the terminal's _iimp_wall rule."""
+    tt = np.asarray(t, dtype=np.float64)
+    out = np.full(tt.size, np.nan)
+    if not grid["col"].size:
+        return out
+    cols = np.floor(tt / grid["C"]).astype(np.int64) - 1
+    j = np.searchsorted(grid["col"], cols)
+    ok = (j < grid["col"].size) & (grid["col"][np.minimum(j, grid["col"].size - 1)] == cols)
+    jj = j[ok]
+    val = np.where(np.asarray(is_buy, bool)[ok], grid["ask"][jj], grid["bid"][jj])
+    val[grid["mid"][jj] <= 0] = np.nan
+    out[ok] = val
+    return out
+
+
 if __name__ == "__main__":
     if "--pull" in sys.argv:
         pull()
     load_archive(verbose=True)
+    load_wall_grid(verbose=True)

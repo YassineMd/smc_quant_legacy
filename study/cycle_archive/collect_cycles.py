@@ -17,8 +17,12 @@ WHAT ONE HARVEST HOLDS (one immutable .npz per run, never rewritten -- merging i
   * colours  each cycle candle's cached STATE colour on the PRICE pane (breakout buy / sell, absorbed, neutral)
   * badges   the TAKEOVER marks exactly as the terminal drew them -- the terminal's own signal record -- and the same rule
              recomputed here from the harvested numbers, with the two compared (gate 1 of the honest-test gates)
-  * walls    both sides' resting $ at every cycle's open, and the book means over it, so an impact score can be
-             recomputed later even under a changed rule
+  * wall_grid THE CANONICAL 15 s WALL GRID the terminal's I x I reads (user 2026-09-24): every column of the store,
+             (column, ask $, bid $, mid) at IIMP_WALL_RADIUS -- so a cycle's wall can be recomputed later under ANY cycle
+             rule, not only at the starts this harvest saw. Filled COMPLETELY before the walk reads a single view.
+  * walls    both sides' resting $ at every cycle's open, read from that grid by the terminal's own _iimp_wall
+             (⚠ harvests before 2026-09-24 read a per-cycle cache the terminal retired on 2026-09-23: from then on
+             they saved NO walls, and their early views could be read before the grid had reached them)
   * bins     the store's 1-second bins: buy $, sell $, last / high / low price -- the price path for first-touch TP / SL
              resolution, finer than the 1 m the gates ask for
   * meta     the rule's constants, the lookback, the flow window, the commit, the walk's log
@@ -190,6 +194,32 @@ OVER = float(ARGS.overlap_mins) * 60.0
 A0 = A + LB + 600.0
 if _short:
     A0 = max(A0, B - float(ARGS.hours) * 3600.0)
+
+# ------------------------------------------------------------------ 1b) THE WALL GRID, complete BEFORE any view is read
+# The grid fills from the live edge BACKWARDS, paced, and only as far back as the views seen (+ one lookback): so the
+# first view goes to the OLDEST end (that sets how far back it must reach), and nothing is read until every column of
+# the store has landed and no request is in flight. A harvest that read its early views first rated those cycles with
+# no wall at all.
+C_W = float(config.IIMP_WALL_COL_SECS)
+w._flow_follow = False; w._flow_last_set = (A0, min(A0 + STEP, B + 120.0))
+w.vb.setXRange(A0, min(A0 + STEP, B + 120.0), padding=0.0)
+_tw = time.time(); _last_log = 0.0; grid_ok = False
+while time.time() - _tw < 900.0:
+    spin(1.0)
+    _now = time.time()
+    _kmin = w._wall_kmin(_now, A)
+    _lo = w.__dict__.get("_wall_lo"); _hi = w.__dict__.get("_wall_hi")
+    _klive = int((_now - float(config.IIMP_WALL_LIVE_LAG)) // C_W) - 1
+    if _lo is not None and _hi is not None and _lo <= _kmin + 1 and _hi >= _klive - 4 and w.__dict__.get("_wall_req") is None:
+        grid_ok = True
+        break
+    if _now - _last_log > 30.0:
+        _last_log = _now
+        log("wall grid: %s -> %s, %d columns (wants from %s)" % ("-" if _lo is None else hms(_lo * C_W),
+            "-" if _hi is None else hms((_hi + 1) * C_W), len(w._wall_grid), hms((_kmin + 1) * C_W)))
+log("wall grid %s in %.0f s: %d columns, %s -> %s" % ("COMPLETE" if grid_ok else "TIMED OUT (saved as far as it got)",
+    time.time() - _tw, len(w._wall_grid), hms(min(w._wall_grid) * C_W) if w._wall_grid else "-",
+    hms((max(w._wall_grid) + 1) * C_W) if w._wall_grid else "-"))
 a = A0
 while a < B - 60.0:
     b = min(a + STEP, B + 120.0)
@@ -258,9 +288,15 @@ while a < B - 60.0:
     a = b
 
 # ------------------------------------------------------------------ 3) the walls, the bins
-wall_k = sorted(w._iimp_wall_cache); book_k = sorted(w._iimp_book_cache)
-walls = np.array([[k, w._iimp_wall_cache[k][0], w._iimp_wall_cache[k][1]] for k in wall_k], dtype=np.float64).reshape(-1, 3)
-books = np.array([[k, w._iimp_book_cache[k][0], w._iimp_book_cache[k][1]] for k in book_k], dtype=np.float64).reshape(-1, 3)
+# the WHOLE canonical grid (every column the store's window holds), and each cycle's wall read from it by the
+# terminal's own reader -- asks for the buy side, bids for the sell side, column floor(t / C) - 1
+_gk = sorted(w._wall_grid)
+wall_grid = np.array([[k, w._wall_grid[k][0], w._wall_grid[k][1], w._wall_grid[k][2]] for k in _gk], dtype=np.float64).reshape(-1, 4)
+wall_prov = np.array(sorted(int(k) for k in w._wall_prov), dtype=np.int64)
+_ask = w._iimp_wall(t, np.ones(int(t.size), bool)); _bid = w._iimp_wall(t, np.zeros(int(t.size), bool))
+_okw = np.isfinite(_ask) & np.isfinite(_bid)
+walls = np.column_stack([t[_okw], _ask[_okw], _bid[_okw]]).astype(np.float64).reshape(-1, 3)
+books = np.zeros((0, 3), dtype=np.float64)          # _iimp_book_cache: retired with the per-cycle wall cache (2026-09-23)
 st = w._flow
 bin_secs = float(st.bin); bin_base = int(st._base)
 b_buy = np.asarray(st._buy, dtype=np.float32).copy(); b_sell = np.asarray(st._sell, dtype=np.float32).copy()
@@ -305,6 +341,9 @@ both = sum(1 for k in drawn if mine.get(k) == drawn[k])
 only_drawn = sorted(k for k in drawn if mine.get(k) != drawn[k]); only_mine = sorted(k for k in mine if drawn.get(k) != mine[k])
 _nocol = sorted(k for k in rows if k not in colours)
 log("pane rows without a candle colour: %d of %d%s" % (len(_nocol), len(rows), "" if not _nocol else " (last at %s)" % hms(_nocol[-1])))
+_rows_wall = int(np.sum(np.isfinite(R[:, ci["wall"]]))) if R.size else 0
+log("pane rows WITH a wall reading: %d of %d | cycles with a wall at the open: %d of %d | grid columns %d (%d provisional)"
+    % (_rows_wall, int(R.shape[0]), int(walls.shape[0]), int(t.size), int(wall_grid.shape[0]), int(wall_prov.size)))
 log("TAKEOVER: drawn by the terminal %d (buy %d / sell %d) | recomputed here %d | agree %d | drawn only %d | recomputed only %d"
     % (len(drawn), sum(1 for v in drawn.values() if v > 0), sum(1 for v in drawn.values() if v < 0), len(mine), both, len(only_drawn), len(only_mine)))
 
@@ -319,6 +358,11 @@ meta = {"harvested_utc": stamp, "harvested_unix": time.time(), "store": [A, B], 
         "cycles": int(t.size), "cycles_finished": int(np.sum(done)), "iimp_rows": int(R.shape[0]),
         "iimp_cols": list(F_NUM + F_FLAG), "colour_cols": ["t", "colour"], "badge_cols": ["t", "side"],
         "wall_cols": ["t", "ask_usd", "bid_usd"], "book_cols": ["t", "bid_mean", "ask_mean"],
+        "wall_source": "grid", "wall_grid_cols": ["col", "ask_usd", "bid_usd", "mid"],
+        "wall_col_secs": C_W, "wall_radius": int(config.IIMP_WALL_RADIUS), "wall_grid_complete": bool(grid_ok),
+        "wall_grid_columns": int(wall_grid.shape[0]), "wall_provisional": int(wall_prov.size),
+        "wall_fixes": int(w.__dict__.get("_wall_fixes", 0)), "iimp_rows_with_wall": _rows_wall,
+        "books_note": "retired 2026-09-23 with the per-cycle wall cache: always empty from this collector on",
         "bin_secs": bin_secs, "bin_base": bin_base, "bins": int(b_buy.size),
         "steps": [[float(x[0]), float(x[1]), bool(x[2]), int(x[3]), int(x[4]), int(x[5])] for x in steps],
         "book_timeouts": int(sum(1 for x in steps if not x[2])), "rows_without_colour": len(_nocol),
@@ -337,12 +381,12 @@ np.savez_compressed(
     colours=np.array([[k, colours[k]] for k in sorted(colours)], dtype=np.float64).reshape(-1, 2),
     badges=np.array([[k, drawn[k]] for k in sorted(drawn)], dtype=np.float64).reshape(-1, 2),
     recomputed=np.array([[k, mine[k]] for k in sorted(mine)], dtype=np.float64).reshape(-1, 2),
-    walls=walls, books=books, bin_buy=b_buy, bin_sell=b_sell, bin_px=b_px, bin_pxh=b_pxh, bin_pxl=b_pxl,
+    walls=walls, books=books, wall_grid=wall_grid, wall_prov=wall_prov, bin_buy=b_buy, bin_sell=b_sell, bin_px=b_px, bin_pxh=b_pxh, bin_pxl=b_pxl,
     meta=np.array(json.dumps(meta)))
 json.dump(meta, open(f_json, "w"), indent=1)
-log("saved %s (%.1f MB): %d cycles, %d pane rows (%.0f%% of finished), %d colours, %d walls, %d one-second bins"
+log("saved %s (%.1f MB): %d cycles, %d pane rows (%.0f%% of finished), %d colours, %d walls, %d grid columns, %d one-second bins"
     % (os.path.basename(f_npz), os.path.getsize(f_npz) / 1e6, int(t.size), int(R.shape[0]),
-       100.0 * R.shape[0] / max(1, int(np.sum(done))), len(colours), int(walls.shape[0]), int(b_buy.size)))
+       100.0 * R.shape[0] / max(1, int(np.sum(done))), len(colours), int(walls.shape[0]), int(wall_grid.shape[0]), int(b_buy.size)))
 rc = 0
 if not ARGS.no_upload and not _short:
     gs = shutil.which("gsutil") or shutil.which("gsutil.cmd")
