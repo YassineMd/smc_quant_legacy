@@ -29,14 +29,11 @@ WIRE (newline-delimited JSON; arrays are base64 of little-endian float32 unless 
   -> hlh     {on, note, pics: [{k, x0, x1, ops?}], labels, dashes}         the HLH Volume Profile geometry (a pic's
              ops are sent once per pic identity; the tablet keeps them by k) -- see RecPainter
   -> bp      {on, sw, bub: [[x, price, usd, side, px]], dia: [[x, lo, hi, usd, buy, px]], lmax}  Big Player marks
-  -> claude  {id, ok, prompt, snap, gen, hlh, live, sel | err}             the "send to Claude" pack: the reading
-             instructions (app/auction_read_prompt.md) + a FRESH auction snapshot (JSON text)
   <- hi      {}                                                             first line from the tablet
   <- view    {x0, x1, follow}                                               the tablet's x range (epoch seconds)
   <- mode    {v}                                                            the I x I dropdown
   <- tog     {k, v}                                                         k: lines | hlh | bigplayer | takeover
   <- explain {k}                                                            k = the cycle's start (x0)
-  <- claude  {id, sel?}                                                     sel = the marked cycle's start (x0)
   <- mark    {t0 | null}                                                    the marked card / candle changed: kept in the
              snapshot FILE the Claude connector reads (android/auction_mcp.py)
 Exit codes: 2 = no daemon."""
@@ -833,20 +830,6 @@ def on_cmd(c):
             w._auction_mark_set(float(v) if v is not None else None)
         except Exception:
             traceback.print_exc()
-    elif k == "claude":
-        # THE "SEND TO CLAUDE" BUTTON (user 2026-09-24: "my tablet can communicate the info with the Claude app on
-        # my tablet"): the tablet shares a screenshot + this pack with the Claude app. Built fresh on the GUI thread
-        # (this runs inside engine_tick), so it is the market of the tap, not of the last 20 s file write.
-        rid = c.get("id")
-        sel = c.get("sel")
-        try:
-            pk = w._auction_share(float(sel) if sel is not None else None)
-            send({"t": "claude", "id": rid, "ok": True, "prompt": pk["prompt"], "snap": pk["snap"], "gen": pk["gen"],
-                  "hlh": pk["hlh"], "live": pk["live"], "sel": pk["sel"]})
-            log("claude pack sent (%d + %d chars, hlh %s, sel %s)" % (len(pk["prompt"]), len(pk["snap"]), pk["hlh"], pk["sel"]))
-        except Exception as ex:
-            traceback.print_exc()
-            send({"t": "claude", "id": rid, "ok": False, "err": str(ex)})
     elif k == "explain":
         L = w.__dict__.get("_iimp_last")
         kx = float(c.get("k", 0))

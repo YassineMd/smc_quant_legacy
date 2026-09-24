@@ -1,10 +1,9 @@
 # Reading my SOLUSDT auction — instructions
 
-I trade SOLUSDT (Binance futures, tick 0.01) and read the market as an AUCTION. With this file you get:
-
-- **a screenshot** of my SMC Flow tablet at the same moment (when the share came from the tablet), and
-- **the data snapshot** at the end of this file: JSON computed by my terminal. Its numbers are exact. Use the
-  screenshot for shape and context, and the numbers for everything you state.
+I trade SOLUSDT (Binance futures, tick 0.01) and read the market as an AUCTION. You read it from **the data
+snapshot**: JSON computed by my terminal, refreshed every 20 s (through the SMC Auction connector, or the file
+`auction_snapshot.json`). Its numbers are exact: use them for everything you state. You do not see my screen;
+section 2 describes it so you know what I mean when I name a pane, a colour or a mark.
 
 If I add a question, answer it using all of this. If I don't, give the read described in section 5.
 
@@ -25,7 +24,7 @@ If I add a question, answer it using all of this. If I don't, give the read desc
 - That is why I measure **interest** (a side's aggressive $/s against its own last N cycles) and **impact** (how
   far it moved price against its usual reach, given the time, the dollars and the resting orders it met).
 
-## 2. The screen (the screenshot)
+## 2. My screen (the SMC Flow tablet)
 
 Left, top to bottom (panes can be hidden, so check which ones are there):
 - **PRICE**: one candle per **flow cycle**. A cycle starts each time the buy-flow and sell-flow lines cross, so
@@ -109,7 +108,7 @@ Left, top to bottom (panes can be hidden, so check which ones are there):
 - Read the numbers, not only the labels. A label is a summary. Check it against interest, conversion, kept and
   push-back before leaning on it.
 - The zones use each cycle's MID price. A cycle straddling the POC can flip zone by a few ticks.
-- If the screenshot and the data disagree, say so, and trust the data.
+- If what I describe from my screen and the data disagree, say so, and trust the data.
 
 ## 5. The read (when I don't ask something specific)
 

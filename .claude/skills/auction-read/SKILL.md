@@ -6,14 +6,14 @@ description: Read the live SOLUSDT auction from the terminal's AUCTION SNAPSHOT 
 # /auction-read -- describe the auction, now
 
 The reading instructions (the user's doctrine, the screen, every field, the rules, the output format) live in ONE
-file shared with the tablet's "send to Claude" button: **`app/auction_read_prompt.md`**. Read it first and follow
-it. This route has no screenshot -- only the data.
+file, shared with the Claude app's SMC Auction connector (`android/auction_mcp.py`): **`app/auction_read_prompt.md`**.
+Read it first and follow it. There is no screenshot -- only the data.
 
 ## Get the snapshot (read-only; nothing else)
 
 Try in this order, and say which one you used and how old its `generated_utc` is:
 
-1. **Pasted** -- if the user pasted JSON, or shared a file from the tablet, use it.
+1. **Pasted** -- if the user pasted the snapshot JSON, use it.
 2. **The PC terminal** -- `data/auction_snapshot.json` in this repo, if `generated_utc` is less than 3 minutes old
    (the terminal writes it every 20 s while the Flow Interpretation feed is showing).
 3. **The cloud tablet engine** (runs all day on the daemon VM):

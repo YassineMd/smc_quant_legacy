@@ -32,10 +32,6 @@ public final class MainActivity extends Activity implements EngineClient.Listene
     private double pendingExplain = Double.NaN;
     private AlertDialog explainDlg;
     private Button paperBtn;                  // the Paper LIVE ledger, next to the hamburger, only with Market Position on
-    private Button claudeBtn;                 // "send to Claude": the screen + the market, shared with the Claude app
-    private int claudeReq = 0;                // the pending request's id, 0 = none
-    private android.graphics.Bitmap claudeShot;   // the screen as it was at the tap
-    private final android.os.Handler ui = new android.os.Handler(android.os.Looper.getMainLooper());
     private Grip divider;                     // between the chart and the feed: drag it to resize the feed
     private float splitX0, splitW0;
 
@@ -127,13 +123,6 @@ public final class MainActivity extends Activity implements EngineClient.Listene
         pp.setMargins(0, (int) Ui.dp(this, 6), (int) Ui.dp(this, 6) + sz + (int) Ui.dp(this, 6), 0);
         root.addView(paperBtn, pp);
         paperBtn.setOnClickListener(v -> showPaper());
-        claudeBtn = new Button(this);
-        claudeBtn.setText("\u2733");
-        claudeBtn.setTextColor(Color.parseColor("#D97757"));
-        claudeBtn.setTextSize(18);
-        claudeBtn.setBackgroundColor(Color.parseColor("#20242c"));
-        root.addView(claudeBtn, new FrameLayout.LayoutParams(sz, sz, Gravity.TOP | Gravity.END));
-        claudeBtn.setOnClickListener(v -> askClaude());
         applyStyle();
         popupAnchor = new View(this);
         root.addView(popupAnchor, new FrameLayout.LayoutParams(1, 1, Gravity.TOP | Gravity.START));
@@ -162,93 +151,7 @@ public final class MainActivity extends Activity implements EngineClient.Listene
         if (divider != null) { divider.dark = !bw; divider.invalidate(); }
         root.setBackgroundColor(Color.parseColor(bw ? "#ffffff" : "#141414"));
         paperBtn.setVisibility(chart.tools.showMarket ? View.VISIBLE : View.GONE);
-        // the Claude button sits left of the paper button, or of the hamburger when the paper button is hidden
-        int sz = (int) Ui.dp(this, 40), g = (int) Ui.dp(this, 6);
-        FrameLayout.LayoutParams cp = (FrameLayout.LayoutParams) claudeBtn.getLayoutParams();
-        cp.setMargins(0, g, g + (sz + g) * (chart.tools.showMarket ? 2 : 1), 0);
-        claudeBtn.setLayoutParams(cp);
         chart.dataChanged();
-    }
-
-    private void toast(String msg) { Toast.makeText(this, msg, Toast.LENGTH_SHORT).show(); }
-
-    /** THE "SEND TO CLAUDE" BUTTON (user 2026-09-24: "my tablet can communicate the info with the Claude app on my
-     *  tablet"). The screen is captured at the tap; the engine answers with the reading instructions (the user's
-     *  auction doctrine, the screen, the fields) and a FRESH snapshot of the market; both go to the Claude app as a
-     *  screenshot + one markdown file, with a first message ready in its composer. Nothing is sent to Claude until the
-     *  user presses send there. A marked card / candle makes the message about that cycle. */
-    private void askClaude() {
-        boolean conn;
-        synchronized (model.lock) { conn = model.connected; }
-        if (!conn) { toast("Not connected to the engine"); return; }
-        if (claudeReq != 0) { toast("Already preparing\u2026"); return; }
-        claudeShot = snapshotScreen();
-        final int id = (int) (System.currentTimeMillis() & 0x3fffffffL) | 1;
-        claudeReq = id;
-        feed.sendClaude(id, interp.selT0);
-        toast("Preparing the market for Claude\u2026");
-        ui.postDelayed(() -> {
-            if (claudeReq == id) { claudeReq = 0; claudeShot = null; toast("The engine did not answer \u2014 try again"); }
-        }, 20000);
-    }
-
-    private android.graphics.Bitmap snapshotScreen() {
-        try {
-            if (root.getWidth() <= 0 || root.getHeight() <= 0) return null;
-            android.graphics.Bitmap bm = android.graphics.Bitmap.createBitmap(root.getWidth(), root.getHeight(), android.graphics.Bitmap.Config.ARGB_8888);
-            root.draw(new android.graphics.Canvas(bm));
-            return bm;
-        } catch (Throwable t) {
-            return null;                           // the share still goes, without the picture
-        }
-    }
-
-    /** The engine's reply is in: write the pack (off the UI thread) and hand it to the Claude app. */
-    private void shareToClaude() {
-        boolean ok; String prompt, snap, gen, err, hlh, sel;
-        synchronized (model.lock) {
-            ok = model.claudeOk; prompt = model.claudePrompt; snap = model.claudeSnap; gen = model.claudeGen;
-            err = model.claudeErr; hlh = model.claudeHlh; sel = model.claudeSel;
-        }
-        final android.graphics.Bitmap shot = claudeShot;
-        claudeShot = null;
-        if (!ok) { toast("Engine: " + err); return; }
-        final String msg = (sel != null && sel.length() >= 19)
-                ? "Look at the cycle I marked on my SMC Flow tablet \u2014 it started at " + sel.substring(11) + " UTC. "
-                  + "What happened there, in my auction terms? My instructions and the market data are in the attached "
-                  + "file; the screenshot is my screen at the same moment."
-                : "Read my SOLUSDT auction right now. My instructions and the market data are in the attached file; "
-                  + "the screenshot is my SMC Flow tablet at the same moment.";
-        new Thread(() -> {
-            try {
-                final java.util.ArrayList<android.net.Uri> uris = ShareProvider.write(this, gen, shot, msg, prompt, snap);
-                runOnUiThread(() -> launchClaude(uris, msg, hlh));
-            } catch (Exception e) {
-                runOnUiThread(() -> toast("Could not prepare the files: " + e.getMessage()));
-            }
-        }, "claude-share").start();
-    }
-
-    private void launchClaude(java.util.ArrayList<android.net.Uri> uris, String msg, String hlh) {
-        android.content.Intent it = new android.content.Intent(android.content.Intent.ACTION_SEND_MULTIPLE);
-        it.setType("*/*");
-        it.putParcelableArrayListExtra(android.content.Intent.EXTRA_STREAM, uris);
-        // ⚠ the Claude app does NOT prefill its composer from a multi-file share -- a String or a CharSequence list
-        // both tried on the device (2026-09-24). The request is written at the top of the markdown file instead;
-        // this stays for the chooser fallback (other apps do read it)
-        it.putExtra(android.content.Intent.EXTRA_TEXT, msg);
-        android.content.ClipData cd = android.content.ClipData.newRawUri("", uris.get(0));
-        for (int i = 1; i < uris.size(); i++) cd.addItem(new android.content.ClipData.Item(uris.get(i)));
-        it.setClipData(cd);
-        it.addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION);
-        it.setPackage("com.anthropic.claude");
-        try {
-            startActivity(it);
-        } catch (android.content.ActivityNotFoundException e) {
-            it.setPackage(null);                   // no Claude app: let the user pick where it goes
-            startActivity(android.content.Intent.createChooser(it, "Send the market to\u2026"));
-        }
-        if (!"on".equals(hlh)) toast("HLH Volume Profile is off \u2014 the share has no value reference");
     }
 
     /** The Paper LIVE panel: title, balance, Clear, one line per closed trade (newest first). */
@@ -304,11 +207,6 @@ public final class MainActivity extends Activity implements EngineClient.Listene
         runOnUiThread(() -> {
             chart.dataChanged();
             interp.refresh();
-            if (claudeReq != 0) {
-                int cid;
-                synchronized (model.lock) { cid = model.claudeId; }
-                if (cid == claudeReq) { claudeReq = 0; shareToClaude(); }
-            }
             String html; double k;
             synchronized (model.lock) { html = model.explainHtml; k = model.explainK; }
             if (html != null && !Double.isNaN(pendingExplain) && Math.abs(k - pendingExplain) < 1.0) {

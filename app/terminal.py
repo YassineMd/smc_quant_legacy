@@ -20803,8 +20803,8 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                                   push_min=float(config.ABSORB_PUSH_MIN_TICKS),
                                   reject_weak=float(config.ABSORB_REJECT_WEAK),
                                   iimp=({_kk: _v[k] for _kk, _v in _ii.items()} if _ii is not None else None))
-        # THE AUCTION READING (2026-09-24): computed with the cards' I x I reading and kept for the "send to Claude"
-        # button and the snapshot file -- NEVER drawn on the cards (the card strip was removed at the user's word:
+        # THE AUCTION READING (2026-09-24): computed with the cards' I x I reading and kept for the snapshot file (the
+        # Claude connector, /auction-read) -- NEVER drawn on the cards (the card strip was removed at the user's word:
         # "not really interested by what you added on the interpretation")
         if _ii is not None:
             try:
@@ -23108,25 +23108,6 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         so "explain the cycle I marked" in the Claude app reads the mark of the moment, not of 20 s ago."""
         self._auction_mark = None if t0 is None else float(t0)
         self._auction_snapshot_write(force=True)
-
-    def _auction_share(self, sel=None) -> dict:
-        """THE "SEND TO CLAUDE" PACK (user 2026-09-24: "my tablet can communicate the info with the Claude app"): the
-        reading instructions + a FRESH snapshot. The feed is re-read first (its signature cleared), so the pack is
-        the market of this moment, not of the last 20 s write. Raises when no cycle has been read yet."""
-        self._interp_sig = None
-        self._interp_draw(time.time())
-        ctx = self.__dict__.get("_auction_ctx")
-        if ctx is None:
-            raise RuntimeError("no cycles read yet -- the Interpretation feed has not run")
-        snap = self._auction_snapshot_build(ctx, sel=sel, max_cycles=int(config.AUCTION_SNAPSHOT_CYCLES))
-        try:
-            with open(str(config.AUCTION_PROMPT_PATH), encoding="utf-8") as fh:
-                prompt = fh.read()
-        except Exception as ex:
-            prompt = "(the reading instructions could not be read: %s)" % ex
-        return {"prompt": prompt, "snap": self._auction_snapshot_text(snap), "gen": snap["generated_utc"],
-                "hlh": snap["value"]["hlh_volume_profile"], "live": snap["live_price"],
-                "sel": snap.get("user_selected_cycle_start_utc")}
 
     @staticmethod
     def _cycle_last_bins(t_end, done, base: int, n: int):

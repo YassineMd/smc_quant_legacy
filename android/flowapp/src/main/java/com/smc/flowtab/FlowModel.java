@@ -469,22 +469,6 @@ public final class FlowModel {
         synchronized (lock) { bpOn = on; bpSw = m.optBoolean("sw", false); bpLmax = m.optInt("lmax", 60); bpBub = bub; bpDia = dia; version++; }
     }
 
-    // the "send to Claude" pack (2026-09-24): the engine's reply to the tablet's {"t":"claude"} request
-    public int claudeId = -1;
-    public boolean claudeOk;
-    public String claudePrompt = "", claudeSnap = "", claudeGen = "", claudeErr = "", claudeHlh = "", claudeSel = null;
-
-    public void onClaude(JSONObject m) {
-        synchronized (lock) {
-            claudeOk = m.optBoolean("ok", false);
-            claudePrompt = m.optString("prompt", ""); claudeSnap = m.optString("snap", "");
-            claudeGen = m.optString("gen", ""); claudeErr = m.optString("err", "");
-            claudeHlh = m.optString("hlh", ""); claudeSel = m.isNull("sel") ? null : m.optString("sel", null);
-            claudeId = m.optInt("id", -1);          // last: the UI thread keys on it
-            version++;
-        }
-    }
-
     public void onExplain(JSONObject m) {
         synchronized (lock) { explainK = m.optDouble("k"); explainHtml = m.optString("html", ""); version++; }
     }

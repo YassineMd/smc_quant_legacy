@@ -104,7 +104,7 @@ def get_reading_instructions() -> str:
     """Yassine's auction-market doctrine and how to read the data: what responsive / initiative, effective / absorbed /
     passive mean, what every field of the snapshot means, the rules (describe, never predict; quote numbers) and the
     format of a read. Call this ONCE at the start of a conversation about the market, before reading the snapshot.
-    (This connector has no screenshot: the screen section only applies to shares from the tablet.)"""
+    (This connector has no screenshot: the screen section says what Yassine sees, so his words make sense.)"""
     try:
         with open(PROMPT, encoding="utf-8") as fh:
             return fh.read()

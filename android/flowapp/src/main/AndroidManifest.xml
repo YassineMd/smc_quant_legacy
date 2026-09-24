@@ -17,12 +17,5 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-        <!-- the "send to Claude" files (ShareProvider): read-only, not exported, opened only through the share
-             intent's read grant -->
-        <provider
-            android:name=".ShareProvider"
-            android:authorities="com.smc.flowtab.share"
-            android:exported="false"
-            android:grantUriPermissions="true" />
     </application>
 </manifest>

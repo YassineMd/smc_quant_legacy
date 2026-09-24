@@ -92,16 +92,6 @@ public final class EngineClient extends Thread {
         } catch (Exception ignored) { }
     }
 
-    /** The "send to Claude" button: ask the engine for the reading instructions + a fresh auction snapshot. sel = the
-     *  marked cycle's start (NaN = none). The reply carries the same id. */
-    public void sendClaude(int id, double sel) {
-        try {
-            JSONObject o = new JSONObject(); o.put("t", "claude"); o.put("id", id);
-            if (!Double.isNaN(sel)) o.put("sel", sel);
-            send(o);
-        } catch (Exception ignored) { }
-    }
-
     @Override public void run() {
         boolean haveVm = !BuildConfig.VM_HOST.isEmpty();
         int which = 0;                                   // 0 = USB, 1 = VM; USB gets the first shot each cycle
@@ -214,7 +204,6 @@ public final class EngineClient extends Thread {
                 case "liq": model.onLiq(m); break;
                 case "tko": model.onTko(m); break;
                 case "explain": model.onExplain(m); break;
-                case "claude": model.onClaude(m); break;
                 case "hlh": model.onHlh(m); break;
                 case "bp": model.onBp(m); break;
                 default: return;

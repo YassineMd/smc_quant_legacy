@@ -156,16 +156,14 @@ if getattr(sys, "frozen", False):
 else:
     PROJECT_DIR = os.path.dirname(ROOT_DIR)
 DATA_DIR = os.path.join(PROJECT_DIR, "data")
-# THE AUCTION SNAPSHOT (layer 1 of the user's auction reading, 2026-09-24): what a Claude conversation is handed --
-# the tablet's "send to Claude" button (the Claude app) and /auction-read (Claude Code). Today's and the multi-day
-# value, the recent summary, the last cycles in the auction's words. A FIXED path under the project (the tablet engine
-# runs on a temp DATA_DIR): on the VM /home/yassine_mdouari/smcflow/data/, here data/.
+# THE AUCTION SNAPSHOT (layer 1 of the user's auction reading, 2026-09-24): what a Claude conversation reads -- the
+# Claude app through its connector (android/auction_mcp.py, on the VM) and /auction-read (Claude Code). Today's and the
+# multi-day value, the recent summary, the last cycles in the auction's words. A FIXED path under the project (the
+# tablet engine runs on a temp DATA_DIR): on the VM /home/yassine_mdouari/smcflow/data/, here data/. The reading
+# instructions that go with it: app/auction_read_prompt.md (ONE copy, read by the connector and by the skill).
 AUCTION_SNAPSHOT_PATH = os.path.join(PROJECT_DIR, "data", "auction_snapshot.json")
-# the reading instructions that go with it (the user's doctrine, the screen, the fields, the output) -- ONE copy, read
-# by the engine for the Claude app and by the /auction-read skill
-AUCTION_PROMPT_PATH = os.path.join(ROOT_DIR, "auction_read_prompt.md")
 AUCTION_SNAPSHOT_SECS = 20.0        # written at most this often
-AUCTION_SNAPSHOT_CYCLES = 80        # the newest this many cycles go in a "send to Claude" share
+AUCTION_SNAPSHOT_CYCLES = 80        # the builder's default: the newest this many cycles
 AUCTION_FILE_CYCLES = 400           # ... and in the FILE the Claude connector reads (the whole feed window, capped)
 AUCTION_ACTIVE_MIN = 1.0            # a side is ACTIVE at or above its own normal aggressive $/s
 AUCTION_SUMMARY_N = 12              # the recent stretch the summary counts over (finished rated cycles)
