@@ -22889,6 +22889,18 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             return
         self._iimp_draw(now)
 
+    @staticmethod
+    def _iimp_kept_frac(kept, good, contra):
+        """How much of a bar to FILL (user 2026-09-24, "do the partial fill"): a bar whose push REACHED its normal (the
+        fill) and went the leader's way is solid only up to the share of that push the leader KEPT, from the 1x line
+        out -- the rest stays an outline. 1.0 everywhere else: a hollow bar has nothing to fill, an ORANGE bar keeps
+        its whole fill (its kept is negative by definition, and the bright candles read that fill), and a push too
+        short to read (kept NaN, config IIMP_KEEP_MIN_TICKS) is never downgraded. Display only: `good` and the score
+        are untouched, so retention still does not feed the fill's verdict (see config's RETENTION note)."""
+        k = np.asarray(kept, dtype=np.float64)
+        kf = np.where(np.isfinite(k), np.clip(k, 0.0, 1.0), 1.0)
+        return np.where(np.asarray(good, dtype=bool) & ~np.asarray(contra, dtype=bool), kf, 1.0)
+
     def _iimp_render(self, D: dict) -> None:
         """Lay every item of the I x I pane from D: the CACHE's finished rows around the view, with the live read's
         forming row last (D["form"]). WHAT HAS BEEN PAINTED STAYS (user 2026-09-23) -- this is the drawing code
@@ -22980,15 +22992,20 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         if _lines:
             pass                       # the lines mode has already laid its curves above
         elif _mode == "None":
-            groups = (up & good & ~contra & _fin, up & ~good & ~contra & _fin,
-                      ~up & good & ~contra & _fin, ~up & ~good & ~contra & _fin,
+            # PARTIAL FILL: the SOLID layers draw only the kept share of a converted bar, from the 1x line out, and
+            # a bar that handed some back also lays its FULL outline on its side's hollow layer
+            _kf = self._iimp_kept_frac(D["kept"], good, contra)
+            _pm = good & ~contra & _fin & (_kf < 1.0)
+            groups = (up & good & ~contra & _fin & (_kf > 0.0), up & ((~good & ~contra & _fin) | _pm),
+                      ~up & good & ~contra & _fin & (_kf > 0.0), ~up & ((~good & ~contra & _fin) | _pm),
                       contra & good & _fin, contra & ~good & _fin)
             self._iimp_items[0].setOpts(brushes=None, pens=None)     # the other modes leave per-bar lists behind
-            for it, m in zip(self._iimp_items, groups):
+            for _gi, (it, m) in enumerate(zip(self._iimp_items, groups)):
                 if not m.any():
                     it.setOpts(x0=[], x1=[], y0=[], height=[])
                     continue
-                it.setOpts(x0=x0[m], x1=x1[m], y0=np.minimum(0.0, vd[m]), height=np.abs(vd[m]))
+                _h = vd[m] * _kf[m] if _gi in (0, 2) else vd[m]
+                it.setOpts(x0=x0[m], x1=x1[m], y0=np.minimum(0.0, _h), height=np.abs(_h))
         else:
             # one item, per-bar brushes and pens: the side's colour (Delta: the sign's, orange where price went
             # against the leader), SOLID where that side led and converted, HOLLOW where it led and did not,
@@ -23006,18 +23023,32 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 return _pc[(hx, a)]
 
             _idx = np.flatnonzero(_fin)
-            _brs, _pns = [], []
+            _kf = self._iimp_kept_frac(D["kept"], good, contra)
+            _brs, _pns, _bx0, _bx1, _by0, _bh = [], [], [], [], [], []
+
+            def _bar(i, h, br, pn):
+                _bx0.append(float(x0[i])); _bx1.append(float(x1[i]))
+                _by0.append(min(0.0, float(h))); _bh.append(abs(float(h)))
+                _brs.append(br); _pns.append(pn)
             for i in _idx:
                 if _mode == "Delta":
                     hx = config.IIMP_CONTRA_COL if bool(contra[i]) else (config.IIMP_BUY_COL if vd[i] >= 0 else config.IIMP_SELL_COL)
-                    _brs.append(_brush(hx, 190 if bool(good[i]) else 0)); _pns.append(_pen(hx, 255))
+                    _fa = 190 if bool(good[i]) else 0; _pa = 255; _conv = bool(good[i])
                 else:
                     hx = config.IIMP_BUY_COL if _mode == "Buyer" else config.IIMP_SELL_COL
                     led = bool(up[i]) if _mode == "Buyer" else (not bool(up[i]))
-                    _brs.append(_brush(hx, (190 if bool(good[i]) else 0) if led else 70)); _pns.append(_pen(hx, 255 if led else 130))
+                    _fa = (190 if bool(good[i]) else 0) if led else 70; _pa = 255 if led else 130
+                    _conv = led and bool(good[i])
+                if _conv and float(_kf[i]) < 1.0:
+                    # PARTIAL FILL: the whole bar as an outline, then the kept share solid from the 1x line
+                    _bar(i, vd[i], _brush(hx, 0), _pen(hx, _pa))
+                    if float(_kf[i]) > 0.0:
+                        _bar(i, vd[i] * float(_kf[i]), _brush(hx, _fa), _pen(hx, _pa))
+                else:
+                    _bar(i, vd[i], _brush(hx, _fa), _pen(hx, _pa))
             it0 = self._iimp_items[0]
-            if _idx.size:
-                it0.setOpts(x0=x0[_idx], x1=x1[_idx], y0=np.minimum(0.0, vd[_idx]), height=np.abs(vd[_idx]),
+            if _bx0:
+                it0.setOpts(x0=np.array(_bx0), x1=np.array(_bx1), y0=np.array(_by0), height=np.array(_bh),
                             brushes=_brs, pens=_pns)
             else:
                 it0.setOpts(x0=[], x1=[], y0=[], height=[], brushes=None, pens=None)
@@ -23036,12 +23067,22 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             else:
                 _fc = QtGui.QColor(config.IIMP_CONTRA_COL if bool(contra[_k])
                                    else (config.IIMP_BUY_COL if bool(up[_k]) else config.IIMP_SELL_COL))
+            _fpen = pg.mkPen(QtGui.QColor(_fc.red(), _fc.green(), _fc.blue(), int(config.IIMP_FORM_PEN_A)), width=1.4)
+            _ffa = int(config.IIMP_FORM_FILL_A) if bool(good[_k]) else 0
+            _fkf = float(self._iimp_kept_frac(D["kept"][_k:_k + 1], good[_k:_k + 1], contra[_k:_k + 1])[0])
+            _fv = float(vd[_k])
+            if _ffa and _fkf < 1.0:
+                # PARTIAL FILL, live: the outline over the whole bar, the kept share solid from the 1x line
+                _fh = [_fv] + ([_fv * _fkf] if _fkf > 0.0 else [])
+                _fb = [pg.mkBrush(0, 0, 0, 0)] + ([pg.mkBrush(_fc.red(), _fc.green(), _fc.blue(), _ffa)]
+                                                  if _fkf > 0.0 else [])
+            else:
+                _fh = [_fv]
+                _fb = [pg.mkBrush(_fc.red(), _fc.green(), _fc.blue(), _ffa)]
             self._iimp_form.setOpts(
-                x0=[float(x0[_k])], x1=[float(x1[_k])], y0=[min(0.0, float(vd[_k]))], height=[abs(float(vd[_k]))],
-                brushes=[pg.mkBrush(_fc.red(), _fc.green(), _fc.blue(),
-                                    int(config.IIMP_FORM_FILL_A) if bool(good[_k]) else 0)],
-                pens=[pg.mkPen(QtGui.QColor(_fc.red(), _fc.green(), _fc.blue(), int(config.IIMP_FORM_PEN_A)),
-                               width=1.4)])
+                x0=[float(x0[_k])] * len(_fh), x1=[float(x1[_k])] * len(_fh),
+                y0=[min(0.0, h) for h in _fh], height=[abs(h) for h in _fh],
+                brushes=_fb, pens=[_fpen] * len(_fh))
         else:
             self._iimp_form.setOpts(x0=[], x1=[], y0=[], height=[])
         v = vd

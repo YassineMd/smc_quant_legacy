@@ -683,6 +683,10 @@ IIMP_FORM_PEN_A = 150
 # ⚠ Retention does NOT feed the fill or the score, on purpose. giveback = push - move, so scoring on both and then
 #   validating against the move is CIRCULAR -- this project already produced one z=+7.6 result that way and
 #   correctly never shipped it. Reach and hold stay two separate channels so you can see WHICH one failed.
+# ⚠ DISPLAY (user 2026-09-24, "do the partial fill"): a bar that REACHED (solid) and went the leader's way is now drawn
+#   solid only up to the share KEPT, from the 1x line out, and outlined beyond (terminal _iimp_kept_frac, tablet
+#   ChartView). The VERDICT is unchanged -- `good` and the score are still reach only; orange bars and an unread kept
+#   keep their whole fill.
 # ⚠ DESCRIPTIVE only. As an entry filter retention tested null here (AUC 0.52-0.57, consistent in 2 of 6 setups).
 IIMP_KEEP_MIN_TICKS = 4.0       # below this the fraction is arithmetic, not information
 IIMP_KEEP_LOW = 0.375           # measured terciles of kept/reached over 48 h

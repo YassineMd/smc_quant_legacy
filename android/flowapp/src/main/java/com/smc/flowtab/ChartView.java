@@ -1030,21 +1030,35 @@ public final class ChartView extends View {
                     float x0 = xPx(s.iX0[i]), x1 = xPx(s.iX1[i]);
                     if (x1 < r.left || x0 > plotR) continue;
                     double v = s.iV[i]; boolean up = s.iUp[i] != 0, contra = s.iContra[i] != 0, good = s.iGood[i] != 0, form = s.iForm[i] != 0;
-                    int hx; int fillA, penA;
+                    int hx; int fillA, penA; boolean conv;       // conv: the bar's fill is the leader's "it converted"
                     if ("Buyer".equals(s.mode) || "Seller".equals(s.mode)) {
                         boolean buyer = "Buyer".equals(s.mode); hx = buyer ? TEAL : RED;
                         boolean led = buyer == up;
-                        fillA = led ? (good ? 190 : 0) : 70; penA = led ? 255 : 130;
+                        fillA = led ? (good ? 190 : 0) : 70; penA = led ? 255 : 130; conv = led && good;
                     } else if ("Delta".equals(s.mode)) {
-                        hx = contra ? ORANGE : (v >= 0 ? TEAL : RED); fillA = good ? 190 : 0; penA = 255;
+                        hx = contra ? ORANGE : (v >= 0 ? TEAL : RED); fillA = good ? 190 : 0; penA = 255; conv = good;
                     } else {
-                        hx = contra ? ORANGE : (up ? TEAL : RED); fillA = good ? 190 : 0; penA = 255;
+                        hx = contra ? ORANGE : (up ? TEAL : RED); fillA = good ? 190 : 0; penA = 255; conv = good;
                     }
                     if (form) { fillA = good ? 70 : 0; penA = 150; }
+                    // PARTIAL FILL (user 2026-09-24): a converted bar that went the leader's way is solid only up to the share
+                    // of the push the leader KEPT, from the 1x line out; the rest is its outline. ORANGE keeps its whole fill
+                    // (kept < 0 by definition; the bright candles read it) and an unread kept (-999) is never a downgrade --
+                    // the terminal's _iimp_kept_frac
+                    double kf = (conv && !contra && s.iKept[i] > -900) ? Math.max(0.0, Math.min(1.0, s.iKept[i])) : 1.0;
+                    boolean partial = fillA > 0 && kf < 1.0;
                     float y0 = (float) (top + (yhi - Math.max(0, v)) / range * hgt), y1 = (float) (top + (yhi - Math.min(0, v)) / range * hgt);
                     if (y1 - y0 < 1) y1 = y0 + 1;
-                    if (fillA > 0) { pf.setColor((hx & 0x00ffffff) | (fillA << 24)); c.drawRect(x0, y0, x1, y1, pf); }
-                    pl.setColor((hx & 0x00ffffff) | (penA << 24)); pl.setStrokeWidth((good ? 1.0f : 1.4f) * d); c.drawRect(x0, y0, x1, y1, pl);
+                    if (fillA > 0 && (!partial || kf > 0)) {
+                        float fy0 = y0, fy1 = y1;
+                        if (partial) {
+                            double vk = v * kf;
+                            fy0 = (float) (top + (yhi - Math.max(0, vk)) / range * hgt); fy1 = (float) (top + (yhi - Math.min(0, vk)) / range * hgt);
+                        }
+                        pf.setColor((hx & 0x00ffffff) | (fillA << 24)); c.drawRect(x0, fy0, x1, fy1, pf);
+                        if (partial) { pl.setColor((hx & 0x00ffffff) | (penA << 24)); pl.setStrokeWidth(1.0f * d); c.drawRect(x0, fy0, x1, fy1, pl); }
+                    }
+                    pl.setColor((hx & 0x00ffffff) | (penA << 24)); pl.setStrokeWidth((good && !partial ? 1.0f : 1.4f) * d); c.drawRect(x0, y0, x1, y1, pl);
                     // the wall dot past the tip, the "handed it back" cap across it
                     float xm = 0.5f * (x0 + x1); float tipY = v >= 0 ? y0 : y1;
                     if (!form && s.iWall[i] > -900) {
