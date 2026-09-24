@@ -88,6 +88,7 @@ public final class FlowModel {
         // the I x I PANE's reading of the cycle (2026-09-24): lead +1 buyers / -1 sellers / 0 not rated
         public int iLead; public boolean iGood, iContra; public String iWhy = "";
         public double iMult = Double.NaN, iImp = Double.NaN, iWall = Double.NaN, iKept = Double.NaN, iPb = Double.NaN, iGive = Double.NaN;
+        public double iReach = Double.NaN, iLmv = Double.NaN; public boolean iShort;     // a push under 4 ticks (2026-09-24)
     }
     private static double num(JSONObject o, String k) {
         return (o == null || o.isNull(k) || !o.has(k)) ? Double.NaN : o.optDouble(k, Double.NaN);
@@ -382,6 +383,7 @@ public final class FlowModel {
                     row.iWhy = x.isNull("i_why") ? "" : x.optString("i_why", "");
                     row.iMult = num(x, "i_mult"); row.iImp = num(x, "i_imp"); row.iWall = num(x, "i_wall");
                     row.iKept = num(x, "i_kept"); row.iPb = num(x, "i_pb"); row.iGive = num(x, "i_give");
+                    row.iReach = num(x, "i_reach"); row.iLmv = num(x, "i_lmv"); row.iShort = x.optBoolean("i_short", false);
                 }
                 out.add(row);
             }

@@ -22813,10 +22813,38 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         # buy cycle is judged against buy cycles (the Volume and Speed panes' rule)
         score = self._iimp_score(resid, lead_buy, done, n_lb, n_mn)
         score_pb, give_pb = self._iimp_pb_score(t, t_end_c, done, lead_buy, px1, pxh, pxl, n_lb, n_mn)
+        # A SHORT PUSH (user 2026-09-24): the leader reached fewer than IIMP_KEEP_MIN_TICKS. Its expected reach is
+        # built on the effort spent UP TO its extreme, and when that extreme is the cycle's first second the effort is
+        # a few dollars -- so 0 ticks scored "above usual" (measured: 64 of 132 zero-tick pushes in 72 h were drawn
+        # SOLID, one at 1.89x). A push that short never counts as converted, adds no impact to its side, and reads
+        # "no push" / "short push" wherever a multiple would be quoted.
+        short = np.isfinite(reach) & (reach < float(config.IIMP_KEEP_MIN_TICKS))
         return {"dur": dur, "ar_b": ar_b, "ar_s": ar_s, "imb": imb, "lead_buy": lead_buy, "wall_raw": wall_raw,
-                "wall": wall, "reach": reach, "score": score, "score_pb": score_pb, "give_pb": give_pb}
+                "wall": wall, "reach": reach, "score": score, "score_pb": score_pb, "give_pb": give_pb,
+                "short": short}
 
-    def _iimp_why_short(self, lead_buy, contra, good, imp, wall, kept, lmv, give, pb) -> str:
+    @staticmethod
+    def _iimp_impact_txt(imp, reach, short) -> str:
+        """IMPACT as every reader prints it: the multiple, or "no push" / "short push" for a push under
+        IIMP_KEEP_MIN_TICKS (0 ticks / a few)."""
+        if bool(short):
+            return "short push" if (np.isfinite(reach) and reach >= 1.0) else "no push"
+        return "-" if not np.isfinite(imp) else "%.2gx" % imp
+
+    @staticmethod
+    def _iimp_kept_txt(kept, reach, lmv, x="x") -> str:
+        """KEPT as every reader prints it (user 2026-09-24): a PERCENT only for a push of IIMP_KEEP_MIN_TICKS or more
+        that closed on the leader's side; otherwise the SIGNED TICKS the leader held (+2t, 0t, -5t) -- defined for
+        every cycle and the same unit whatever the push size (a negative percent read -80% after a 4-8t push and
+        -25% after a 16t+ one for the same ~5t reversal, and minus infinity after a 0t push)."""
+        if np.isfinite(kept) and kept >= 0.0 and np.isfinite(reach) and reach >= float(config.IIMP_KEEP_MIN_TICKS):
+            return "%d%%" % int(round(100.0 * kept))
+        if np.isfinite(lmv):
+            n = int(round(float(lmv)))
+            return "0t" if n == 0 else ("+%dt" % n if n > 0 else "\u2212%dt" % (-n))
+        return "-"
+
+    def _iimp_why_short(self, lead_buy, contra, good, imp, wall, kept, lmv, give, pb, reach=float("nan")) -> str:
         """The card's WHY (user 2026-09-24: "much shorter than what i have on the window, like one or two
         sentences"): the explanation panel's reading of the same four facts, plus the other side's answer."""
         fin = lambda v: v is not None and np.isfinite(v)
@@ -22825,6 +22853,16 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         hi = fin(wall) and wall >= float(config.IIMP_WALL_HIGH)
         lo = fin(wall) and wall <= float(config.IIMP_WALL_LOW)
         pbt = (" (%.2g×)" % pb) if fin(pb) else ""
+        way = "above" if lead_buy else "below"
+        if fin(reach) and reach < float(config.IIMP_KEEP_MIN_TICKS):
+            # a SHORT push: say what happened in ticks, never a multiple of a model that had nothing to go on
+            s1 = ("%s never pushed price %s the open" % (side, way) if reach < 1
+                  else "%s only pushed %dt %s the open" % (side, int(round(reach)), way))
+            n = int(round(lmv)) if fin(lmv) else 0
+            s1 += (": it closed %dt against them." % -n if n < 0 else (", and held %dt." % n if n > 0 else "."))
+            s2 = ("%s absorbed it and drove price back %dt%s." % (other.capitalize(), int(round(give)), pbt)
+                  if (n < 0 and fin(give) and give >= 1) else "")
+            return s1 + (" " + s2 if s2 else "")
         if contra:
             s1 = "%s pushed but lost the cycle: price closed %dt against them." % (side, abs(int(round(lmv))))
             if hi:
@@ -22841,7 +22879,9 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 side, imp, " through a heavy book" if hi else (", helped by a thin book" if lo else ""))
         else:
             s1 = "%s led but didn't convert: %.2g× their usual reach%s." % (side, imp, ", into a heavy book" if hi else "")
-        if fin(kept) and kept <= float(config.IIMP_KEEP_LOW) and fin(give):
+        if fin(kept) and kept < 0.005 and fin(give):
+            s2 = "They handed it all back: %s absorbed it and pushed back %dt%s." % (other, int(round(give)), pbt)
+        elif fin(kept) and kept <= float(config.IIMP_KEEP_LOW) and fin(give):
             s2 = "They kept only %d%%: %s absorbed it and pushed back %dt%s." % (
                 int(round(100.0 * kept)), other, int(round(give)), pbt)
         elif fin(kept) and kept >= float(config.IIMP_KEEP_HIGH):
@@ -22860,6 +22900,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         R = self._iimp_rate(t, t_end_c, done, cbuy, csell, px0, px1, pxh, pxl, n_lb, n_mn)
         lb = R["lead_buy"]; score = R["score"]; reach = R["reach"]
         rated = np.isfinite(R["imb"]) & np.isfinite(score)
+        short = R["short"]
         mvt = (np.asarray(px1, dtype=np.float64) - np.asarray(px0, dtype=np.float64)) / float(config.TICK_SIZE)
         lmv = np.where(lb, mvt, -mvt)
         with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
@@ -22867,16 +22908,17 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                             lmv / np.maximum(reach, 1e-9), np.nan)
             imp = np.exp(score); pb = np.exp(R["score_pb"]); mult = 2.0 ** np.abs(R["imb"])
         contra = rated & np.isfinite(mvt) & ((lb & (mvt < 0)) | (~lb & (mvt > 0)))
-        good = rated & (score >= 0.0)
+        good = rated & (score >= 0.0) & ~short
         nan = np.nan
         why = np.array([self._iimp_why_short(bool(lb[i]), bool(contra[i]), bool(good[i]), float(imp[i]),
                                              float(R["wall"][i]), float(kept[i]), float(lmv[i]),
-                                             float(R["give_pb"][i]), float(pb[i])) if rated[i] else ""
-                        for i in range(int(np.size(t)))], dtype=object)
+                                             float(R["give_pb"][i]), float(pb[i]), float(reach[i]))
+                        if rated[i] else "" for i in range(int(np.size(t)))], dtype=object)
         return {"lead": np.where(rated, np.where(lb, 1, -1), 0), "mult": np.where(rated, mult, nan),
                 "imp": np.where(rated, imp, nan), "good": good, "wall": np.where(rated, R["wall"], nan),
                 "kept": np.where(rated, kept, nan), "contra": contra, "pb": np.where(rated, pb, nan),
-                "give": np.where(rated, R["give_pb"], nan), "why": why}
+                "give": np.where(rated, R["give_pb"], nan), "why": why,
+                "reach": np.where(rated, reach, nan), "lmv": np.where(rated, lmv, nan), "short": rated & short}
 
     @staticmethod
     def _cycle_last_bins(t_end, done, base: int, n: int):
@@ -23350,7 +23392,8 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             # nothing this read could rate -- but what was painted before stays painted
             self._iimp_render(self._rc_rows(_rc, _w[0], _w[1]))
             return
-        x0 = t[keep]; x1 = t_end_c[keep]; v_raw = imb[keep]; good = score[keep] >= 0.0
+        _short = R["short"][keep]              # a push under IIMP_KEEP_MIN_TICKS is never "converted"
+        x0 = t[keep]; x1 = t_end_c[keep]; v_raw = imb[keep]; good = (score[keep] >= 0.0) & ~_short
         _sc, _scn = self._score_parts(t, t_end_c, done, cbuy, csell, px0, px1, pxh, pxl,
                                       dur, keep, n_lb, n_mn)
         _clip = float(np.log2(max(float(config.IIMP_CLIP), 1.0)))
@@ -23368,7 +23411,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         # sits as far below the midline as 2x sits above it: the user's first delta lived on a linear axis and
         # squeezed every losing cycle into 0..1 while the winning ones ran to 4-6x.
         _ln2 = float(np.log(2.0))
-        _scl = np.where(np.isfinite(score[keep]), score[keep], 0.0) / _ln2      # the leader's impact, in log2
+        _scl = np.where(np.isfinite(score[keep]) & ~_short, score[keep], 0.0) / _ln2   # the leader's impact, in log2
         # ... and the OTHER side's PUSH-BACK where it did not lead (user 2026-09-24) -- it used to be a flat 1x, so a
         # side that absorbed the leader and drove price back got no credit at all
         score_pb, give_pb = R["score_pb"], R["give_pb"]
@@ -23381,7 +23424,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         # repaint. NaN where the cycle before it could not be rated -- a break in the lines has nothing to gain on.
         _rated_all = (done | form_all) & np.isfinite(imb) & np.isfinite(score)
         with np.errstate(divide="ignore", invalid="ignore"):
-            _scl_all = np.where(np.isfinite(score), score, 0.0) / _ln2
+            _scl_all = np.where(np.isfinite(score) & ~R["short"], score, 0.0) / _ln2
             _sclp_all = np.where(np.isfinite(score_pb), score_pb, 0.0) / _ln2
             _lb_all = np.log2(np.maximum(ar_b, 1e-12)) + np.where(lead_buy, _scl_all, _sclp_all)
             _ls_all = np.log2(np.maximum(ar_s, 1e-12)) + np.where(~lead_buy, _scl_all, _sclp_all)
@@ -23444,7 +23487,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         _mult = 2.0 ** np.abs(v_raw)           # the TRUE multiple, even where the bar itself is clipped
         # everything a CLICK needs to explain one bar, so the handler never re-reads the store
         self._iimp_last = {"x0": x0, "x1": x1, "v": v, "mult": _mult, "up": up, "contra": contra, "good": good,
-                           "score": score[keep], "wall": wk, "reach": reach[keep], "mv": _mvt,
+                           "score": score[keep], "wall": wk, "reach": reach[keep], "mv": _mvt, "short": _short,
                            "arb": ar_b[keep], "ars": ar_s[keep], "form": form, "kept": kept,
                            "sbuy": _sc["buy"], "ssell": _sc["sell"],
                            "nbuy": _scn["buy"], "nsell": _scn["sell"],
@@ -23497,12 +23540,13 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                     ("  ·  %d-cycle mean" % _sm_n) if _sm_n > 1 else "")
 
             _pbk = float(score_pb[keep][_k])
-            self._iimp_read.setText("B %s / S %s  ·  %s %.2gx  ·  impact %.2gx  ·  wall %s  ·  kept %s  ·  %s push-back %s%s%s%s" % (
+            self._iimp_read.setText("B %s / S %s  ·  %s %.2gx  ·  impact %s  ·  wall %s  ·  kept %s  ·  %s push-back %s%s%s%s" % (
                 "-" if not np.isfinite(_sbv) else "%d" % int(round(_sbv)),
                 "-" if not np.isfinite(_ssv) else "%d" % int(round(_ssv)),
-                "BUY" if up[_k] else "SELL", _mult[_k], float(np.exp(score[keep][_k])),
+                "BUY" if up[_k] else "SELL", _mult[_k],
+                self._iimp_impact_txt(float(np.exp(score[keep][_k])), float(_rch[_k]), bool(_short[_k])),
                 "-" if not np.isfinite(_w) else "%.2gx" % _w,
-                "-" if not np.isfinite(_kp) else "%d%%" % int(round(100.0 * float(_kp))),
+                self._iimp_kept_txt(float(_kp), float(_rch[_k]), float(_lead_mv[_k])),
                 "sell" if up[_k] else "buy", "-" if not np.isfinite(_pbk) else "%.2gx" % float(np.exp(_pbk)),
                 "  ·  still forming" if bool(form[_k]) else "",
                 "  ·  price went the other way" if contra[_k] else "",
@@ -23860,8 +23904,9 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             # showed nothing at all. Held forward only across a cycle with no reading.
             score_pb = R["score_pb"]
             _ln2 = float(np.log(2.0))
-            _ib = np.where(lead_buy, score, score_pb) / _ln2
-            _is = np.where(~lead_buy, score, score_pb) / _ln2
+            _sc = np.where(R["short"], np.nan, score)          # a SHORT push is no reading for its leader: held
+            _ib = np.where(lead_buy, _sc, score_pb) / _ln2
+            _is = np.where(~lead_buy, _sc, score_pb) / _ln2
             sm_b = self._lines_hold(self._lines_smooth(_ib, rated & np.isfinite(_ib), sm_n, n_mn))
             sm_s = self._lines_hold(self._lines_smooth(_is, rated & np.isfinite(_is), sm_n, n_mn))
         # the y fit's sample: every rated cycle of the READ, not only the drawn ones (see _lines_draw)
@@ -24426,6 +24471,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         # 3.54x printed as "2.4x" and a real 0.51x as "0.63x" (found 2026-09-16 while unit-checking the score).
         # The FILL is unaffected: score >= 0 means the same in any base, so no bar changes colour or fill.
         mult = float(d["mult"][k]); imp = float(np.exp(d["score"][k]))
+        short = bool(np.asarray(d.get("short", np.zeros(np.size(d["x0"]), dtype=bool)))[k])
         wall = float(d["wall"][k]); reach = float(d["reach"][k]); mv = float(d["mv"][k])
         arb = float(d["arb"][k]); ars = float(d["ars"][k])
         forming = bool(np.asarray(d.get("form", np.zeros(np.size(d["x0"]), dtype=bool)))[k])
@@ -24475,7 +24521,13 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         else:
             rows.append("%s: <span style='color:%s'>%s</span>, because the %s led and price went their "
                         "way (%+d ticks)." % (_L % "Colour", col, "teal" if up else "red", low, int(round(mv))))
-        if good:
+        if short:
+            rows.append("%s: hollow, because they %s -- a push under %d ticks is never counted as converted, "
+                        "whatever the model expected for the few dollars spent before it stalled."
+                        % (_L % "Fill", "never pushed price %s the open" % ("above" if up else "below")
+                           if reach < 1 else "only pushed <b>%d ticks</b>" % int(round(reach)),
+                           int(config.IIMP_KEEP_MIN_TICKS)))
+        elif good:
             rows.append("%s: solid, because they reached <b>%d ticks</b>, <b>%.2gx</b> what that side "
                         "usually reaches for this much effort in this much time."
                         % (_L % "Fill", int(round(reach)), imp))
@@ -24484,12 +24536,16 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                         "side usually reaches for this much effort in this much time -- the interest did not "
                         "convert." % (_L % "Fill", int(round(reach)), imp))
         # KEPT: reach says how far it got, this says how much of that survived to the close
-        if not np.isfinite(kept):
-            rows.append("%s: not read -- it only reached <b>%d ticks</b>, too few to judge what was handed "
-                        "back. That costs the bar nothing." % (_L % "Kept", int(round(reach))))
+        if not np.isfinite(kept) or kept < 0.0:
+            # the SIGNED TICKS the leader held: no percent of a push too short to read, nor of one it lost
+            rows.append("%s: <b>%s</b> -- price closed %s the open in the %s' direction."
+                        % (_L % "Kept", self._iimp_kept_txt(kept, reach, held),
+                           "%d ticks past" % int(round(held)) if held > 0 else
+                           ("exactly at" if int(round(held)) == 0 else "%d ticks against" % int(round(-held))),
+                           low))
         elif kept <= 0.0:
-            rows.append("%s: it handed back <b>everything</b> it reached and closed the other side of its "
-                        "open." % (_L % "Kept",))
+            rows.append("%s: it handed back <b>everything</b> it reached and closed exactly at its open."
+                        % (_L % "Kept",))
         else:
             _band = ("the bottom third of cycles -- most of it was handed back (that is the cap drawn "
                      "across the bar)" if kept <= float(config.IIMP_KEEP_LOW) else
@@ -24533,11 +24589,11 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                         "it has so far and all of them still move -- the leading side itself can flip.</div>")
         # the summary carries RETENTION too: impact is built on reach alone and never sees the close, so the
         # two numbers answer different questions and the line was only ever telling half the story
-        rows.append("<div style='color:%s'><b>%s %.2gx &nbsp;·&nbsp; impact %.2gx &nbsp;·&nbsp; wall %s"
+        rows.append("<div style='color:%s'><b>%s %.2gx &nbsp;·&nbsp; impact %s &nbsp;·&nbsp; wall %s"
                     " &nbsp;·&nbsp; kept %s</b></div>"
-                    % (col, "BUY" if up else "SELL", mult, imp,
+                    % (col, "BUY" if up else "SELL", mult, self._iimp_impact_txt(imp, reach, short),
                        "-" if not np.isfinite(wall) else "%.2gx" % wall,
-                       "-" if not np.isfinite(kept) else "%d%%" % int(round(100.0 * kept))))
+                       self._iimp_kept_txt(kept, reach, held)))
         rows.append("<div style='color:#7d8492'>click this panel to close it</div>")
         return "<div style='line-height:150%'>" + "<br>".join(rows) + "</div>"
 

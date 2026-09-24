@@ -485,7 +485,7 @@ public final class ChartView extends View {
             s.tkBuy = M.tkBuy; s.tkSell = M.tkSell; s.tkForm = M.tkForm;
             s.mode = M.iimpMode; s.iN = M.iN; s.iX0 = M.iX0; s.iX1 = M.iX1; s.iV = M.iV; s.iMult = M.iMult; s.iScore = M.iScore; s.iWall = M.iWall; s.iKept = M.iKept;
             s.iSbuy = M.iSbuy; s.iSsell = M.iSsell; s.iLiib = M.iLiib; s.iLiis = M.iLiis; s.iUp = M.iUp; s.iContra = M.iContra; s.iGood = M.iGood; s.iForm = M.iForm;
-            s.iLyb = M.iLyb; s.iLys = M.iLys; s.iSmn = M.iSmn; s.iPback = M.iPback;
+            s.iLyb = M.iLyb; s.iLys = M.iLys; s.iSmn = M.iSmn; s.iPback = M.iPback; s.iReach = M.iReach; s.iMv = M.iMv;
             s.connected = M.connected;
             s.cint = M.cint; s.cimp = M.cimp;
             s.hlhOn = M.hlhOn && showHlh; s.hlhNote = M.hlhNote; s.hlhPics = M.hlhPics; s.hlhLabels = M.hlhLabels; s.hlhDashes = M.hlhDashes;
@@ -530,7 +530,7 @@ public final class ChartView extends View {
         double livePx, win, tick; int formCol, dec;
         double[] lqX; float[] lqB, lqA;
         double[] tkBuy, tkSell, tkForm;
-        String mode; int iN, iSmn; double[] iX0, iX1; float[] iV, iMult, iScore, iWall, iKept, iSbuy, iSsell, iLiib, iLiis, iLyb, iLys, iPback; byte[] iUp, iContra, iGood, iForm;
+        String mode; int iN, iSmn; double[] iX0, iX1; float[] iV, iMult, iScore, iWall, iKept, iSbuy, iSsell, iLiib, iLiis, iLyb, iLys, iPback, iReach, iMv; byte[] iUp, iContra, iGood, iForm;
         boolean connected;
         FlowModel.Lines cint, cimp;
         boolean hlhOn; String hlhNote; List<FlowModel.HlhPic> hlhPics; List<FlowModel.HlhLabel> hlhLabels; List<FlowModel.HlhDash> hlhDashes;
@@ -1131,9 +1131,19 @@ public final class ChartView extends View {
         StringBuilder sb = new StringBuilder();
         sb.append("B ").append(s.iSbuy[k] > -900 ? String.valueOf(Math.round(s.iSbuy[k])) : "-").append(" / S ").append(s.iSsell[k] > -900 ? String.valueOf(Math.round(s.iSsell[k])) : "-");
         sb.append("  ·  ").append(s.iUp[k] != 0 ? "BUY" : "SELL").append(' ').append(String.format(Locale.US, "%.2g", s.iMult[k])).append('x');
-        sb.append("  ·  impact ").append(String.format(Locale.US, "%.2g", Math.exp(s.iScore[k] > -900 ? s.iScore[k] : 0))).append('x');
+        // a SHORT push (under 4 ticks) quotes no multiple -- the terminal's _iimp_impact_txt (2026-09-24)
+        double rch = (s.iReach != null && k < s.iReach.length && s.iReach[k] > -900) ? s.iReach[k] : Double.NaN;
+        boolean shortPush = !Double.isNaN(rch) && rch < 4.0;
+        if (shortPush) sb.append("  ·  impact ").append(rch >= 1 ? "short push" : "no push");
+        else sb.append("  ·  impact ").append(String.format(Locale.US, "%.2g", Math.exp(s.iScore[k] > -900 ? s.iScore[k] : 0))).append('x');
         sb.append("  ·  wall ").append(s.iWall[k] > -900 ? String.format(Locale.US, "%.2gx", s.iWall[k]) : "-");
-        sb.append("  ·  kept ").append(s.iKept[k] > -900 ? String.format(Locale.US, "%d%%", Math.round(100 * s.iKept[k])) : "-");
+        // KEPT: a percent only for a real push that closed on the leader's side, else the signed ticks it held
+        double lmv = (s.iMv != null && k < s.iMv.length && s.iMv[k] > -900) ? (s.iUp[k] != 0 ? s.iMv[k] : -s.iMv[k]) : Double.NaN;
+        String keptTxt;
+        if (s.iKept[k] > -900 && s.iKept[k] >= 0 && !Double.isNaN(rch) && rch >= 4.0) keptTxt = String.format(Locale.US, "%d%%", Math.round(100 * s.iKept[k]));
+        else if (!Double.isNaN(lmv)) { long nt = Math.round(lmv); keptTxt = nt == 0 ? "0t" : (nt > 0 ? "+" + nt + "t" : "\u2212" + (-nt) + "t"); }
+        else keptTxt = "-";
+        sb.append("  ·  kept ").append(keptTxt);
         // the OTHER side's answer: how hard it pushed price back from the leader's extreme (2026-09-24)
         sb.append("  ·  ").append(s.iUp[k] != 0 ? "sell" : "buy").append(" push-back ")
           .append(s.iPback != null && k < s.iPback.length && s.iPback[k] > -900 ? String.format(Locale.US, "%.2gx", s.iPback[k]) : "-");

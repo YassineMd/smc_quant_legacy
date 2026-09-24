@@ -90,6 +90,7 @@ IIMP_BAR = {"buy": "#26a69a", "sell": "#ef5350", "contra": "#ff9f43"}
 IIMP_TXT_DARK = {"buy": "#4dd0c1", "sell": "#ff7b78", "contra": "#ffb366"}
 IIMP_TXT_LIGHT = {"buy": "#00796b", "sell": "#c62828", "contra": "#c96a00"}
 IIMP_WALL_HIGH, IIMP_WALL_LOW = 1.06, 0.94      # config.IIMP_WALL_HIGH / IIMP_WALL_LOW: the pane's dot rule
+IIMP_KEEP_MIN_TICKS = 4.0                       # config.IIMP_KEEP_MIN_TICKS: a push under this is a SHORT push
 
 # the price move, coloured by the move itself: green up, red down, grey when it ended where it started
 MOVE_DARK = ("#FF5A5A", "#7A828C", "#2BE86B")
@@ -565,7 +566,9 @@ def build_rows(t, t_end, done, move, side_dom, vol_ratio, speed_ratio,
                         "i_good": bool(iimp["good"][k]), "i_wall": _at(iimp["wall"], k),
                         "i_kept": _at(iimp["kept"], k), "i_contra": bool(iimp["contra"][k]),
                         "i_pb": _at(iimp["pb"], k), "i_give": _at(iimp["give"], k),
-                        "i_why": str(iimp["why"][k] or "")})
+                        "i_why": str(iimp["why"][k] or ""),
+                        "i_reach": _at(iimp.get("reach"), k), "i_lmv": _at(iimp.get("lmv"), k),
+                        "i_short": bool(iimp["short"][k]) if "short" in iimp else False})
         return out
 
     def _contra(k):
@@ -1353,6 +1356,7 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
         tc = QtGui.QColor((IIMP_TXT_DARK if dk else IIMP_TXT_LIGHT)[key])
         ink = QtGui.QColor("#e6ebf0" if dk else "#1a1a1a")
         mult = g("i_mult"); imp = g("i_imp"); wall = g("i_wall"); kept = g("i_kept")
+        reach = g("i_reach"); lmv = g("i_lmv"); short = bool(raw.get("i_short"))
 
         # ---- the bar in miniature, around its own 1x line
         mx = x + 17.0; mid = sy + 27.0; half = 18.0
@@ -1392,12 +1396,26 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
         tw = (x + cw - 14.0 - tx0) / 4.0
         wtag = ("wall" if math.isfinite(wall) and wall >= IIMP_WALL_HIGH else
                 "open" if math.isfinite(wall) and wall <= IIMP_WALL_LOW else "")
+        # IMPACT: a SHORT push (under IIMP_KEEP_MIN_TICKS) quotes no multiple -- "no push" at 0 ticks, "short push"
+        # otherwise. KEPT: a PERCENT only for a real push that closed on the leader's side, else the SIGNED TICKS
+        # the leader held (user 2026-09-24) -- terminal._iimp_impact_txt / _iimp_kept_txt, the pane's own wording.
+        if short:
+            imp_txt = "short push" if (math.isfinite(reach) and reach >= 1) else "no push"
+        else:
+            imp_txt = fx(imp)
+        pct = math.isfinite(kept) and kept >= 0 and math.isfinite(reach) and reach >= IIMP_KEEP_MIN_TICKS
+        if pct:
+            kept_txt = "%d%%" % int(round(100.0 * kept)); kept_col = ink
+        elif math.isfinite(lmv):
+            _n = int(round(lmv))
+            kept_txt = "0t" if _n == 0 else ("+%dt" % _n if _n > 0 else "\u2212%dt" % -_n)
+            kept_col = ink if _n > 0 else dim
+        else:
+            kept_txt = "–"; kept_col = dim
         tiles = (("INTEREST", ("BUY " if buy else "SELL ") + fx(mult), tc),
-                 ("IMPACT", fx(imp), ink if good else dim),
+                 ("IMPACT", imp_txt, ink if (good and not short) else dim),
                  ("WALL", fx(wall), ink),
-                 # below zero the close went AGAINST the leader: "none" reads plainer than "-330%" (the why says how far)
-                 ("KEPT", ("none" if kept < 0 else "%d%%" % int(round(100.0 * kept))) if math.isfinite(kept) else "–",
-                  dim if (math.isfinite(kept) and kept < 0) else ink))
+                 ("KEPT", kept_txt, kept_col))
         fmv = QtGui.QFontMetrics(F["val"])
         for i, (lab, val, col) in enumerate(tiles):
             lx = tx0 + i * tw
@@ -1408,7 +1426,7 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
             if lab == "WALL" and wtag:
                 p.setFont(F["tiny"]); p.setPen(dim)
                 p.drawText(QtCore.QPointF(lx + fmv.horizontalAdvance(val) + 4, sy + 32), wtag)
-            if lab == "KEPT":
+            if lab == "KEPT" and pct:           # the bar only measures a percent; ticks stand alone
                 bw_ = max(12.0, tw - 16.0)
                 tr = QtCore.QRectF(lx, sy + 37, bw_, 3.0)
                 p.setPen(QtCore.Qt.NoPen); p.setBrush(QtGui.QColor("#262d34" if dk else "#eceef0"))

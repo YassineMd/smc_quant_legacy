@@ -55,6 +55,7 @@ public final class InterpView extends View {
     private static final int[] IIMP_TXT_DARK = {Color.parseColor("#4dd0c1"), Color.parseColor("#ff7b78"), Color.parseColor("#ffb366")};
     private static final int[] IIMP_TXT_LIGHT = {Color.parseColor("#00796b"), Color.parseColor("#c62828"), Color.parseColor("#c96a00")};
     private static final double WALL_HIGH = 1.06, WALL_LOW = 0.94;     // config.IIMP_WALL_HIGH / _LOW
+    private static final double KEEP_MIN = 4.0;                         // config.IIMP_KEEP_MIN_TICKS: a SHORT push below
     public boolean dark = true;
 
     public void setDark(boolean dark) { this.dark = dark; setBackgroundColor(Color.parseColor(dark ? "#141414" : "#ffffff")); invalidate(); }
@@ -436,11 +437,21 @@ public final class InterpView extends View {
         // ---- four tiles
         float tx0 = x + 46 * d, tw = (x + cw - 14 * d - tx0) / 4f;
         String wtag = ok(r.iWall) ? (r.iWall >= WALL_HIGH ? "wall" : (r.iWall <= WALL_LOW ? "open" : "")) : "";
-        boolean keptNone = ok(r.iKept) && r.iKept < 0;       // the close went AGAINST the leader: the why says how far
+        // IMPACT: a SHORT push quotes no multiple ("no push" at 0 ticks, "short push" otherwise). KEPT: a PERCENT only
+        // for a real push that closed on the leader's side, else the SIGNED TICKS the leader held (2026-09-24) --
+        // the terminal's _iimp_impact_txt / _iimp_kept_txt
+        String impTxt = r.iShort ? ((ok(r.iReach) && r.iReach >= 1) ? "short push" : "no push") : fx(r.iImp);
+        boolean pct = ok(r.iKept) && r.iKept >= 0 && ok(r.iReach) && r.iReach >= KEEP_MIN;
+        String keptTxt; int keptCol;
+        if (pct) { keptTxt = Math.round(100 * r.iKept) + "%"; keptCol = ink; }
+        else if (ok(r.iLmv)) {
+            long nt = Math.round(r.iLmv);
+            keptTxt = nt == 0 ? "0t" : (nt > 0 ? "+" + nt + "t" : "\u2212" + (-nt) + "t");
+            keptCol = nt > 0 ? ink : dim;
+        } else { keptTxt = "–"; keptCol = dim; }
         String[] labs = {"INTEREST", "IMPACT", "WALL", "KEPT"};
-        String[] vals = {(buy ? "BUY " : "SELL ") + fx(r.iMult), fx(r.iImp), fx(r.iWall),
-                         ok(r.iKept) ? (keptNone ? "none" : Math.round(100 * r.iKept) + "%") : "–"};
-        int[] cols = {tc, r.iGood ? ink : dim, ink, keptNone ? dim : ink};
+        String[] vals = {(buy ? "BUY " : "SELL ") + fx(r.iMult), impTxt, fx(r.iWall), keptTxt};
+        int[] cols = {tc, (r.iGood && !r.iShort) ? ink : dim, ink, keptCol};
         for (int i = 0; i < 4; i++) {
             float lx = tx0 + i * tw;
             pText.setLetterSpacing(0.09f);
@@ -448,7 +459,7 @@ public final class InterpView extends View {
             pText.setLetterSpacing(0f);
             text(c, vals[i], lx, sy + 35 * d, bold, 13f, cols[i]);
             if (i == 2 && !wtag.isEmpty()) text(c, wtag, lx + width(vals[i], bold, 13f) + 4 * d, sy + 35 * d, sans, 9.5f, dim);
-            if (i == 3) {
+            if (i == 3 && pct) {                                 // the bar only measures a percent
                 float kw = Math.max(12 * d, tw - 18 * d);
                 pFill.setColor(col(dark ? "#262d34" : "#eceef0"));
                 rf.set(lx, sy + 40 * d, lx + kw, sy + 43.5f * d); c.drawRoundRect(rf, 1.7f * d, 1.7f * d, pFill);
