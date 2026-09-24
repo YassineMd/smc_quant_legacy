@@ -1326,10 +1326,12 @@ public final class ChartView extends View {
         notePane(PANE_WVG, top, hgt, ylo, yhi);
         int n = s.iX0 == null ? 0 : Math.min(s.iN, s.iX0.length);
         double[] want = new double[n], get = new double[n];
+        boolean[] form = new boolean[n];
         for (int i = 0; i < n; i++) {
             want[i] = Double.NaN; get[i] = Double.NaN;
-            boolean formi = s.iForm != null && i < s.iForm.length && s.iForm[i] != 0;
-            if (formi) continue;
+            // the FORMING cycle is read too (user 2026-09-24: "I should also see the live forming lines"): drawn apart,
+            // lighter, like the LINES panes' forming stretch
+            form[i] = s.iForm != null && i < s.iForm.length && s.iForm[i] != 0;
             double ab = at(s.iArb, i), as = at(s.iArs, i);
             if (ab > 0 && as > 0) want[i] = clip(Math.log(ab / as) / LN2);
             double sc = at(s.iScore, i), rch = at(s.iReach, i), pb = at(s.iPback, i);
@@ -1346,7 +1348,7 @@ public final class ChartView extends View {
         pl.setPathEffect(null); pl.setColor(cMid); pl.setStrokeWidth(1 * d);
         c.drawLine(r.left, y0, plotR, y0, pl);
         pt.setTypeface(Typeface.MONOSPACE); pt.setTextSize(9 * d); pt.setFakeBoldText(false); pt.setColor(cTitle);
-        c.drawText("↑ buyers", r.left + 6 * d, top + 11 * d, pt);           // the corners: the rings sit on zero
+        c.drawText("↑ buyers", r.left + 6 * d, top + 11 * d, pt);           // the corners, clear of the lines
         c.drawText("↓ sellers", r.left + 6 * d, r.bottom - 5 * d, pt);
         // the two lines, broken where a value is missing or a cycle is missing in time
         for (int k = 0; k < 2; k++) {
@@ -1354,17 +1356,27 @@ public final class ChartView extends View {
             path.reset();
             boolean open = false; int pi = -1;
             for (int i = 0; i < n; i++) {
-                if (Double.isNaN(y[i])) { open = false; continue; }
+                if (Double.isNaN(y[i]) || form[i]) { open = false; continue; }
                 if (open && pi >= 0 && s.iX0[i] - s.iX1[pi] > 0.5) open = false;
                 float px = xPx(0.5 * (s.iX0[i] + s.iX1[i]));
                 float py = (float) (top + (yhi - y[i]) / range * hgt);
                 if (!open) { path.moveTo(px, py); open = true; } else path.lineTo(px, py);
                 pi = i;
             }
-            pl.setStrokeWidth(1.8f * d);
-            if (k == 0) { pl.setColor(WVG_WANTS); pl.setPathEffect(null); }
-            else { pl.setColor(WVG_GETS); pl.setPathEffect(new DashPathEffect(new float[]{6 * d, 4 * d}, 0)); }
+            int col = k == 0 ? WVG_WANTS : WVG_GETS;
+            pl.setStrokeWidth(1.8f * d); pl.setColor(col);
+            pl.setPathEffect(k == 0 ? null : new DashPathEffect(new float[]{6 * d, 4 * d}, 0));
             c.drawPath(path, pl);
+            // the FORMING stretch: from the last finished point out to the live one, lighter, same stroke
+            for (int i = 1; i < n; i++) {
+                if (!form[i] || form[i - 1] || Double.isNaN(y[i]) || Double.isNaN(y[i - 1])) continue;
+                if (s.iX0[i] - s.iX1[i - 1] > 0.5) continue;
+                pl.setColor(Color.argb(150, Color.red(col), Color.green(col), Color.blue(col)));
+                c.drawLine(xPx(0.5 * (s.iX0[i - 1] + s.iX1[i - 1])), (float) (top + (yhi - y[i - 1]) / range * hgt),
+                           xPx(0.5 * (s.iX0[i] + s.iX1[i])), (float) (top + (yhi - y[i]) / range * hgt), pl);
+                pf.setColor(Color.argb(170, Color.red(col), Color.green(col), Color.blue(col)));
+                c.drawCircle(xPx(0.5 * (s.iX0[i] + s.iX1[i])), (float) (top + (yhi - y[i]) / range * hgt), 2.4f * d, pf);
+            }
         }
         pl.setPathEffect(null);
         // opposite signs: only the readout says it (no marks on the chart)
@@ -1388,8 +1400,8 @@ public final class ChartView extends View {
         // the bottom-right readout: the last finished cycle
         for (int i = n - 1; i >= 0; i--) {
             if (Double.isNaN(want[i]) && Double.isNaN(get[i])) continue;
-            String txt = String.format(Locale.US, "wants %s  ·  gets %s%s%s", sideMult(want[i]), sideMult(get[i]), dis[i] ? "  ·  they disagree" : "",
-                    sm > 1 ? "  ·  " + sm + "-cycle mean" : "");
+            String txt = String.format(Locale.US, "wants %s  ·  gets %s%s%s%s", sideMult(want[i]), sideMult(get[i]), dis[i] ? "  ·  they disagree" : "",
+                    sm > 1 ? "  ·  " + sm + "-cycle mean" : "", form[i] ? "  ·  still forming" : "");
             pt.setTypeface(Typeface.MONOSPACE); pt.setTextSize(10 * d);
             pt.setColor(dis[i] ? WVG_RING : cTitle);
             c.drawText(txt, plotR - pt.measureText(txt) - 6 * d, r.bottom - 5 * d, pt);
