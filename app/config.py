@@ -169,6 +169,11 @@ AUCTION_SNAPSHOT_CYCLES = 80        # the newest this many cycles go in a "send 
 AUCTION_FILE_CYCLES = 400           # ... and in the FILE the Claude connector reads (the whole feed window, capped)
 AUCTION_ACTIVE_MIN = 1.0            # a side is ACTIVE at or above its own normal aggressive $/s
 AUCTION_SUMMARY_N = 12              # the recent stretch the summary counts over (finished rated cycles)
+# RESPONSIVE ZONES (user 2026-09-24): where each side has actually defended value TODAY, clustered from the finished
+# cycles; drawn on the Flow PRICE pane (the tablet first). Counts and times only -- never a rate or a percent.
+RZ_CLUSTER_TICKS = 13               # responses whose extremes lie within this many ticks form one zone
+RZ_MAX_AGE_SECS = 6 * 3600.0        # a zone whose last response is older is dropped (and it fades until then)
+RZ_BLOC_DAYS = 3                    # today's HLH D-blocs + those of the last 2 days are the level bands
 FOOTPRINTS_FILE = os.path.join(DATA_DIR, "server_footprints.json")  # legacy JSON (migration source)
 HISTORY_DB = os.path.join(DATA_DIR, "history.db")  # SQLite state store (instant rehydration)
 

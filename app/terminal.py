@@ -23109,6 +23109,101 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         self._auction_mark = None if t0 is None else float(t0)
         self._auction_snapshot_write(force=True)
 
+    def _rz_state(self, now: float):
+        """RESPONSIVE ZONES (user 2026-09-24) -- what the overlay draws, from data the terminal already holds:
+
+        LEVELS  today's HLH profile POC / VAH / VAL as it stands, and every HLH D-bloc of today and the last 2 days as
+                a VAL-POC-VAH band (the overlay tints the part above today's POC as the seller-responsive zone, the part
+                below as the buyer-responsive zone -- the doctrine: sellers defend above value's centre, buyers below).
+        EVIDENCE today's FINISHED cycles (the Interpretation read, <= RZ_MAX_AGE_SECS old):
+                SELLERS RESPONDED = sellers labelled "responsive effective", OR buyers led and were absorbed (did not
+                convert, or price closed against them) while sellers' push-back was >= 1x -- recorded at the cycle's
+                HIGH; BUYERS RESPONDED is the mirror, at its LOW. Each side's prices are clustered (a zone spans at most
+                RZ_CLUSTER_TICKS) into zones: count, first / last response.
+        TAG     when the live price is inside a zone or a bloc band: the CURRENT cycle's label for the side the doctrine
+                expects to respond there (above today's POC: sellers; below: buyers).
+        Returns None until the feed has read its cycles; {"note": ...} while HLH gives no value yet."""
+        ctx = self.__dict__.get("_auction_ctx")
+        if ctx is None:
+            return None
+        t, t_end_c, done, px0, px1, pxh, pxl, ii, au, _now = ctx
+        tick = float(config.TICK_SIZE)
+        out = {"poc": None, "vah": None, "val": None, "blocs": [], "zones": [], "tag": None, "note": ""}
+        nr = au.get("now")
+        if str(au.get("hlh", "on")) != "on" or not nr:
+            out["note"] = "Responsive Zones: waiting for the HLH day profile"
+            return out
+        poc, vah, val = float(nr[0]), float(nr[1]), float(nr[2])
+        out.update(poc=poc, vah=vah, val=val)
+        # ---- the D-blocs of today and the last 2 days (HLH's own rows, as the layer draws them)
+        from . import hlh_profile as H
+        try:
+            _tg = self._hlh_toggles()
+            pers = self._hlh_state().periods(bool(_tg[1]), now)
+        except Exception:
+            pers = []
+        day = [pk for pk in pers if not pk[0]][-int(config.RZ_BLOC_DAYS):]
+        seen = set()
+        for pk in day:
+            for mb in (pk[5] or []):
+                if mb.vah is None or mb.val is None:
+                    continue
+                kk = (round(float(mb.val), 4), round(float(mb.vah), 4))
+                if kk in seen:
+                    continue
+                seen.add(kk)
+                bp = H.bloc_poc(mb)
+                out["blocs"].append([float(mb.tA) if mb.tA is not None else float(pk[1]), float(mb.val),
+                                     float(bp) if bp is not None else None, float(mb.vah), str(mb.name)])
+        # ---- the evidence: today's finished cycles
+        d0 = float(H.period_window(float(now), False, str(config.HLH_TZ))[0])
+        t_min = now - float(config.RZ_MAX_AGE_SECS)
+        rows = au["rows"]
+        resp = {1: [], -1: []}                     # side -> [(price, start, end)]
+        for k in range(int(np.size(t))):
+            if not bool(done[k]) or float(t[k]) < d0 or float(t_end_c[k]) < t_min:
+                continue
+            ld = int(ii["lead"][k])
+            if ld == 0:
+                continue
+            absorbed = (not bool(ii["good"][k])) or bool(ii["contra"][k])
+            pb = float(ii["pb"][k])
+            pushed = np.isfinite(pb) and pb >= 1.0
+            if rows[k]["sell"] == "responsive effective" or (ld > 0 and absorbed and pushed):
+                if np.isfinite(pxh[k]):
+                    resp[1].append((float(pxh[k]), float(t[k]), float(t_end_c[k])))
+            if rows[k]["buy"] == "responsive effective" or (ld < 0 and absorbed and pushed):
+                if np.isfinite(pxl[k]):
+                    resp[-1].append((float(pxl[k]), float(t[k]), float(t_end_c[k])))
+        width = float(config.RZ_CLUSTER_TICKS) * tick + 1e-9
+        from .flow_interp import _clock
+        for side, pts in resp.items():
+            pts.sort()
+            i = 0
+            while i < len(pts):
+                j = i
+                while j + 1 < len(pts) and pts[j + 1][0] - pts[i][0] <= width:
+                    j += 1
+                grp = pts[i:j + 1]
+                last = max(grp, key=lambda g: g[1])
+                n = len(grp)
+                out["zones"].append({"side": side, "lo": grp[0][0], "hi": grp[-1][0], "n": n,
+                                     "t_first": min(g[1] for g in grp), "t_last": last[1], "t_last_end": last[2],
+                                     "label": "%s held %d\u00d7 \u00b7 last %s" % ("Sellers" if side > 0 else "Buyers", n, _clock(last[1])[:5])})
+                i = j + 1
+        # ---- the live tag
+        lp = self._engine_live_px()
+        if lp is not None and np.isfinite(lp):
+            p = float(lp)
+            inside = any(z["lo"] - tick * 0.5 <= p <= z["hi"] + tick * 0.5 for z in out["zones"]) or \
+                any(b[1] <= p <= b[3] for b in out["blocs"])
+            if inside and p != poc and len(rows):
+                side = 1 if p > poc else -1
+                lbl = str(rows[-1]["sell" if side > 0 else "buy"] or "")
+                how = "\u2013" if lbl in ("", "unrated") else ("quiet" if lbl == "quiet" else lbl.rsplit(" ", 1)[-1])
+                out["tag"] = {"side": side, "text": "%s: %s" % ("sellers" if side > 0 else "buyers", how)}
+        return out
+
     def _auction_share(self, sel=None) -> dict:
         """THE "SEND TO CLAUDE" PACK (user 2026-09-24: "my tablet can communicate the info with the Claude app"): the
         reading instructions + a FRESH snapshot. The feed is re-read first (its signature cleared), so the pack is

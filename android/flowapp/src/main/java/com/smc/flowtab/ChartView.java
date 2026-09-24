@@ -48,6 +48,7 @@ public final class ChartView extends View {
     // toggles (the hamburger's)
     public boolean showPrice = true, showFlow = true, showLiq = true, showIimp = true, showLines = true, showTakeover = true;
     public boolean showHlh = false, showBp = false;
+    public boolean showRz = false;          // RESPONSIVE ZONES (Indicator menu, user 2026-09-24)
     public boolean bw = true;                       // Chart Style "Simple BW": white canvas, black ink, black / white candles
     private int cBg, cFg, cTitle, cGuide, cSep, cMid, cInk;
 
@@ -490,6 +491,8 @@ public final class ChartView extends View {
             s.cint = M.cint; s.cimp = M.cimp;
             s.hlhOn = M.hlhOn && showHlh; s.hlhNote = M.hlhNote; s.hlhPics = M.hlhPics; s.hlhLabels = M.hlhLabels; s.hlhDashes = M.hlhDashes;
             s.bpOn = M.bpOn && showBp; s.bpBub = M.bpBub; s.bpDia = M.bpDia; s.bpLmax = M.bpLmax;
+            s.rzOn = M.rzOn && showRz; s.rzPoc = M.rzPoc; s.rzVah = M.rzVah; s.rzVal = M.rzVal; s.rzBlocs = M.rzBlocs;
+            s.rzZones = M.rzZones; s.rzTag = M.rzTag; s.rzNote = M.rzNote; s.rzTagSide = M.rzTagSide;
             s.series = new float[3][];
             if (paneOn[PANE_FLOW] && s.buy.length > 0) M.series(vx0 - 1, vx1 + 1, (int) (2 * plotR), s.series);
         }
@@ -535,6 +538,7 @@ public final class ChartView extends View {
         FlowModel.Lines cint, cimp;
         boolean hlhOn; String hlhNote; List<FlowModel.HlhPic> hlhPics; List<FlowModel.HlhLabel> hlhLabels; List<FlowModel.HlhDash> hlhDashes;
         boolean bpOn; double[][] bpBub, bpDia; int bpLmax;
+        boolean rzOn; double rzPoc, rzVah, rzVal; double[][] rzBlocs; List<FlowModel.RzZone> rzZones; String rzTag, rzNote; int rzTagSide;
         double liveAnim;
     }
 
@@ -614,6 +618,7 @@ public final class ChartView extends View {
         // whether or not that pane is shown here.
         if (showDomPrice) drawDomBoxes(c, s, r.left, top, hgt, yl, yh, forming, fh, fl);
         if (s.hlhOn) drawHlh(c, s, r, top, hgt, yl, yh);
+        if (s.rzOn) drawRz(c, s, r, top, hgt, yl, yh, now);
         for (int i = i0; i < i1; i++) {
             boolean isForm = i == last && forming;
             double o = s.cO[i], cl = isForm ? fc : s.cC[i], hh = isForm ? fh : s.cH[i], ll = isForm ? fl : s.cL[i];
@@ -624,6 +629,7 @@ public final class ChartView extends View {
             int col = isForm ? s.formCol : s.cCol[i];
             drawCandle(c, xm, hw, o, hh, ll, cl, col, top, hgt, yl, yh);
         }
+        if (s.rzOn) drawRzLabels(c, s, r, top, yl, yh, now);
         // the marked candle: a tap here or on its feed row
         if (!Double.isNaN(selCycle)) {
             int k = nearest(s.cT, selCycle);
@@ -666,6 +672,7 @@ public final class ChartView extends View {
             pt.setColor(Color.parseColor("#eef2f8")); pt.setFakeBoldText(true); c.drawText(p1, pill.left + 5 * d, y - 3 * d, pt);
             if (forming) { pt.setColor(pc); pt.setTextSize(9.5f * d); c.drawText(p2, pill.left + 5 * d, y + 10 * d, pt); }
             pt.setFakeBoldText(false);
+            if (s.rzOn) drawRzTag(c, s, r, top, yl, yh);
         } else {
             c.restore();
         }
@@ -760,6 +767,139 @@ public final class ChartView extends View {
             pf.setColor(Color.argb(140, 0, 0, 0)); c.drawRoundRect(new RectF(r.left + 8 * d, top + 6 * d, r.left + 8 * d + w, top + 24 * d), 3 * d, 3 * d, pf);
             pt.setColor(Color.rgb(255, 200, 80)); c.drawText(s.hlhNote, r.left + 14 * d, top + 19 * d, pt);
         }
+    }
+
+    // ------------------------------------------------------------------ RESPONSIVE ZONES (user 2026-09-24)
+    // The doctrine: sellers defend value ABOVE today's POC, buyers BELOW. Every D-bloc of today and the last 2 days is a
+    // band, tinted red above today's live POC (seller-responsive) and teal below (buyer-responsive); today's POC / VAH /
+    // VAL are lines. On top, the ZONES where a side actually held today (the engine's clusters of responding cycles'
+    // extremes): a thin band per zone, "Sellers held 4x . last 13:08", fading with the age of its last response (gone
+    // at 6 h). Counts and times only.
+    private static final int RZ_SELL = Color.rgb(239, 83, 80), RZ_BUY = Color.rgb(38, 166, 154);
+    private static final double RZ_MAX_AGE = 6 * 3600.0;
+
+    private static int withAlpha(int col, int a) { return (col & 0x00ffffff) | (Math.max(0, Math.min(255, a)) << 24); }
+
+    private List<FlowModel.RzZone> rzShown = new ArrayList<>();
+
+    private void drawRz(Canvas c, Snap s, RectF r, float top, float hgt, double yl, double yh, double now) {
+        double ky = hgt / Math.max(1e-12, yh - yl);
+        float xr = plotR;
+        double poc = s.rzPoc;
+        // ---- the bloc bands, split at today's POC
+        for (double[] b : s.rzBlocs) {
+            if (b.length < 4 || Double.isNaN(b[1]) || Double.isNaN(b[3])) continue;
+            float x0 = Math.max(r.left, xPx(b[0]));
+            if (x0 >= xr) continue;
+            double lo = b[1], hi = b[3];
+            if (!Double.isNaN(poc)) {
+                // light tints (bands overlap and add up) + a hairline at each band's own VAL / VAH
+                if (hi > poc) { double a = Math.max(lo, poc); pf.setColor(withAlpha(RZ_SELL, bw ? 16 : 20)); c.drawRect(x0, (float) (top + (yh - hi) * ky), xr, (float) (top + (yh - a) * ky), pf); }
+                if (lo < poc) { double a = Math.min(hi, poc); pf.setColor(withAlpha(RZ_BUY, bw ? 16 : 20)); c.drawRect(x0, (float) (top + (yh - a) * ky), xr, (float) (top + (yh - lo) * ky), pf); }
+                pl.setStrokeWidth(0.7f * d);
+                pl.setColor(withAlpha(hi > poc ? RZ_SELL : RZ_BUY, 70)); c.drawLine(x0, (float) (top + (yh - hi) * ky), xr, (float) (top + (yh - hi) * ky), pl);
+                pl.setColor(withAlpha(lo < poc ? RZ_BUY : RZ_SELL, 70)); c.drawLine(x0, (float) (top + (yh - lo) * ky), xr, (float) (top + (yh - lo) * ky), pl);
+            }
+            if (!Double.isNaN(b[2])) {                                        // the bloc's own POC
+                float y = (float) (top + (yh - b[2]) * ky);
+                pl.setColor(withAlpha(!Double.isNaN(poc) && b[2] < poc ? RZ_BUY : RZ_SELL, 120)); pl.setStrokeWidth(1 * d);
+                c.drawLine(x0, y, xr, y, pl);
+            }
+        }
+        // ---- today's POC / VAH / VAL
+        int ink = bw ? Color.rgb(40, 40, 40) : Color.rgb(205, 210, 218);
+        pt.setTypeface(Typeface.MONOSPACE); pt.setTextSize(9 * d);
+        double[] lv = {s.rzVah, poc, s.rzVal}; String[] ln = {"VAH", "POC", "VAL"};
+        for (int i = 0; i < 3; i++) {
+            if (Double.isNaN(lv[i])) continue;
+            float y = (float) (top + (yh - lv[i]) * ky);
+            if (y < top || y > r.bottom) continue;
+            pl.setColor(withAlpha(ink, i == 1 ? 210 : 120)); pl.setStrokeWidth((i == 1 ? 1.4f : 0.9f) * d);
+            c.drawLine(r.left, y, xr, y, pl);
+            pt.setColor(withAlpha(ink, i == 1 ? 230 : 160)); c.drawText(ln[i] + " today", r.left + 6 * d, y - 3 * d, pt);
+        }
+        // ---- where each side HELD today: every zone's band first, then the labels
+        List<FlowModel.RzZone> shown = new ArrayList<>();
+        for (FlowModel.RzZone z : s.rzZones) {
+            double age = Math.max(0, now - z.tLastEnd);
+            if (age > RZ_MAX_AGE || Double.isNaN(z.lo) || Double.isNaN(z.hi)) continue;
+            double f = Math.max(0.25, 1.0 - age / RZ_MAX_AGE);
+            int col = z.side > 0 ? RZ_SELL : RZ_BUY;
+            float yT = (float) (top + (yh - z.hi) * ky), yB = (float) (top + (yh - z.lo) * ky);
+            if (yB - yT < 3 * d) { float m = (yT + yB) / 2; yT = m - 1.5f * d; yB = m + 1.5f * d; }
+            if (yB < top || yT > r.bottom) continue;
+            float x0 = Math.max(r.left, xPx(z.tFirst));
+            if (x0 >= xr) continue;
+            pf.setColor(withAlpha(col, (int) (f * 90))); c.drawRect(x0, yT, xr, yB, pf);
+            pl.setColor(withAlpha(col, (int) (f * 210))); pl.setStrokeWidth(1 * d); c.drawRect(x0, yT, xr, yB, pl);
+            shown.add(z);
+        }
+        rzShown = shown;
+        pt.setTypeface(Typeface.MONOSPACE);
+        if (Double.isNaN(poc) && s.rzNote != null && !s.rzNote.isEmpty()) {
+            pt.setTextSize(10.5f * d); float w = pt.measureText(s.rzNote) + 12 * d;
+            pf.setColor(Color.argb(140, 0, 0, 0)); c.drawRoundRect(new RectF(r.left + 8 * d, top + 28 * d, r.left + 8 * d + w, top + 46 * d), 3 * d, 3 * d, pf);
+            pt.setColor(Color.rgb(255, 200, 80)); c.drawText(s.rzNote, r.left + 14 * d, top + 41 * d, pt);
+        }
+    }
+
+    /** The zones' labels, drawn AFTER the candles (a candle must never cut one) at the zone's START -- where its first
+     *  response happened, like HLH's own labels -- so the newest candles at the right edge stay clear. The most
+     *  responses first, then the most recent; never on top of another label or of the live tag (tried above the band,
+     *  then below; a label with no room is left out, its band stays). */
+    private void drawRzLabels(Canvas c, Snap s, RectF r, float top, double yl, double yh, double now) {
+        if (rzShown.isEmpty()) return;
+        double ky = pxHgt / Math.max(1e-12, yh - yl);
+        List<FlowModel.RzZone> order = new ArrayList<>(rzShown);
+        java.util.Collections.sort(order, (a, b) -> a.n != b.n ? Integer.compare(b.n, a.n) : Double.compare(b.tLast, a.tLast));
+        pt.setTypeface(Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)); pt.setTextSize(9.5f * d);
+        float th = pt.getTextSize() + 3 * d;
+        List<RectF> placed = new ArrayList<>();
+        RectF tag = rzTagRect(s, r, top, yl, yh);
+        if (tag != null) placed.add(tag);
+        for (FlowModel.RzZone z : order) {
+            double f = Math.max(0.25, 1.0 - Math.max(0, now - z.tLastEnd) / RZ_MAX_AGE);
+            int col = z.side > 0 ? RZ_SELL : RZ_BUY;
+            float yT = (float) (top + (yh - z.hi) * ky), yB = (float) (top + (yh - z.lo) * ky);
+            float tw = pt.measureText(z.label) + 6 * d;
+            float lx = Math.min(plotR - 6 * d - tw, Math.max(r.left + 4 * d, xPx(z.tFirst) + 2 * d));
+            RectF box = null;
+            for (float yb : new float[]{yT - 1 * d, yB + th + 1 * d}) {
+                RectF cand = new RectF(lx, yb - th, lx + tw, yb);
+                if (cand.top < top || cand.bottom > r.bottom) continue;
+                boolean hit = false;
+                for (RectF p : placed) if (RectF.intersects(p, cand)) { hit = true; break; }
+                if (!hit) { box = cand; break; }
+            }
+            if (box == null) continue;
+            placed.add(box);
+            pf.setColor(bw ? Color.argb((int) (f * 170), 255, 255, 255) : Color.argb((int) (f * 170), 20, 24, 30));
+            c.drawRoundRect(box, 3 * d, 3 * d, pf);
+            pt.setColor(withAlpha(col, (int) (f * 255)));
+            c.drawText(z.label, box.left + 3 * d, box.bottom - 3 * d, pt);
+        }
+        pt.setTypeface(Typeface.MONOSPACE);
+    }
+
+    private RectF rzTagRect(Snap s, RectF r, float top, double yl, double yh) {
+        if (s.rzTag == null || s.rzTag.isEmpty() || Double.isNaN(s.livePx)) return null;
+        pt.setTypeface(Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)); pt.setTextSize(10.5f * d);
+        float w = pt.measureText(s.rzTag) + 12 * d, h = 18 * d;
+        float yLive = (float) (top + (yh - s.liveAnim) / (yh - yl) * pxHgt);
+        float yb = Math.max(top + h + 2 * d, Math.min(r.bottom - 2 * d, yLive - 20 * d));
+        return new RectF(plotR - 6 * d - w, yb - h, plotR - 6 * d, yb);
+    }
+
+    /** The live tag: price inside a zone or a bloc band -> the current cycle's label for the side the doctrine expects
+     *  there, just above the live line at the right edge. */
+    private void drawRzTag(Canvas c, Snap s, RectF r, float top, double yl, double yh) {
+        RectF box = rzTagRect(s, r, top, yl, yh);
+        if (box == null) return;
+        int col = s.rzTagSide > 0 ? RZ_SELL : RZ_BUY;
+        pf.setColor(bw ? Color.WHITE : Color.parseColor("#1c2128")); c.drawRoundRect(box, 4 * d, 4 * d, pf);
+        pl.setColor(col); pl.setStrokeWidth(1.2f * d); c.drawRoundRect(box, 4 * d, 4 * d, pl);
+        pt.setColor(col); c.drawText(s.rzTag, box.left + 6 * d, box.bottom - 5 * d, pt);
+        pt.setTypeface(Typeface.MONOSPACE);
     }
 
     // ------------------------------------------------------------------ Big Player marks (bubbles, diamonds, amounts)

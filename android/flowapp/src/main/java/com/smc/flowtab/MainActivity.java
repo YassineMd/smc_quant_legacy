@@ -75,6 +75,7 @@ public final class MainActivity extends Activity implements EngineClient.Listene
         chart.showTakeover = prefs.getBoolean("takeover", true);
         chart.showHlh = prefs.getBoolean("hlh", false);
         chart.showBp = prefs.getBoolean("bigplayer", false);
+        chart.showRz = prefs.getBoolean("rz", false);
         chart.initTools(prefs, new PriceTools.Events() {
             @Override public void toast(String msg) { Toast.makeText(MainActivity.this, msg, Toast.LENGTH_SHORT).show(); }
             @Override public void changed() { chart.dataChanged(); }
@@ -150,6 +151,7 @@ public final class MainActivity extends Activity implements EngineClient.Listene
         feed.sendToggle("takeover", chart.showTakeover);
         feed.sendToggle("hlh", chart.showHlh);
         feed.sendToggle("bigplayer", chart.showBp);
+        feed.sendToggle("rz", chart.showRz);
         feed.sendToggle("bw", bw);
         markKnown = false;                          // the engine may have restarted: tell it the mark again
         if (interp != null) markChanged();
@@ -399,6 +401,7 @@ public final class MainActivity extends Activity implements EngineClient.Listene
         section(col, "Indicator");
         toggle(col, "Big Player", "bigplayer", chart.showBp, v -> { chart.showBp = v; feed.sendToggle("bigplayer", v); });
         toggle(col, "HLH Volume Profile", "hlh", chart.showHlh, v -> { chart.showHlh = v; feed.sendToggle("hlh", v); });
+        toggle(col, "Responsive Zones  (where each side held today)", "rz", chart.showRz, v -> { chart.showRz = v; feed.sendToggle("rz", v); });
         toggle(col, "Lines Impact areas on Price", "domprice", chart.showDomPrice, v -> chart.showDomPrice = v);
         section(col, "Indicator  ›  Cycle Chart");
         toggle(col, "Takeover ▲▼  (one side owns the cycle)", "takeover", chart.showTakeover, v -> { chart.showTakeover = v; feed.sendToggle("takeover", v); });

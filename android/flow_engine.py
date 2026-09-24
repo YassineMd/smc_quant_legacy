@@ -37,6 +37,8 @@ WIRE (newline-delimited JSON; arrays are base64 of little-endian float32 unless 
   <- tog     {k, v}                                                         k: lines | hlh | bigplayer | takeover
   <- explain {k}                                                            k = the cycle's start (x0)
   <- claude  {id, sel?}                                                     sel = the marked cycle's start (x0)
+  -> rz      {on, poc, vah, val, blocs: [[tA, val, poc, vah, name]], zones: [{side, lo, hi, n, t_first, t_last,
+             t_last_end, label}], tag: {side, text} | null, note}          RESPONSIVE ZONES (only while toggled on)
   <- mark    {t0 | null}                                                    the marked card / candle changed: kept in the
              snapshot FILE the Claude connector reads (android/auction_mcp.py)
 Exit codes: 2 = no daemon."""
@@ -403,6 +405,9 @@ class State:
     lines_sig = {"cint": None, "cimp": None}   # the two split panes, each keyed on what it last sent
     hlh_out = None; hlh_t = 0.0; hlh_xm = None; hlh_pics = {}
     bw = True                 # the tablet's Chart Style: the HLH labels are built for a white or a dark ground
+    hlh_tab = False           # the tablet SHOWS the HLH layer (its own toggle)
+    rz = False                # RESPONSIVE ZONES on (it needs HLH's day profile: the layer is computed for either)
+    rz_payload = None; rz_t = 0.0
     bp_sig = None
     view = None; follow = True
     last_live = 0.0
@@ -656,7 +661,7 @@ def tick_hlh(now):
     """The HLH Volume Profile as the terminal's overlay builds it for the PRICE pane (canvas "tab", identity x map,
     the pane's cycles as the bars for the POC runs), serialized when the overlay returns a new tuple."""
     try:
-        on = bool(w._hlh_on())
+        on = bool(w._hlh_on()) and S.hlh_tab
     except Exception:
         on = False
     if not on:
@@ -697,6 +702,28 @@ def tick_hlh(now):
                int(lb.fg.rgba()), lb.font] for lb in out[1]]
     dashes = [[round(d.xa, 3), round(d.xb, 3), round(d.y, 5), int(d.col.rgba())] for d in out[3]]
     send({"t": "hlh", "on": True, "note": out[2], "pics": pics, "labels": labels, "dashes": dashes})
+
+
+def tick_rz(now):
+    """RESPONSIVE ZONES: the terminal's _rz_state, sent when it reads differently (checked once a second)."""
+    if not S.rz or now - S.rz_t < 1.0:
+        return
+    S.rz_t = now
+    st = w._rz_state(now)
+    if st is None:
+        return
+    msg = {"t": "rz", "on": True, "poc": st["poc"], "vah": st["vah"], "val": st["val"], "blocs": st["blocs"],
+           "zones": st["zones"], "tag": st["tag"], "note": st["note"]}
+    payload = json.dumps(msg, separators=(",", ":"), allow_nan=False)
+    if payload == S.rz_payload:
+        return
+    if (S.__dict__.get("rz_shape") != (len(st["blocs"]), len(st["zones"]))):      # not on every tag flip at the POC
+        S.rz_shape = (len(st["blocs"]), len(st["zones"]))
+        log("rz: %d bloc bands, zones sellers %d / buyers %d, tag %s%s" % (len(st["blocs"]),
+            sum(1 for z in st["zones"] if z["side"] > 0), sum(1 for z in st["zones"] if z["side"] < 0),
+            (st["tag"] or {}).get("text"), (" | " + st["note"]) if st["note"] else ""))
+    S.rz_payload = payload
+    send(msg)
 
 
 def tick_bp(now):
@@ -764,7 +791,7 @@ def on_cmd(c):
             cl.ready = True
         S.bins_sent = None; S.cyc_full_needed = True; S.iimp_id = None; S.interp_id = None; S.liq_sig = None; S.tko_id = None
         S.lines_sig = {"cint": None, "cimp": None}
-        S.hlh_out = None; S.hlh_pics = {}; S.bp_sig = None
+        S.hlh_out = None; S.hlh_pics = {}; S.bp_sig = None; S.rz_payload = None
         hello()
         log("hi from the tablet -- sending everything")
     elif k == "view":
@@ -801,6 +828,18 @@ def on_cmd(c):
             w.menu.flow_cross_on.setChecked(v)
         elif key == "bw":
             S.bw = v; S.hlh_out = None
+        elif key in ("hlh", "rz"):
+            # the HLH layer is COMPUTED while the tablet shows it OR Responsive Zones need its day profile; its
+            # geometry is only SENT while the tablet shows it (tick_hlh)
+            if key == "hlh":
+                S.hlh_tab = v; S.hlh_out = None
+            else:
+                S.rz = v; S.rz_payload = None
+                if not v:
+                    send({"t": "rz", "on": False})
+            cb = w.menu.layer_checks.get("m10_hlh")
+            if cb is not None and cb.isChecked() != (S.hlh_tab or S.rz):
+                cb.setChecked(S.hlh_tab or S.rz)
         else:
             cb = w.menu.layer_checks.get({"hlh": "m10_hlh", "bigplayer": "m10_bigplayer", "takeover": "cyc_takeover"}.get(key, ""))
             if cb is not None and cb.isChecked() != v:
@@ -890,7 +929,7 @@ def engine_tick():
         w._lines_tick(now)                      # the same crosses() read, so a memo hit
         tick_lines("cint"); tick_lines("cimp")
         tick_interp(); tick_liq(); tick_tko()
-        tick_hlh(now); tick_bp(now)
+        tick_hlh(now); tick_bp(now); tick_rz(now)
     except Exception:
         traceback.print_exc()
 

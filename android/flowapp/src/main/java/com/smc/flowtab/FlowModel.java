@@ -463,6 +463,41 @@ public final class FlowModel {
         return out;
     }
 
+    // RESPONSIVE ZONES (user 2026-09-24): the engine's terminal._rz_state -- today's POC / VAH / VAL, the D-bloc bands
+    // of today and the last 2 days, the zones where each side actually held today, and the live tag
+    public static final class RzZone {
+        public int side, n; public double lo, hi, tFirst, tLast, tLastEnd; public String label = "";
+    }
+    public boolean rzOn = false;
+    public double rzPoc = Double.NaN, rzVah = Double.NaN, rzVal = Double.NaN;
+    public double[][] rzBlocs = new double[0][];            // [tA, val, poc (NaN = none), vah]
+    public List<RzZone> rzZones = new ArrayList<>();
+    public String rzTag = null, rzNote = ""; public int rzTagSide = 0;
+
+    public void onRz(JSONObject m) {
+        boolean on = m.optBoolean("on", false);
+        double[][] bl = on ? rows(m.optJSONArray("blocs")) : new double[0][];
+        List<RzZone> zs = new ArrayList<>();
+        JSONArray za = on ? m.optJSONArray("zones") : null;
+        if (za != null) {
+            for (int i = 0; i < za.length(); i++) {
+                JSONObject o = za.optJSONObject(i); if (o == null) continue;
+                RzZone z = new RzZone();
+                z.side = o.optInt("side", 0); z.n = o.optInt("n", 0);
+                z.lo = num(o, "lo"); z.hi = num(o, "hi"); z.tFirst = num(o, "t_first"); z.tLast = num(o, "t_last");
+                z.tLastEnd = num(o, "t_last_end"); z.label = o.optString("label", "");
+                zs.add(z);
+            }
+        }
+        JSONObject tg = on ? m.optJSONObject("tag") : null;
+        synchronized (lock) {
+            rzOn = on; rzPoc = num(m, "poc"); rzVah = num(m, "vah"); rzVal = num(m, "val");
+            rzBlocs = bl; rzZones = zs; rzNote = m.optString("note", "");
+            rzTag = tg == null ? null : tg.optString("text", null); rzTagSide = tg == null ? 0 : tg.optInt("side", 0);
+            version++;
+        }
+    }
+
     public void onBp(JSONObject m) {
         boolean on = m.optBoolean("on", false);
         double[][] bub = on ? rows(m.optJSONArray("bub")) : new double[0][], dia = on ? rows(m.optJSONArray("dia")) : new double[0][];
