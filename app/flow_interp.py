@@ -853,7 +853,7 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
     # a chip, the price move as the headline, the effort x result QUADRANT the state is read from, the tape as
     # two bars around each side's own normal, the book as arrows. Cards share one height, so every index <->
     # pixel mapping stays a lookup in `_ys`; only the hour dividers make the offsets uneven.
-    CARD_H = 254       # 112 + the I x I strip + the AUCTION strip (2026-09-24)
+    CARD_H = 186       # 112 + the I x I strip (2026-09-24)
     CARD_GAP = 6
     SEP_H = 22
     TOP = 22            # the pane's title band
@@ -1300,115 +1300,6 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
             p.setPen(det)
             p.drawText(QtCore.QPointF(qx + q / 2 - fmt.horizontalAdvance(sw) / 2, qy + q + 25), sw)
         self._draw_iimp_strip(p, F, raw, x, y, cw, dim, det)
-        self._draw_auction_strip(p, F, raw, x, y, cw, dim, det)
-
-    # the card's short zone names (app/auction.py ZONES, in the same order)
-    AU_ZONE_SHORT = ("below VA", "lower VA", "at POC", "upper VA", "above VA")
-    # where the price dot sits on a mini value ladder, top = 0 .. bottom = 1, per zone (VA = the middle half)
-    AU_ZONE_Y = (0.90, 0.63, 0.50, 0.37, 0.10)
-
-    def _draw_auction_strip(self, p, F, raw, x, y, cw, dim, det):
-        """LAYER 1 OF THE AUCTION READING, under the I x I strip (user 2026-09-24): where the cycle traded against
-        TODAY's value and the MULTI-DAY value, and what each side did there -- responsive (where the doctrine
-        expects it: sellers above the POC, buyers below) or initiative (where it should lose interest), effective
-        or absorbed, or quiet. Left: two mini value ladders (the shaded middle = the value area, the line = the
-        POC, the dot = the cycle). Right: four tiles. Under: the cycle in one phrase."""
-        dk = self._dark
-        ay = y + 186
-        p.setPen(QtGui.QPen(QtGui.QColor("#262d34" if dk else "#e6e9ec"), 1))
-        p.drawLine(QtCore.QPointF(x + 14, ay), QtCore.QPointF(x + cw - 14, ay))
-        ink = QtGui.QColor("#e6ebf0" if dk else "#1a1a1a")
-        if not isinstance(raw, dict) or "a_zone" not in raw:
-            p.setFont(F["label"]); p.setPen(dim)
-            p.drawText(QtCore.QPointF(x + 16, ay + 30), "AUCTION  needs the HLH Volume Profile on (its day klines)")
-            return
-        if not str(raw.get("a_verdict") or ""):
-            p.setFont(F["label"]); p.setPen(dim)
-            p.drawText(QtCore.QPointF(x + 16, ay + 30), "AUCTION  not rated yet -- the I×I reading comes first")
-            return
-        zt = int(raw.get("a_zone", -1)); zm = int(raw.get("a_mzone", -1))
-        try:
-            dt = float(raw.get("a_dist")); dm = float(raw.get("a_mdist"))
-        except Exception:
-            dt = dm = float("nan")
-        blbl = str(raw.get("a_buy") or ""); slbl = str(raw.get("a_sell") or "")
-        verdict = str(raw.get("a_verdict") or "")
-        txt = IIMP_TXT_DARK if dk else IIMP_TXT_LIGHT
-        bcol = QtGui.QColor(txt["buy"]); scol_ = QtGui.QColor(txt["sell"])
-
-        # ---- two mini value ladders: today (left), multi-day (right)
-        def ladder(lx, zone, c):
-            top = ay + 9.0; hgt = 34.0; w = 7.0
-            p.setPen(QtCore.Qt.NoPen)
-            p.setBrush(QtGui.QColor("#262d34" if dk else "#eceef0"))
-            p.drawRoundedRect(QtCore.QRectF(lx, top, w, hgt), 2, 2)
-            va = QtGui.QColor("#3a444d" if dk else "#cfd5da")
-            p.setBrush(va)
-            p.drawRect(QtCore.QRectF(lx, top + hgt * 0.25, w, hgt * 0.5))
-            p.setPen(QtGui.QPen(QtGui.QColor("#9aa3aa" if dk else "#6f7a82"), 1))
-            p.drawLine(QtCore.QPointF(lx - 1, top + hgt * 0.5), QtCore.QPointF(lx + w + 1, top + hgt * 0.5))
-            if 0 <= zone < 5:
-                p.setPen(QtCore.Qt.NoPen); p.setBrush(c)
-                p.drawEllipse(QtCore.QPointF(lx + w / 2, top + hgt * self.AU_ZONE_Y[zone]), 3.0, 3.0)
-            p.setBrush(QtCore.Qt.NoBrush)
-        # the dot takes the colour of the side that was EFFECTIVE there (initiative first), else the ink
-        def dot_col():
-            for kind in ("initiative effective", "responsive effective", "at value effective"):
-                if blbl == kind and slbl != kind:
-                    return bcol
-                if slbl == kind and blbl != kind:
-                    return scol_
-            return ink
-        dc = dot_col()
-        ladder(x + 15.0, zt, dc)
-        ladder(x + 27.0, zm, dc)
-
-        # ---- four tiles
-        tx0 = x + 42.0
-        tw = (x + cw - 14.0 - tx0) / 4.0
-
-        def loc(z, d):
-            if not (0 <= z < 5):
-                return ("–", "")
-            sub = ""
-            if math.isfinite(d):
-                n = int(round(d))
-                sub = ("POC" if n == 0 else ("+%dt from POC" % n if n > 0 else "\u2212%dt from POC" % -n))
-            return (self.AU_ZONE_SHORT[z], sub)
-
-        def side(lbl, c):
-            if lbl in ("", "unrated"):
-                return ("–", "", dim)
-            if lbl == "quiet":
-                return ("quiet", "under its normal", dim)
-            parts = lbl.rsplit(" ", 1)
-            what, how = (parts[0], parts[1]) if len(parts) == 2 else (lbl, "")
-            return (what, how, c if how == "effective" else ink)
-        tiles = (("TODAY",) + loc(zt, dt) + (ink,),
-                 ("MULTI-DAY",) + loc(zm, dm) + (ink,),
-                 ("BUYERS",) + side(blbl, bcol),
-                 ("SELLERS",) + side(slbl, scol_))
-        for i, (lab, val, sub, col) in enumerate(tiles):
-            lx = tx0 + i * tw
-            p.setFont(F["cap"]); p.setPen(dim)
-            p.drawText(QtCore.QPointF(lx, ay + 16), lab)
-            p.setFont(F["val"]); p.setPen(col)
-            p.drawText(QtCore.QPointF(lx, ay + 32), QtGui.QFontMetrics(F["val"]).elidedText(
-                val, QtCore.Qt.ElideRight, int(tw - 4)))
-            if sub:
-                p.setFont(F["tiny"]); p.setPen(dim if lab in ("TODAY", "MULTI-DAY") or sub != "effective" else col)
-                p.drawText(QtCore.QPointF(lx, ay + 44), QtGui.QFontMetrics(F["tiny"]).elidedText(
-                    sub, QtCore.Qt.ElideRight, int(tw - 4)))
-
-        # ---- the cycle in one phrase: in the effective side's colour when value is being re-priced
-        vc = det
-        if "initiative, effective" in verdict:
-            vc = bcol if verdict.startswith("Buyers ") else (scol_ if verdict.startswith("Sellers ") else ink)
-        elif "Quiet" in verdict or "Rotation" in verdict:
-            vc = dim
-        p.setFont(F["why"]); p.setPen(vc)
-        p.drawText(QtCore.QPointF(x + 16, ay + 58),
-                   QtGui.QFontMetrics(F["why"]).elidedText(verdict, QtCore.Qt.ElideRight, int(cw - 32)))
 
     @staticmethod
     def _wrap(text, fm, width, max_lines):

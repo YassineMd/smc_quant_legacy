@@ -89,10 +89,6 @@ public final class FlowModel {
         public int iLead; public boolean iGood, iContra; public String iWhy = "";
         public double iMult = Double.NaN, iImp = Double.NaN, iWall = Double.NaN, iKept = Double.NaN, iPb = Double.NaN, iGive = Double.NaN;
         public double iReach = Double.NaN, iLmv = Double.NaN; public boolean iShort;     // a push under 4 ticks (2026-09-24)
-        // the AUCTION reading (layer 1, 2026-09-24): zone vs today's / the multi-day value (-1 = none), ticks from
-        // each POC, each side's label, the cycle in one phrase. hasAuction = the engine sent it at all.
-        public boolean hasAuction; public int aZone = -1, aMzone = -1; public double aDist = Double.NaN, aMdist = Double.NaN;
-        public String aBuy = "", aSell = "", aVerdict = "";
     }
     private static double num(JSONObject o, String k) {
         return (o == null || o.isNull(k) || !o.has(k)) ? Double.NaN : o.optDouble(k, Double.NaN);
@@ -388,14 +384,6 @@ public final class FlowModel {
                     row.iMult = num(x, "i_mult"); row.iImp = num(x, "i_imp"); row.iWall = num(x, "i_wall");
                     row.iKept = num(x, "i_kept"); row.iPb = num(x, "i_pb"); row.iGive = num(x, "i_give");
                     row.iReach = num(x, "i_reach"); row.iLmv = num(x, "i_lmv"); row.iShort = x.optBoolean("i_short", false);
-                    row.hasAuction = x.has("a_zone");
-                    if (row.hasAuction) {
-                        row.aZone = x.optInt("a_zone", -1); row.aMzone = x.optInt("a_mzone", -1);
-                        row.aDist = num(x, "a_dist"); row.aMdist = num(x, "a_mdist");
-                        row.aBuy = x.isNull("a_buy") ? "" : x.optString("a_buy", "");
-                        row.aSell = x.isNull("a_sell") ? "" : x.optString("a_sell", "");
-                        row.aVerdict = x.isNull("a_verdict") ? "" : x.optString("a_verdict", "");
-                    }
                 }
                 out.add(row);
             }
@@ -479,6 +467,22 @@ public final class FlowModel {
         boolean on = m.optBoolean("on", false);
         double[][] bub = on ? rows(m.optJSONArray("bub")) : new double[0][], dia = on ? rows(m.optJSONArray("dia")) : new double[0][];
         synchronized (lock) { bpOn = on; bpSw = m.optBoolean("sw", false); bpLmax = m.optInt("lmax", 60); bpBub = bub; bpDia = dia; version++; }
+    }
+
+    // the "send to Claude" pack (2026-09-24): the engine's reply to the tablet's {"t":"claude"} request
+    public int claudeId = -1;
+    public boolean claudeOk;
+    public String claudePrompt = "", claudeSnap = "", claudeGen = "", claudeErr = "", claudeHlh = "", claudeSel = null;
+
+    public void onClaude(JSONObject m) {
+        synchronized (lock) {
+            claudeOk = m.optBoolean("ok", false);
+            claudePrompt = m.optString("prompt", ""); claudeSnap = m.optString("snap", "");
+            claudeGen = m.optString("gen", ""); claudeErr = m.optString("err", "");
+            claudeHlh = m.optString("hlh", ""); claudeSel = m.isNull("sel") ? null : m.optString("sel", null);
+            claudeId = m.optInt("id", -1);          // last: the UI thread keys on it
+            version++;
+        }
     }
 
     public void onExplain(JSONObject m) {

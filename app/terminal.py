@@ -20803,29 +20803,16 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                                   push_min=float(config.ABSORB_PUSH_MIN_TICKS),
                                   reject_weak=float(config.ABSORB_REJECT_WEAK),
                                   iimp=({_kk: _v[k] for _kk, _v in _ii.items()} if _ii is not None else None))
-        # LAYER 1 OF THE AUCTION READING (2026-09-24): each card gets its location against today's / the multi-day
-        # value and both sides' activity; the whole read goes to the /auction-read snapshot
+        # THE AUCTION READING (2026-09-24): computed with the cards' I x I reading and kept for the "send to Claude"
+        # button and the snapshot file -- NEVER drawn on the cards (the card strip was removed at the user's word:
+        # "not really interested by what you added on the interpretation")
         if _ii is not None:
             try:
                 _au = self._interp_auction(t, t_end_c, done, px0, px1, pxh, pxl, _ii, now)
+                self._auction_ctx = (t, t_end_c, done, px0, px1, pxh, pxl, _ii, _au, now)
+                self._auction_snapshot_write()
             except Exception as _ex:
-                _au = None
                 print("AUCTION: %s" % _ex)
-            if _au is not None:
-                _pos = {round(float(t[_q]), 3): int(_q) for _q in k.tolist()}
-                for _r in rows:
-                    _q = _pos.get(round(float(_r[0]), 3))
-                    if _q is None or not isinstance(_r[13], dict):
-                        continue
-                    _a = _au["rows"][_q]
-                    _r[13].update({"a_zone": -1 if _a["zone"] is None else int(_a["zone"]),
-                                   "a_mzone": -1 if _a["mzone"] is None else int(_a["mzone"]),
-                                   "a_dist": float(_a["dist"]), "a_mdist": float(_a["mdist"]),
-                                   "a_buy": _a["buy"], "a_sell": _a["sell"], "a_verdict": _a["verdict"]})
-                try:
-                    self._auction_snapshot_write(t, t_end_c, done, px0, px1, pxh, pxl, _ii, _au, now)
-                except Exception as _ex:
-                    print("AUCTION SNAPSHOT: %s" % _ex)
         p.setRows(self._interp_bright_demote(rows))
 
     def _stack_axis_sync(self) -> None:
@@ -22947,13 +22934,23 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
     def _interp_auction(self, t, t_end_c, done, px0, px1, pxh, pxl, ii, now):
         """LAYER 1 OF THE AUCTION READING (user 2026-09-24, app/auction.py): each cycle against TODAY's value (the
         day's HLH profile as it stood when the cycle started) and the MULTI-DAY value (the latest HLH bloc merged
-        across finished days), and each side's activity as responsive / initiative, effective / absorbed / quiet.
-        Returns None while the HLH layer is OFF (its klines feed is never started from here) or its klines are not
-        in hand. The HLH overlay is asked with the week toggle it is drawn with, so the two readers share one cache."""
+        across finished days), and each side's activity as responsive / initiative, effective / absorbed / passive /
+        quiet. While the HLH layer is OFF (its klines feed is never started from here) or its klines are not in hand,
+        the cycles are still read, with no value references ("hlh" says which). The HLH overlay is asked with the
+        week toggle it is drawn with, so the two readers share one cache."""
         from . import auction as AU
         _tg = self._hlh_toggles()
+        mid = 0.5 * (np.asarray(pxh, dtype=np.float64) + np.asarray(pxl, dtype=np.float64))
+
+        def _bare(state):
+            n_ = int(np.size(t))
+            rows_ = AU.classify(mid, [None] * n_, None, ii["ib"], ii["is"], ii["lead"], ii["good"], ii["pb"], ii["give"],
+                                float(config.TICK_SIZE), active_min=float(config.AUCTION_ACTIVE_MIN),
+                                give_min=float(config.IIMP_KEEP_MIN_TICKS))
+            return {"rows": rows_, "refs": [None] * n_, "merged": None, "now": None, "hour_ago": None, "blocs": [],
+                    "hlh": state}
         if not bool(_tg[0]):
-            return None
+            return _bare("off")
         st = self._hlh_state()
         week_on = bool(_tg[1])
         st.ensure_feeds(week_on, now)
@@ -22961,7 +22958,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         f = st.feeds.get(config.HLH_DAY_TF)
         cd = f.snapshot() if f is not None else None
         if cd is None or len(cd) == 0:
-            return None
+            return _bare("loading")
         ks = float(config.TF_SECONDS.get(config.HLH_DAY_TF, 60))
         dv = self.__dict__.get("_auction_dv")
         if dv is None:
@@ -22971,37 +22968,39 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         day = [pk for pk in pers if not pk[0]]
         fin_rows = [m for pk in day[:-1] for m in (pk[5] or [])]
         merged = AU.merged_value(fin_rows)
-        mid = 0.5 * (np.asarray(pxh, dtype=np.float64) + np.asarray(pxl, dtype=np.float64))
         rows = AU.classify(mid, refs, merged, ii["ib"], ii["is"], ii["lead"], ii["good"], ii["pb"], ii["give"],
                            float(config.TICK_SIZE), active_min=float(config.AUCTION_ACTIVE_MIN),
                            give_min=float(config.IIMP_KEEP_MIN_TICKS))
         now_ref = dv.at(cd.t, cd.h, cd.l, cd.v, [now + ks])[0]
         hour_ref = dv.at(cd.t, cd.h, cd.l, cd.v, [now - 3600.0 + ks])[0]
         blocs = AU.blocs_value(day[-1][5]) if day else []
-        return {"rows": rows, "refs": refs, "merged": merged, "now": now_ref, "hour_ago": hour_ref, "blocs": blocs}
+        return {"rows": rows, "refs": refs, "merged": merged, "now": now_ref, "hour_ago": hour_ref, "blocs": blocs,
+                "hlh": "on"}
 
-    def _auction_snapshot_write(self, t, t_end_c, done, px0, px1, pxh, pxl, ii, au, now) -> None:
-        """THE AUCTION SNAPSHOT for /auction-read (config.AUCTION_SNAPSHOT_PATH): today's and the multi-day value, the
-        recent summary, the newest cycles in the auction's words. Written atomically, at most every
-        AUCTION_SNAPSHOT_SECS. Descriptive: everything in it is what the panes already show."""
-        if now - float(self.__dict__.get("_auction_snap_t", 0.0)) < float(config.AUCTION_SNAPSHOT_SECS):
-            return
-        self._auction_snap_t = now
-        import json as _json
-        import os as _os
+    def _auction_snapshot_build(self, ctx, sel=None) -> dict:
+        """THE AUCTION SNAPSHOT: today's and the multi-day value, the recent summary, the newest cycles in the
+        auction's words -- from the context the last feed read kept (_auction_ctx). `sel` = the start of the cycle
+        the user marked (tablet card / candle): that row carries "user_selected", and a marked cycle older than the
+        newest AUCTION_SNAPSHOT_CYCLES is added on its own. Descriptive: everything in it is what the panes show."""
         from . import auction as AU
+        t, t_end_c, done, px0, px1, pxh, pxl, ii, au, now = ctx
         tick = float(config.TICK_SIZE)
         fin = lambda v: v is not None and np.isfinite(v)
         rnd = lambda v, d=2: (round(float(v), d) if fin(v) else None)
         iso = lambda s: time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(float(s)))
         n = int(np.size(t))
         k0 = max(0, n - int(config.AUCTION_SNAPSHOT_CYCLES))
-        cyc = []
-        for k in range(k0, n):
+        ksel = None
+        if sel is not None and n:
+            _j = int(np.argmin(np.abs(np.asarray(t, dtype=np.float64) - float(sel))))
+            if abs(float(t[_j]) - float(sel)) < 1.0:
+                ksel = _j
+
+        def row(k):
             a = au["rows"][k]
             ld = int(ii["lead"][k])
             rt = au["refs"][k]
-            cyc.append({
+            r = {
                 "start_utc": iso(t[k]), "dur_s": int(round(float(t_end_c[k]) - float(t[k]))), "finished": bool(done[k]),
                 "open": rnd(px0[k]), "high": rnd(pxh[k]), "low": rnd(pxl[k]), "close": rnd(px1[k]),
                 "move_ticks": (int(round((float(px1[k]) - float(px0[k])) / tick)) if fin(px1[k]) and fin(px0[k]) else None),
@@ -23023,7 +23022,11 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                                          if fin(ii["pb"][k]) and fin(ii["give"][k]) else None),
                 "wall_vs_normal_x": rnd(ii["wall"][k]),
                 "buyers": a["buy"], "sellers": a["sell"], "auction": a["verdict"],
-                "why": str(ii["why"][k] or "")})
+                "why": str(ii["why"][k] or "")}
+            if k == ksel:
+                r["user_selected"] = True
+            return r
+        cyc = [row(k) for k in range(k0, n)]
         nr = au.get("now"); hr = au.get("hour_ago"); mg = au.get("merged")
         today = None
         if nr:
@@ -23040,21 +23043,76 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             multi = {"poc": rnd(mg["poc"]), "vah": rnd(mg["vah"]), "val": rnd(mg["val"]), "bloc": mg["name"],
                      "days": mg["days"], "from_utc": iso(mg["tA"]) if mg.get("tA") else None, "to_utc": iso(mg["tB"])}
         lp = self._engine_live_px()
+        hs = str(au.get("hlh", "on"))
+        val = {"hlh_volume_profile": hs, "today": today, "multi_day": multi}
+        if hs != "on":
+            val["note"] = ("the HLH Volume Profile layer is OFF, so there is no value reference: zones are null"
+                           if hs == "off" else "the HLH klines are still loading: no value reference yet")
         snap = {"generated_utc": iso(now), "symbol": str(config.SYMBOL), "tick": tick,
                 "live_price": rnd(lp) if lp is not None else None,
                 "cycle_lookback_n": int(self._lb_n()),
-                "value": {"today": today, "multi_day": multi},
-                "summary": AU.summary(au["rows"], t, t_end_c, now, last_n=int(config.AUCTION_SUMMARY_N)),
-                "cycles_oldest_first": cyc}
+                "value": val,
+                "summary": AU.summary(au["rows"], t, t_end_c, now, last_n=int(config.AUCTION_SUMMARY_N))}
+        if sel is not None:
+            snap["user_selected_cycle_start_utc"] = iso(sel)
+            if ksel is None:
+                snap["user_selected_cycle"] = None
+                snap["user_selected_note"] = "the marked cycle is not in the terminal's current read"
+            elif ksel < k0:
+                snap["user_selected_cycle"] = row(ksel)
+        snap["cycles_oldest_first"] = cyc
+        return snap
+
+    @staticmethod
+    def _auction_snapshot_text(snap: dict) -> str:
+        """The snapshot as JSON a person can scan and a model reads cheaply: the header indented, ONE LINE PER
+        CYCLE (~15% smaller than indenting every field: 62 vs 73 KB on 80 cycles). Still strict JSON (no NaN)."""
+        import json as _json
+        head = {k_: v_ for k_, v_ in snap.items() if k_ != "cycles_oldest_first"}
+        top = _json.dumps(head, indent=1, ensure_ascii=False, allow_nan=False).rstrip()
+        lines = ",\n  ".join(_json.dumps(c_, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+                             for c_ in snap.get("cycles_oldest_first") or [])
+        return top[:-1].rstrip() + ',\n "cycles_oldest_first": [\n  ' + lines + "\n ]\n}\n"
+
+    def _auction_snapshot_write(self) -> None:
+        """config.AUCTION_SNAPSHOT_PATH (what /auction-read fetches), atomically, at most every AUCTION_SNAPSHOT_SECS."""
+        ctx = self.__dict__.get("_auction_ctx")
+        if ctx is None:
+            return
+        now = float(ctx[-1])
+        if now - float(self.__dict__.get("_auction_snap_t", 0.0)) < float(config.AUCTION_SNAPSHOT_SECS):
+            return
+        self._auction_snap_t = now
+        import os as _os
         try:
+            txt = self._auction_snapshot_text(self._auction_snapshot_build(ctx))
             path = str(config.AUCTION_SNAPSHOT_PATH)
             _os.makedirs(_os.path.dirname(path), exist_ok=True)
             tmp = path + ".tmp"
             with open(tmp, "w", encoding="utf-8") as fh:
-                _json.dump(snap, fh, indent=1, allow_nan=False, ensure_ascii=False)
+                fh.write(txt)
             _os.replace(tmp, path)
         except Exception as ex:
             print("AUCTION SNAPSHOT: %s" % ex)
+
+    def _auction_share(self, sel=None) -> dict:
+        """THE "SEND TO CLAUDE" PACK (user 2026-09-24: "my tablet can communicate the info with the Claude app"): the
+        reading instructions + a FRESH snapshot. The feed is re-read first (its signature cleared), so the pack is
+        the market of this moment, not of the last 20 s write. Raises when no cycle has been read yet."""
+        self._interp_sig = None
+        self._interp_draw(time.time())
+        ctx = self.__dict__.get("_auction_ctx")
+        if ctx is None:
+            raise RuntimeError("no cycles read yet -- the Interpretation feed has not run")
+        snap = self._auction_snapshot_build(ctx, sel=sel)
+        try:
+            with open(str(config.AUCTION_PROMPT_PATH), encoding="utf-8") as fh:
+                prompt = fh.read()
+        except Exception as ex:
+            prompt = "(the reading instructions could not be read: %s)" % ex
+        return {"prompt": prompt, "snap": self._auction_snapshot_text(snap), "gen": snap["generated_utc"],
+                "hlh": snap["value"]["hlh_volume_profile"], "live": snap["live_price"],
+                "sel": snap.get("user_selected_cycle_start_utc")}
 
     @staticmethod
     def _cycle_last_bins(t_end, done, base: int, n: int):

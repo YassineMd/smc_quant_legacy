@@ -70,7 +70,7 @@ public final class InterpView extends View {
         this.model = model;
         d = getResources().getDisplayMetrics().density;
         PAD = 10 * d; TOPY = PAD + 40 * d;             // the first card clears the hamburger button (46 dp)
-        CARD_H = 262 * d; CARD_GAP = 7 * d; SEP_H = 24 * d;       // 114 + the I x I strip + the AUCTION strip (2026-09-24)
+        CARD_H = 192 * d; CARD_GAP = 7 * d; SEP_H = 24 * d;       // 114 + the I x I strip (2026-09-24)
         dashed = new DashPathEffect(new float[]{4 * d, 3 * d}, 0);
         setBackgroundColor(Color.parseColor("#141414"));
         fling = new OverScroller(ctx);
@@ -357,7 +357,6 @@ public final class InterpView extends View {
         if (r.mvWord != null && !r.mvWord.isEmpty() && r.st != ST_ABSORB)
             text(c, r.mvWord, qx + q / 2 - width(r.mvWord, sans, 9.5f) / 2, qy + q + 25 * d, sans, 9.5f, det);
         drawStrip(c, r, x, y, cw, dim, det);
-        drawAuction(c, r, x, y, cw, dim, det);
     }
 
     /** Greedy word wrap into at most `maxLines`, the last one cut with an ellipsis if text remains. */
@@ -475,91 +474,6 @@ public final class InterpView extends View {
             List<String> ln = wrap(r.iWhy, sans, 10.5f, cw - 32 * d, 2);
             for (int j = 0; j < ln.size(); j++) text(c, ln.get(j), x + 16 * d, sy + 59 * d + j * 14.5f * d, sans, 10.5f, det);
         }
-    }
-
-    // the card's short zone names (app/auction.py ZONES, same order) and each zone's dot height on a mini ladder
-    private static final String[] AU_ZONE = {"below VA", "lower VA", "at POC", "upper VA", "above VA"};
-    private static final float[] AU_ZONE_Y = {0.90f, 0.63f, 0.50f, 0.37f, 0.10f};
-
-    private String elide(String s, Typeface tf, float size, float maxW) {
-        if (width(s, tf, size) <= maxW) return s;
-        String t = s;
-        while (t.length() > 1 && width(t + "…", tf, size) > maxW) t = t.substring(0, t.length() - 1);
-        return t + "…";
-    }
-
-    private void miniLadder(Canvas c, float lx, float ay, int zone, int dotCol) {
-        float top = ay + 10 * d, hgt = 36 * d, w = 8 * d;
-        pFill.setColor(col(dark ? "#262d34" : "#eceef0"));
-        rf.set(lx, top, lx + w, top + hgt); c.drawRoundRect(rf, 2 * d, 2 * d, pFill);
-        pFill.setColor(col(dark ? "#3a444d" : "#cfd5da"));
-        c.drawRect(lx, top + hgt * 0.25f, lx + w, top + hgt * 0.75f, pFill);
-        pLine.setStyle(Paint.Style.STROKE); pLine.setPathEffect(null); pLine.setStrokeWidth(1 * d);
-        pLine.setColor(col(dark ? "#9aa3aa" : "#6f7a82"));
-        c.drawLine(lx - 1 * d, top + hgt * 0.5f, lx + w + 1 * d, top + hgt * 0.5f, pLine);
-        if (zone >= 0 && zone < 5) { pFill.setColor(dotCol); c.drawCircle(lx + w / 2, top + hgt * AU_ZONE_Y[zone], 3.2f * d, pFill); }
-    }
-
-    /** LAYER 1 OF THE AUCTION READING, under the I x I strip (user 2026-09-24): where the cycle traded against TODAY's
-     * value and the MULTI-DAY value, and what each side did there -- responsive (where it is expected: sellers above
-     * the POC, buyers below) or initiative (where it should lose interest), effective or absorbed, or quiet. Two mini
-     * value ladders (shaded middle = value area, line = POC, dot = the cycle), four tiles, the cycle in one phrase.
-     * The terminal's flow_interp._draw_auction_strip, in dp. */
-    private void drawAuction(Canvas c, FlowModel.Row r, float x, float y, float cw, int dim, int det) {
-        float ay = y + 192 * d;
-        pLine.setStyle(Paint.Style.STROKE); pLine.setPathEffect(null); pLine.setStrokeWidth(1 * d);
-        pLine.setColor(col(dark ? "#262d34" : "#e6e9ec"));
-        c.drawLine(x + 14 * d, ay, x + cw - 14 * d, ay, pLine);
-        int ink = col(dark ? "#e6ebf0" : "#1a1a1a");
-        if (!r.hasAuction) { text(c, "AUCTION  needs the HLH Volume Profile on (its day klines)", x + 16 * d, ay + 30 * d, sans, 10.5f, dim); return; }
-        if (r.aVerdict == null || r.aVerdict.isEmpty()) { text(c, "AUCTION  not rated yet -- the I×I reading comes first", x + 16 * d, ay + 30 * d, sans, 10.5f, dim); return; }
-        int bcol = (dark ? IIMP_TXT_DARK : IIMP_TXT_LIGHT)[0], scol = (dark ? IIMP_TXT_DARK : IIMP_TXT_LIGHT)[1];
-        // the dot takes the colour of the side that was EFFECTIVE there (initiative first), else the ink
-        int dc = ink;
-        String[] kinds = {"initiative effective", "responsive effective", "at value effective"};
-        for (String k : kinds) {
-            boolean b = k.equals(r.aBuy), s = k.equals(r.aSell);
-            if (b && !s) { dc = bcol; break; }
-            if (s && !b) { dc = scol; break; }
-        }
-        miniLadder(c, x + 15 * d, ay, r.aZone, dc);
-        miniLadder(c, x + 28 * d, ay, r.aMzone, dc);
-        float tx0 = x + 46 * d, tw = (x + cw - 14 * d - tx0) / 4f;
-        String[] labs = {"TODAY", "MULTI-DAY", "BUYERS", "SELLERS"};
-        String[] vals = new String[4], subs = new String[4];
-        int[] cols = new int[4], subCols = new int[4];
-        int[] zs = {r.aZone, r.aMzone}; double[] ds = {r.aDist, r.aMdist};
-        for (int i = 0; i < 2; i++) {
-            if (zs[i] >= 0 && zs[i] < 5) {
-                vals[i] = AU_ZONE[zs[i]];
-                long n = ok(ds[i]) ? Math.round(ds[i]) : Long.MIN_VALUE;
-                subs[i] = n == Long.MIN_VALUE ? "" : (n == 0 ? "POC" : (n > 0 ? "+" + n + "t from POC" : "−" + (-n) + "t from POC"));
-            } else { vals[i] = "–"; subs[i] = ""; }
-            cols[i] = ink; subCols[i] = dim;
-        }
-        String[] lbls = {r.aBuy, r.aSell}; int[] sc = {bcol, scol};
-        for (int i = 0; i < 2; i++) {
-            String l = lbls[i] == null ? "" : lbls[i];
-            if (l.isEmpty() || l.equals("unrated")) { vals[2 + i] = "–"; subs[2 + i] = ""; cols[2 + i] = dim; subCols[2 + i] = dim; continue; }
-            if (l.equals("quiet")) { vals[2 + i] = "quiet"; subs[2 + i] = "under its normal"; cols[2 + i] = dim; subCols[2 + i] = dim; continue; }
-            int sp = l.lastIndexOf(' ');
-            String what = sp > 0 ? l.substring(0, sp) : l, how = sp > 0 ? l.substring(sp + 1) : "";
-            boolean eff = how.equals("effective");
-            vals[2 + i] = what; subs[2 + i] = how; cols[2 + i] = eff ? sc[i] : ink; subCols[2 + i] = eff ? sc[i] : dim;
-        }
-        for (int i = 0; i < 4; i++) {
-            float lx = tx0 + i * tw;
-            pText.setLetterSpacing(0.09f);
-            text(c, labs[i], lx, ay + 17 * d, bold, 9f, dim);
-            pText.setLetterSpacing(0f);
-            text(c, elide(vals[i], bold, 13f, tw - 4 * d), lx, ay + 35 * d, bold, 13f, cols[i]);
-            if (!subs[i].isEmpty()) text(c, elide(subs[i], sans, 9.5f, tw - 4 * d), lx, ay + 48 * d, sans, 9.5f, subCols[i]);
-        }
-        // the cycle in one phrase: in the effective side's colour when value is being re-priced
-        int vc = det;
-        if (r.aVerdict.contains("initiative, effective")) vc = r.aVerdict.startsWith("Buyers ") ? bcol : (r.aVerdict.startsWith("Sellers ") ? scol : ink);
-        else if (r.aVerdict.contains("Quiet") || r.aVerdict.contains("Rotation")) vc = dim;
-        text(c, elide(r.aVerdict, sans, 10.5f, cw - 32 * d), x + 16 * d, ay + 63 * d, sans, 10.5f, vc);
     }
 
     private void ratioBar(Canvas c, float bx, float by, double v, int fill, int dim, int det) {
