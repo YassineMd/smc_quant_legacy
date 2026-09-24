@@ -1311,8 +1311,8 @@ public final class ChartView extends View {
     //   WANTS = log2(buyers' interest / sellers' interest)                         -- solid blue
     //   GETS  = log2(buyers' impact / sellers' impact), a side's impact = its reach multiple if it LED ("short push" /
     //           "no push" = 0.25), else its PUSH-BACK multiple                     -- dashed orange
-    // both clipped to +-3; above zero = buyers, below = sellers. A red ring on the zero line marks a cycle whose two
-    // lines have OPPOSITE signs; thicker when the disagreement runs 2+ consecutive cycles.
+    // both clipped to +-3; above zero = buyers, below = sellers. When the two lines have OPPOSITE signs the readout says
+    // so (the red rings that marked it on the chart were removed at the user's word, 2026-09-24).
     private static final int WVG_WANTS = Color.parseColor("#2979ff"), WVG_GETS = Color.parseColor("#ff9100"),
             WVG_RING = Color.parseColor("#ef4444");
     private static final double WVG_CLIP = 3.0, WVG_SHORT = 0.25, WVG_KEEP_MIN = 4.0;   // config.IIMP_KEEP_MIN_TICKS
@@ -1367,19 +1367,10 @@ public final class ChartView extends View {
             c.drawPath(path, pl);
         }
         pl.setPathEffect(null);
-        // the rings: opposite signs; thicker inside a run of 2+ consecutive (touching) disagreeing cycles
+        // opposite signs: only the readout says it (no marks on the chart)
         boolean[] dis = new boolean[n];
         for (int i = 0; i < n; i++)
             dis[i] = !Double.isNaN(want[i]) && !Double.isNaN(get[i]) && want[i] * get[i] < 0;
-        for (int i = 0; i < n; i++) {
-            if (!dis[i]) continue;
-            boolean prevRun = i > 0 && dis[i - 1] && s.iX0[i] - s.iX1[i - 1] <= 0.5;
-            boolean nextRun = i + 1 < n && dis[i + 1] && s.iX0[i + 1] - s.iX1[i] <= 0.5;
-            boolean run = prevRun || nextRun;
-            float px = xPx(0.5 * (s.iX0[i] + s.iX1[i]));
-            pl.setColor(WVG_RING); pl.setStrokeWidth((run ? 2.6f : 1.3f) * d);
-            c.drawCircle(px, y0, (run ? 5.5f : 4.5f) * d, pl);
-        }
         c.restore();
         drawSmoothSlider(c, PANE_WVG, r, sm);
         // the axis in the pane's own words: the side, and how many times the other (log2 steps)
