@@ -485,7 +485,7 @@ public final class ChartView extends View {
             s.tkBuy = M.tkBuy; s.tkSell = M.tkSell; s.tkForm = M.tkForm;
             s.mode = M.iimpMode; s.iN = M.iN; s.iX0 = M.iX0; s.iX1 = M.iX1; s.iV = M.iV; s.iMult = M.iMult; s.iScore = M.iScore; s.iWall = M.iWall; s.iKept = M.iKept;
             s.iSbuy = M.iSbuy; s.iSsell = M.iSsell; s.iLiib = M.iLiib; s.iLiis = M.iLiis; s.iUp = M.iUp; s.iContra = M.iContra; s.iGood = M.iGood; s.iForm = M.iForm;
-            s.iLyb = M.iLyb; s.iLys = M.iLys; s.iSmn = M.iSmn;
+            s.iLyb = M.iLyb; s.iLys = M.iLys; s.iSmn = M.iSmn; s.iPback = M.iPback;
             s.connected = M.connected;
             s.cint = M.cint; s.cimp = M.cimp;
             s.hlhOn = M.hlhOn && showHlh; s.hlhNote = M.hlhNote; s.hlhPics = M.hlhPics; s.hlhLabels = M.hlhLabels; s.hlhDashes = M.hlhDashes;
@@ -530,7 +530,7 @@ public final class ChartView extends View {
         double livePx, win, tick; int formCol, dec;
         double[] lqX; float[] lqB, lqA;
         double[] tkBuy, tkSell, tkForm;
-        String mode; int iN, iSmn; double[] iX0, iX1; float[] iV, iMult, iScore, iWall, iKept, iSbuy, iSsell, iLiib, iLiis, iLyb, iLys; byte[] iUp, iContra, iGood, iForm;
+        String mode; int iN, iSmn; double[] iX0, iX1; float[] iV, iMult, iScore, iWall, iKept, iSbuy, iSsell, iLiib, iLiis, iLyb, iLys, iPback; byte[] iUp, iContra, iGood, iForm;
         boolean connected;
         FlowModel.Lines cint, cimp;
         boolean hlhOn; String hlhNote; List<FlowModel.HlhPic> hlhPics; List<FlowModel.HlhLabel> hlhLabels; List<FlowModel.HlhDash> hlhDashes;
@@ -1134,6 +1134,9 @@ public final class ChartView extends View {
         sb.append("  ·  impact ").append(String.format(Locale.US, "%.2g", Math.exp(s.iScore[k] > -900 ? s.iScore[k] : 0))).append('x');
         sb.append("  ·  wall ").append(s.iWall[k] > -900 ? String.format(Locale.US, "%.2gx", s.iWall[k]) : "-");
         sb.append("  ·  kept ").append(s.iKept[k] > -900 ? String.format(Locale.US, "%d%%", Math.round(100 * s.iKept[k])) : "-");
+        // the OTHER side's answer: how hard it pushed price back from the leader's extreme (2026-09-24)
+        sb.append("  ·  ").append(s.iUp[k] != 0 ? "sell" : "buy").append(" push-back ")
+          .append(s.iPback != null && k < s.iPback.length && s.iPback[k] > -900 ? String.format(Locale.US, "%.2gx", s.iPback[k]) : "-");
         if (s.iForm[k] != 0) sb.append("  ·  still forming");
         if (s.iContra[k] != 0) sb.append("  ·  price went the other way");
         if ("Buyer".equals(s.mode)) sb.append(String.format(Locale.US, "  ·  buyers I×I %.2gx", Math.pow(2, s.iLiib[k])));
@@ -1287,9 +1290,9 @@ public final class ChartView extends View {
         boolean imp = (p == PANE_CIMP);
         FlowModel.Lines L = imp ? s.cimp : s.cint;
         RectF r = pane[p];
-        title(c, r, (imp ? "LINES IMPACT  ·  each side's reach vs its own last "
-                         : "LINES INTEREST  ·  each side's aggressive $/s vs its own last ") + M.lb
-                + (imp ? " LED" : ""));
+        // LINES IMPACT: reach where the side led, its PUSH-BACK where it did not (2026-09-24) -- config.pane_titles
+        title(c, r, (imp ? "LINES IMPACT  ·  each side's reach (led) or push-back vs its own last "
+                         : "LINES INTEREST  ·  each side's aggressive $/s vs its own last ") + M.lb);
         float top = r.top + TITLE_H, hgt = r.bottom - top;
         double clip = Math.log(8.0) / LN2;
         double lim, fitNow = 0;

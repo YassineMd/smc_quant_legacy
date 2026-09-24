@@ -538,7 +538,8 @@ def tick_iimp():
     for k in ("x0", "x1"):
         m[k] = b64(L[k], "<f8")
     m["smn"] = int(L.get("smn", 1))
-    for k in ("v", "mult", "score", "wall", "reach", "mv", "arb", "ars", "kept", "sbuy", "ssell", "liib", "liis", "pliib", "pliis", "lyb", "lys"):
+    for k in ("v", "mult", "score", "wall", "reach", "mv", "arb", "ars", "kept", "sbuy", "ssell", "liib", "liis", "pliib", "pliis", "lyb", "lys",
+              "pback"):                         # the OTHER side's push-back multiple (2026-09-24)
         m[k] = b64(np.nan_to_num(np.asarray(L.get(k, np.full(n, np.nan)), dtype=np.float64), nan=-999.0))
     for k in ("up", "contra", "good", "form"):
         m[k] = b64(np.asarray(L[k], dtype=bool), "u1")

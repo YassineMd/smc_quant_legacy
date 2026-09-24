@@ -22704,6 +22704,65 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         np.maximum.accumulate(idx, out=idx)
         return v[idx]                      # before the first sample idx is 0, and v[0] is NaN there by definition
 
+    def _iimp_push_back(self, t, t_end, lead_buy, done):
+        """Per cycle: the NON-leading side's aggressive $ from AFTER the leader's extreme to the cycle's last second,
+        and those seconds -- the effort behind the push-back (user 2026-09-24). The extreme is _iimp_climb's: the
+        first bin holding the cycle's high (buy leader) or low (sell leader). Memoised per SETTLED cycle, the climb's
+        own rule."""
+        st = self._flow
+        base = getattr(st, "_base", None)
+        n = int(len(st._buy)) if base is not None else 0
+        usd = np.full(int(np.size(t)), np.nan); secs = np.full(int(np.size(t)), np.nan)
+        if not n:
+            return usd, secs
+        base = int(base)
+        _mk = (int(getattr(st, "rev_hist", 0)), base)
+        _memo = self.__dict__.get("_iimp_pb_memo")
+        if _memo is None or _memo[0] != _mk:
+            _memo = self._iimp_pb_memo = (_mk, {})
+        _d = _memo[1]
+        _settled = n - 1 - int(getattr(st, "_HIST_MARGIN_BINS", 5))
+        _A = (np.floor(np.asarray(t, dtype=np.float64)) - base).astype(np.int64).tolist()
+        _Z = self._cycle_last_bins(t_end, done, base, n).tolist()
+        _B = np.asarray(lead_buy, dtype=bool).tolist()
+        for k in range(len(_A)):
+            a = _A[k]; z = _Z[k]
+            if a < 0 or z < a:
+                continue
+            _kb = _B[k]
+            _hit = _d.get((a, z, _kb))
+            if _hit is not None:
+                usd[k], secs[k] = _hit
+                continue
+            if _kb:
+                seg = st._pxh[a:z + 1]
+                h = a + int(np.argmax(np.where(seg > 0, seg, -np.inf))); src = st._sell     # sellers push back down
+            else:
+                seg = st._pxl[a:z + 1]
+                h = a + int(np.argmin(np.where(seg > 0, seg, np.inf))); src = st._buy       # buyers push back up
+            usd[k] = float(np.sum(src[h + 1:z + 1])); secs[k] = float(z - h)
+            if z < _settled:
+                _d[(a, z, _kb)] = (usd[k], secs[k])
+        if len(_d) > 8192:
+            _d.clear()
+        return usd, secs
+
+    def _iimp_pb_score(self, t, t_end_c, done, lead_buy, px1, pxh, pxl, n_lb, n_mn):
+        """(score, ticks handed back) of the NON-leading side's PUSH-BACK per cycle: ln(1 + ticks from the leader's
+        extreme to the close) minus what its $ and seconds after that extreme usually buy (IIMP_PB_COEF_*), minus
+        the median of its own previous n_lb push-backs -- the leader score's rule, on the pushing side's history."""
+        lb = np.asarray(lead_buy, dtype=bool)
+        cu, cs = self._iimp_push_back(t, t_end_c, lb, done)
+        give = np.where(lb, np.asarray(pxh) - np.asarray(px1), np.asarray(px1) - np.asarray(pxl)) / float(config.TICK_SIZE)
+        bb, bd = config.IIMP_PB_COEF_BUY
+        sb, sd = config.IIMP_PB_COEF_SELL
+        with np.errstate(divide="ignore", invalid="ignore"):
+            pred = np.where(lb, sb * np.log(np.maximum(cu, 1.0)) + sd * np.log(np.maximum(cs, 1.0)),
+                            bb * np.log(np.maximum(cu, 1.0)) + bd * np.log(np.maximum(cs, 1.0)))
+            resid = np.where(np.isfinite(cu) & np.isfinite(give), np.log1p(np.maximum(give, 0.0)) - pred, np.nan)
+        # the PUSHING side's own history: buyers push back on sell-led cycles, so the side flag is ~lead
+        return self._iimp_score(resid, ~lb, done, n_lb, n_mn), give
+
     @staticmethod
     def _cycle_last_bins(t_end, done, base: int, n: int):
         """Each cycle's LAST store bin, the flow store's rule (FlowStore._cross_scan, 2026-09-23): a FINISHED
@@ -23218,8 +23277,12 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         # squeezed every losing cycle into 0..1 while the winning ones ran to 4-6x.
         _ln2 = float(np.log(2.0))
         _scl = np.where(np.isfinite(score[keep]), score[keep], 0.0) / _ln2      # the leader's impact, in log2
-        _lb = np.log2(np.maximum(ar_b[keep], 1e-12)) + np.where(up, _scl, 0.0)
-        _ls = np.log2(np.maximum(ar_s[keep], 1e-12)) + np.where(~up, _scl, 0.0)
+        # ... and the OTHER side's PUSH-BACK where it did not lead (user 2026-09-24) -- it used to be a flat 1x, so a
+        # side that absorbed the leader and drove price back got no credit at all
+        score_pb, give_pb = self._iimp_pb_score(t, t_end_c, done, lead_buy, px1, pxh, pxl, n_lb, n_mn)
+        _sclp = np.where(np.isfinite(score_pb[keep]), score_pb[keep], 0.0) / _ln2
+        _lb = np.log2(np.maximum(ar_b[keep], 1e-12)) + np.where(up, _scl, _sclp)
+        _ls = np.log2(np.maximum(ar_s[keep], 1e-12)) + np.where(~up, _scl, _sclp)
         # THE PREVIOUS BAR's two numbers, for every row (the PRICE pane's breakout badges hold a cycle against the one
         # right before it). Taken over the WHOLE read, not the kept rows: the leftmost cycle on screen has its previous
         # bar left of the view, and a badge that came and went as that bar crossed the pane's edge would read as a
@@ -23227,8 +23290,9 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         _rated_all = (done | form_all) & np.isfinite(imb) & np.isfinite(score)
         with np.errstate(divide="ignore", invalid="ignore"):
             _scl_all = np.where(np.isfinite(score), score, 0.0) / _ln2
-            _lb_all = np.log2(np.maximum(ar_b, 1e-12)) + np.where(lead_buy, _scl_all, 0.0)
-            _ls_all = np.log2(np.maximum(ar_s, 1e-12)) + np.where(~lead_buy, _scl_all, 0.0)
+            _sclp_all = np.where(np.isfinite(score_pb), score_pb, 0.0) / _ln2
+            _lb_all = np.log2(np.maximum(ar_b, 1e-12)) + np.where(lead_buy, _scl_all, _sclp_all)
+            _ls_all = np.log2(np.maximum(ar_s, 1e-12)) + np.where(~lead_buy, _scl_all, _sclp_all)
         _plb = np.full(int(t.size), np.nan); _pls = np.full(int(t.size), np.nan)
         if int(t.size) > 1:
             _plb[1:] = np.where(_rated_all[:-1], _lb_all[:-1], np.nan)
@@ -23293,6 +23357,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                            "sbuy": _sc["buy"], "ssell": _sc["sell"],
                            "nbuy": _scn["buy"], "nsell": _scn["sell"],
                            "liib": _lb, "liis": _ls, "mode": _mode,
+                           "pback": np.exp(score_pb[keep]), "give": give_pb[keep],   # the OTHER side's push-back
                            # ⚠ `liib` / `liis` are the RAW per-cycle pair and MUST stay raw: the PRICE pane's
                            # Takeover badge and the Buyer / Seller / Delta readouts are all built on them. The
                            # pair the LINES mode draws is smoothed by the slider and is its own key -- without
@@ -23339,12 +23404,14 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                     2.0 ** float(_by[_k]), 2.0 ** float(_sy[_k]),
                     ("  ·  %d-cycle mean" % _sm_n) if _sm_n > 1 else "")
 
-            self._iimp_read.setText("B %s / S %s  ·  %s %.2gx  ·  impact %.2gx  ·  wall %s  ·  kept %s%s%s%s" % (
+            _pbk = float(score_pb[keep][_k])
+            self._iimp_read.setText("B %s / S %s  ·  %s %.2gx  ·  impact %.2gx  ·  wall %s  ·  kept %s  ·  %s push-back %s%s%s%s" % (
                 "-" if not np.isfinite(_sbv) else "%d" % int(round(_sbv)),
                 "-" if not np.isfinite(_ssv) else "%d" % int(round(_ssv)),
                 "BUY" if up[_k] else "SELL", _mult[_k], float(np.exp(score[keep][_k])),
                 "-" if not np.isfinite(_w) else "%.2gx" % _w,
                 "-" if not np.isfinite(_kp) else "%d%%" % int(round(100.0 * float(_kp))),
+                "sell" if up[_k] else "buy", "-" if not np.isfinite(_pbk) else "%.2gx" % float(np.exp(_pbk)),
                 "  ·  still forming" if bool(form[_k]) else "",
                 "  ·  price went the other way" if contra[_k] else "",
                 _mode_txt))
@@ -23661,8 +23728,8 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         The arithmetic is the I x I pane's, to the digit, because it IS the I x I pane's -- these two panes
         are its two halves pulled apart, not a second opinion. INTEREST is `ar_b` / `ar_s`, each side's
         aggressive $/s over the median of its own previous N cycles. IMPACT is the same residual score the
-        solid / hollow fill is built on, kept per LEADING side and held flat across the cycles that side did
-        not lead.
+        solid / hollow fill is built on where the side LED, and its PUSH-BACK score (_iimp_pb_score) where it did
+        not -- both sides move on every cycle (2026-09-24; before, the non-leader was held flat).
         """
         d = self.__dict__.get("_lines_data")
         if d is None:
@@ -23708,9 +23775,15 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 resid = y_r - pred
             score = self._iimp_score(resid, lead_buy, done, n_lb, n_mn)
             rated = (done | form_all) & np.isfinite(imb) & np.isfinite(score)
-            _scl = np.where(np.isfinite(score), score, 0.0) / float(np.log(2.0))
-            sm_b = self._lines_hold(self._lines_smooth(_scl, rated & lead_buy, sm_n, n_mn))
-            sm_s = self._lines_hold(self._lines_smooth(_scl, rated & ~lead_buy, sm_n, n_mn))
+            # EACH SIDE ON EVERY CYCLE (user 2026-09-24): its reach score where it led, its PUSH-BACK score where it
+            # did not. The non-leader used to be held flat, so a side that absorbed the leader and drove price back
+            # showed nothing at all. Held forward only across a cycle with no reading.
+            score_pb, _gv = self._iimp_pb_score(t, t_end_c, done, lead_buy, px1, pxh, pxl, n_lb, n_mn)
+            _ln2 = float(np.log(2.0))
+            _ib = np.where(lead_buy, score, score_pb) / _ln2
+            _is = np.where(~lead_buy, score, score_pb) / _ln2
+            sm_b = self._lines_hold(self._lines_smooth(_ib, rated & np.isfinite(_ib), sm_n, n_mn))
+            sm_s = self._lines_hold(self._lines_smooth(_is, rated & np.isfinite(_is), sm_n, n_mn))
         # the y fit's sample: every rated cycle of the READ, not only the drawn ones (see _lines_draw)
         _okf = rated & np.isfinite(sm_b) & np.isfinite(sm_s)
         self._lp_(kind)["fitall"] = np.concatenate([sm_b[_okf], sm_s[_okf]])
@@ -24312,7 +24385,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             _b2, _s2, _dl = float(2.0 ** _lbk[k]), float(2.0 ** _lsk[k]), float(_lbk[k] - _lsk[k])
             rows.append("%s: the buyers' interest × impact was <b>%.2gx</b>%s, the sellers' <b>%.2gx</b>%s -- delta "
                         "<b>%s %.2gx</b>. Each side's aggressive $ per second against its own last %d cycles, "
-                        "times its impact on the cycles it led."
+                        "times its impact: its reach when it led, its push-back when it did not."
                         % (_L % "Sides", _b2, " (they led)" if up else "", _s2, "" if up else " (they led)",
                            "B" if _dl >= 0 else "S", 2.0 ** abs(_dl), n))
         if contra:
@@ -24345,6 +24418,12 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             rows.append("%s: it reached <b>%d ticks</b> and held <b>%d</b> of them (<b>%d%%</b>) -- %s."
                         % (_L % "Kept", int(round(reach)), int(round(held)),
                            int(round(100.0 * kept)), _band))
+        # PUSH-BACK: the other side's answer, from the leader's extreme to the close (user 2026-09-24)
+        _pb = float(np.asarray(d.get("pback", _nan))[k]); _gv = float(np.asarray(d.get("give", _nan))[k])
+        if np.isfinite(_pb) and np.isfinite(_gv):
+            rows.append("%s: the %s drove price back <b>%d ticks</b> from the %s to the close, <b>%.2gx</b> what "
+                        "they usually push back for that much effort in that much time."
+                        % (_L % "Push-back", other, int(round(_gv)), "high" if up else "low", _pb))
         if not wall_ok:
             rows.append("%s: none, because there was no order-book reading at this cycle's open." % (_L % "Dot"))
         elif wall_hi:

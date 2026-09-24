@@ -53,6 +53,7 @@ public final class FlowModel {
     public int iN = 0;
     public double[] iX0 = new double[0], iX1 = new double[0];
     public float[] iV, iMult, iScore, iWall, iReach, iMv, iArb, iArs, iKept, iSbuy, iSsell, iLiib, iLiis, iPliib, iPliis;
+    public float[] iPback;      // the NON-leading side's push-back multiple (-999 = not read), 2026-09-24
     // the pair the LINES mode draws: the raw one through the slider's trailing mean (raw when it is at 1)
     public float[] iLyb = new float[0], iLys = new float[0];
     public int iSmn = 1;        // the smoothing window the I x I DATA was computed with (not the slider's position)
@@ -294,6 +295,8 @@ public final class FlowModel {
         float[] arb = f32(m.optString("arb")), ars = f32(m.optString("ars")), kept = f32(m.optString("kept")), sbuy = f32(m.optString("sbuy")), ssell = f32(m.optString("ssell"));
         float[] liib = f32(m.optString("liib")), liis = f32(m.optString("liis")), pliib = f32(m.optString("pliib")), pliis = f32(m.optString("pliis"));
         float[] lyb = f32(m.optString("lyb")), lys = f32(m.optString("lys"));
+        float[] pback = f32(m.optString("pback"));
+        if (pback.length != n) { pback = new float[n]; java.util.Arrays.fill(pback, -999f); }   // an older engine
         byte[] up = i8(m.optString("up")), contra = i8(m.optString("contra")), good = i8(m.optString("good")), form = i8(m.optString("form")), vac = i8(m.optString("vac")), quiet = i8(m.optString("quiet"));
         if (lyb.length != n) lyb = liib;
         if (lys.length != n) lys = liis;
@@ -305,14 +308,14 @@ public final class FlowModel {
             int on = key.equals(iKeepKey) && iX0 != null ? iN : 0;
             iKeepKey = key;
             int[] p = keepPlan(iX0, iForm, on, x0, form, n);
-            if (on == 0) { iX0 = null; iX1 = null; iV = null; iMult = null; iScore = null; iWall = null; iReach = null; iMv = null; iArb = null; iArs = null; iKept = null; iSbuy = null; iSsell = null; iLiib = null; iLiis = null; iPliib = null; iPliis = null; iLyb = null; iLys = null; iUp = null; iContra = null; iGood = null; iForm = null; iVac = null; iQuiet = null; }
+            if (on == 0) { iX0 = null; iX1 = null; iV = null; iMult = null; iScore = null; iWall = null; iReach = null; iMv = null; iArb = null; iArs = null; iKept = null; iSbuy = null; iSsell = null; iLiib = null; iLiis = null; iPliib = null; iPliis = null; iLyb = null; iLys = null; iPback = null; iUp = null; iContra = null; iGood = null; iForm = null; iVac = null; iQuiet = null; }
             iimpMode = mode; iN = p.length;
             iX0 = pick(iX0, x0, p); iX1 = pick(iX1, x1, p);
             iV = pick(iV, v, p); iMult = pick(iMult, mult, p); iScore = pick(iScore, score, p); iWall = pick(iWall, wall, p);
             iReach = pick(iReach, reach, p); iMv = pick(iMv, mv, p); iArb = pick(iArb, arb, p); iArs = pick(iArs, ars, p);
             iKept = pick(iKept, kept, p); iSbuy = pick(iSbuy, sbuy, p); iSsell = pick(iSsell, ssell, p);
             iLiib = pick(iLiib, liib, p); iLiis = pick(iLiis, liis, p); iPliib = pick(iPliib, pliib, p); iPliis = pick(iPliis, pliis, p);
-            iLyb = pick(iLyb, lyb, p); iLys = pick(iLys, lys, p);
+            iLyb = pick(iLyb, lyb, p); iLys = pick(iLys, lys, p); iPback = pick(iPback, pback, p);
             smIimp = m.optInt("smn", smIimp);
             iSmn = smn;
             iUp = pick(iUp, up, p); iContra = pick(iContra, contra, p); iGood = pick(iGood, good, p); iForm = pick(iForm, form, p);

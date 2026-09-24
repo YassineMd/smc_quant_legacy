@@ -396,7 +396,7 @@ def pane_titles(n=None):
         "fratio": "FLOW RATIOS" + d + "$/s vs last %d" % n + d + "buy / sell",
         "iimp": "INTEREST × IMPACT" + d + "who leads vs last %d" % n,
         "cint": "LINES INTEREST" + d + "each side's aggressive $/s vs its own last %d" % n,
-        "cimp": "LINES IMPACT" + d + "each side's reach vs its own last %d LED" % n,
+        "cimp": "LINES IMPACT" + d + "each side's reach (led) or push-back vs its own last %d" % n,
     }
 
 
@@ -641,8 +641,23 @@ IIMP_FIT_MIN_N = 20             # the y fit LATCHES only once this many cycles w
                                 # handful of cycles must not freeze a scale the rest of the data will not fit
 IIMP_WALL_LOW = 0.94            # far-side resting orders vs the previous N cycles -- terciles again
 IIMP_WALL_HIGH = 1.06
-IIMP_COEF_BUY = (0.090, 0.275, -0.235)
-IIMP_COEF_SELL = (0.089, 0.233, -0.231)
+# REFIT 2026-09-24 on the RULE-B cycles (flow_pane 0e65ac3: one second belongs to one cycle), 72 h / 2271 rated cycles
+# read off the daemon's own tape and book (scratchpad iimp_refit.py): buy R2 0.686 (1st half -> 2nd 0.678), sell 0.712
+# (0.691). The old (0.090, 0.275, -0.235) / (0.089, 0.233, -0.231) fit these cycles at only 0.595 / 0.573, and 13% of
+# fills changed with the refit. ⚠ The sell WALL slope is weak (SE 0.078) -- kept, noted. Re-check every week or two:
+# the slopes moved a lot since mid-September, partly because the cycle boundary rule changed.
+IIMP_COEF_BUY = (0.259, 0.172, -0.243)
+IIMP_COEF_SELL = (0.285, 0.146, -0.107)
+# THE OTHER SIDE'S PUSH-BACK (user 2026-09-24: "the buyers showed interest and realistically had an impact since only
+# 24% of the bearish candle was kept"). On a cycle a side did NOT lead, its impact is how far it pushed price BACK
+# from the leader's extreme to the close, against what its own $ and seconds after that extreme usually buy:
+# ln(1 + ticks handed back) on ln(its $ after the extreme) and ln(seconds after the extreme), per PUSHING side, no
+# wall (its slope was weak and the wrong sign). Same 72 h: buyers pushing back R2 0.467 (oos 0.373), sellers 0.460
+# (0.417). It replaces the flat 1x the non-leader used to get in every per-side I x I value and in LINES IMPACT.
+# Descriptive: none of reach / kept / push-back told the NEXT cycle anything (shift-null p 0.13-0.35) -- the goal is
+# the market NOW.
+IIMP_PB_COEF_BUY = (0.129, 0.211)       # BUYERS pushing back up from the low (a sell-led cycle)
+IIMP_PB_COEF_SELL = (0.128, 0.257)      # SELLERS pushing back down from the high (a buy-led cycle)
 IIMP_BUY_COL = "#26a69a"        # the same teal / red every other pane uses for the two sides
 IIMP_SELL_COL = "#ef5350"
 # ORANGE = the leading side is not the way price went, the cycle badges' own "contradicted" colour. Measured on
