@@ -655,6 +655,10 @@ VAC_OPP_TAPE_MAX = 1.0          # ... AND the OTHER side's tape (its aggressive 
 # wicks SOLID like a breakout's, the body at the low opacity ("keep the current low oppacity of the vaccum"). The tablet
 # mirrors the alpha (ChartView.VAC_FILL_A).
 VAC_CANDLE_FILL_A = 56          # the vacuum candle's body, alpha out of 255 (~22%)
+# A CONFLICT BAR (user 2026-09-25: "conflict bars are where the tape of both side >=3x"): BOTH sides' tapes -- each
+# side's aggressive $/s against its own last N, the card's two tape bars -- at or above this. The tablet boxes the candle
+# in red, high to low ("the box should be RED color 2px width from the high to the low of the conflict bar").
+CONFLICT_TAPE_MIN = 3.0
 IIMP_WALL_CHUNK = 900           # columns per request (3.75 h; ~50 KB, the Limit Orders pane's own budget)
 # THE LIVE EDGE (2026-09-23). A new cycle is only known ~20 s after it opened (FLOW_CROSS_MIN_HOLD_SECS), and its
 # wall is the column that ENDS at or before its open -- so that column has been over for 20 s or more by then.

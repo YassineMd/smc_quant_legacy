@@ -19,7 +19,8 @@ WIRE (newline-delimited JSON; arrays are base64 of little-endian float32 unless 
   -> bins    {base, n, full, buy, sell, px, pxh, pxl}                       the store's 1 s bins; base = bin index of
              the first sent (second = base * 1); full = replace the whole store, else replace [base, base+n)
   -> cyc     {i0, total, ts, te (f64), side, strong, done (u8), move, cbuy, csell, o, h, l, c, col, st, pickb (i8),
-             rate, lead (i8: +1 buyers / -1 sellers / 0 unrated)}          rows i0.. replace the tail from i0
+             rate, lead (i8: +1 buyers / -1 sellers / 0 unrated), cf (u8: 1 = a CONFLICT bar)}
+                                                                            rows i0.. replace the tail from i0
   -> live    {now, px, fcol}                                                every tick
   -> iimp    {mode, n, x0, x1 (f64), v, mult, ..., liib, liis, pliib, pliis, vac, quiet, up, contra, good, form}
   -> interp  {rows: [[t0, t1, head, name, d1, [d2a, d2b], st, strong, forming, col, mv_txt, mv_sign, mv_word] ...]}
@@ -400,6 +401,7 @@ class State:
     rev_hist = -1
     iimp_id = None; interp_id = None; liq_sig = None
     cyc_lead_sent = None      # the leaders the tablet last got (a lookback change re-rates every cycle)
+    cyc_conf_sent = None      # ... and the conflict flags (both tapes >= CONFLICT_TAPE_MIN)
     lines_sig = {"cint": None, "cimp": None}   # the two split panes, each keyed on what it last sent
     hlh_out = None; hlh_t = 0.0; hlh_xm = None; hlh_pics = {}
     hvp_sent = None           # the last "hvp" payload (resent only when it changes)
@@ -538,9 +540,15 @@ def tick_cycles(now, force=False):
         ar_s = FI.prev_ratio(np.maximum(csell, 0.0) / dur, done, n_lb, n_mn, include_open=True)
         ok = np.isfinite(ar_b) & np.isfinite(ar_s) & (ar_b > 0) & (ar_s > 0)
         lead = np.where(ok, np.where(ar_b >= ar_s, 1, -1), 0).astype(np.int8)
-        S.cyc_base = (t, is_buy, strong, move, cbuy, csell, t_end, done, px0, px1, pxh, pxl, cols0, pick_b, rate, state, lead)
+        # A CONFLICT BAR (user 2026-09-25: "conflict bars are where the tape of both side >=3x"): the same two tapes, BOTH
+        # at or above CONFLICT_TAPE_MIN -- the tablet boxes that candle in red
+        _cm = float(config.CONFLICT_TAPE_MIN)
+        conf = (ok & (ar_b >= _cm) & (ar_s >= _cm)).astype(np.uint8)
+        S.cyc_base = (t, is_buy, strong, move, cbuy, csell, t_end, done, px0, px1, pxh, pxl, cols0, pick_b, rate, state,
+                      lead, conf)
         S.cyc_key = key
-    (t, is_buy, strong, move, cbuy, csell, t_end, done, px0, px1, pxh, pxl, cols0, pick_b, rate, state, lead) = S.cyc_base
+    (t, is_buy, strong, move, cbuy, csell, t_end, done, px0, px1, pxh, pxl, cols0, pick_b, rate, state, lead,
+     conf) = S.cyc_base
     # THE BRIGHT PAIR (7 / 8) needs its I x I bar ORANGE AND FILLED (user 2026-09-23), and that pane re-rates on its
     # own clock -- so the join is re-checked every tick, and any candle whose colour moved is re-sent, not just the
     # last few (a bar can fill well after its cycle closed, once the wall columns land)
@@ -556,22 +564,23 @@ def tick_cycles(now, force=False):
         _d = np.flatnonzero(prev[:_n] != cols[:_n])
         if _d.size:
             i0 = min(i0, int(_d[0]))
-    pl_ = S.cyc_lead_sent
-    if not full and pl_ is not None and pl_.size:
-        _n = min(int(pl_.size), int(lead.size))
-        _d = np.flatnonzero(pl_[:_n] != lead[:_n])
-        if _d.size:
-            i0 = min(i0, int(_d[0]))
+    for pl_, cur_ in ((S.cyc_lead_sent, lead), (S.cyc_conf_sent, conf)):   # a leader or a conflict flag that moved
+        if not full and pl_ is not None and pl_.size:
+            _n = min(int(pl_.size), int(cur_.size))
+            _d = np.flatnonzero(pl_[:_n] != cur_[:_n])
+            if _d.size:
+                i0 = min(i0, int(_d[0]))
     S.cyc_full_needed = False; S.cyc_last_total = total
     S.cyc_cols_sent = np.array(cols, copy=True)
     S.cyc_lead_sent = np.array(lead, copy=True)
+    S.cyc_conf_sent = np.array(conf, copy=True)
     sl = slice(i0, total)
     send({"t": "cyc", "i0": i0, "total": total, "ts": b64(t[sl], "<f8"), "te": b64(t_end[sl], "<f8"),
           "side": b64(is_buy[sl], "u1"), "strong": b64(strong[sl], "u1"), "done": b64(done[sl], "u1"),
           "move": b64(np.nan_to_num(move[sl], nan=0.0)), "cbuy": b64(cbuy[sl]), "csell": b64(csell[sl]),
           "o": b64(px0[sl]), "h": b64(pxh[sl]), "l": b64(pxl[sl]), "c": b64(px1[sl]),
           "col": b64(cols[sl], "i1"), "st": b64(state[sl], "i1"), "pickb": b64(pick_b[sl], "u1"),
-          "rate": b64(np.nan_to_num(rate[sl], nan=0.0)), "lead": b64(lead[sl], "i1")})
+          "rate": b64(np.nan_to_num(rate[sl], nan=0.0)), "lead": b64(lead[sl], "i1"), "cf": b64(conf[sl], "u1")})
 
 
 def tick_iimp():
@@ -846,7 +855,7 @@ def on_cmd(c):
         if cl is not None:
             cl.ready = True
         S.bins_sent = None; S.cyc_full_needed = True; S.iimp_id = None; S.interp_id = None; S.liq_sig = None
-        S.cyc_lead_sent = None
+        S.cyc_lead_sent = None; S.cyc_conf_sent = None
         S.lines_sig = {"cint": None, "cimp": None}
         S.hlh_out = None; S.hlh_pics = {}; S.bp_sig = None; S.hvp_sent = None
         hello()

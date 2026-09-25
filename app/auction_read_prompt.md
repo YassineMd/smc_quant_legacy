@@ -41,6 +41,8 @@ Left, top to bottom (panes can be hidden, so check which ones are there):
   - **HLH lines**: each bloc's VAH / VAL, with dashes for its POC;
   - **$ bubbles**: Big Player prints of $500K+, and diamonds for sweeps and bursts;
   - **▲ / ▼ Takeover marks**: one side took over the cycle;
+  - **a red box from a candle's high to its low**: a CONFLICT bar, where both sides' tapes are at least 3x
+    (`tape_buyers_x` and `tape_sellers_x` both 3 or more): both sides aggressed hard in the same cycle;
   - the price badge at the right edge: the live price and the forming cycle's age.
 - **BUY / SELL FLOW**: taker $ per 60 s, buyers teal and sellers red. Where the lines cross is where cycles start.
 - **LIMIT ORDERS**: the resting bid $ and ask $ within ±N ticks of the mid, over time.

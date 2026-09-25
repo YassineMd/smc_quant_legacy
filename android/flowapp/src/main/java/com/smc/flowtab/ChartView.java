@@ -274,6 +274,7 @@ public final class ChartView extends View {
     // with the outline and wicks SOLID like a breakout's and the body FAINT -- flow_interp.C_VACUUM_UP / C_VACUUM_DN;
     // the body's alpha mirrors config.VAC_CANDLE_FILL_A
     private static final int C_VAC_UP = 9, C_VAC_DN = 10, VAC_FILL_A = 56;
+    private static final float CONF_PAD = 3f;        // dp: how far a CONFLICT bar's red box stands off its body, each side
     private static final double LN2 = Math.log(2.0);
 
     public ChartView(Context ctx, FlowModel model) {
@@ -490,7 +491,7 @@ public final class ChartView extends View {
         synchronized (M.lock) {
             s.binBase = M.binBase; s.buy = M.buy; s.sell = M.sell;
             s.n = M.nCyc; s.cT = M.cT; s.cTe = M.cTe; s.cSide = M.cSide; s.cStrong = M.cStrong; s.cDone = M.cDone; s.cCol = M.cCol; s.cSt = M.cSt;
-            s.cMove = M.cMove; s.cO = M.cO; s.cH = M.cH; s.cL = M.cL; s.cC = M.cC; s.cLead = M.cLead;
+            s.cMove = M.cMove; s.cO = M.cO; s.cH = M.cH; s.cL = M.cL; s.cC = M.cC; s.cLead = M.cLead; s.cConf = M.cConf;
             s.livePx = M.livePx; s.formCol = M.formCol; s.win = M.win; s.dec = M.dec; s.tick = M.tick;
             s.lqX = M.lqX; s.lqB = M.lqB; s.lqA = M.lqA;
             s.mode = M.iimpMode; s.iN = M.iN; s.iX0 = M.iX0; s.iX1 = M.iX1; s.iV = M.iV; s.iMult = M.iMult; s.iScore = M.iScore; s.iWall = M.iWall; s.iKept = M.iKept;
@@ -538,7 +539,7 @@ public final class ChartView extends View {
 
     private static final class Snap {
         long binBase; float[] buy, sell; float[][] series;
-        int n; double[] cT, cTe; byte[] cSide, cStrong, cDone, cCol, cSt, cLead; float[] cMove, cO, cH, cL, cC;
+        int n; double[] cT, cTe; byte[] cSide, cStrong, cDone, cCol, cSt, cLead, cConf; float[] cMove, cO, cH, cL, cC;
         double livePx, win, tick; int formCol, dec;
         double[] lqX; float[] lqB, lqA;
         String mode; int iN, iSmn; double[] iX0, iX1; float[] iV, iMult, iScore, iWall, iKept, iSbuy, iSsell, iLiib, iLiis, iLyb, iLys, iPback, iReach, iMv; byte[] iUp, iContra, iGood, iForm;
@@ -634,6 +635,25 @@ public final class ChartView extends View {
             hw = Math.max(0.6f * d, hw);
             int col = isForm ? s.formCol : s.cCol[i];
             drawCandle(c, xm, hw, o, hh, ll, cl, col, top, hgt, yl, yh);
+        }
+        // THE CONFLICT BARS (user 2026-09-25: "conflict bars are where the tape of both side >=3x" / "the box should be
+        // RED color 2px width from the high to the low of the conflict bar"): the engine flags them (cf), and each gets
+        // a red frame from its high to its low, CONF_PAD wider than its body on each side -- over the candles, so a
+        // neighbour never hides it. The forming candle is boxed on its live high / low while its tapes stand there.
+        if (s.cConf != null) {
+            pl.setColor(Color.RED); pl.setStrokeWidth(2 * d);
+            for (int i = i0; i < i1 && i < s.cConf.length; i++) {
+                if (s.cConf[i] == 0) continue;
+                boolean isForm = i == last && forming;
+                double hh = isForm ? fh : s.cH[i], ll = isForm ? fl : s.cL[i];
+                if (Double.isNaN(hh) || Double.isNaN(ll)) continue;
+                double te = isForm ? fte : s.cTe[i];
+                double dur = Math.max(1e-9, te - s.cT[i]);
+                float xm = xPx(s.cT[i] + dur * 0.5), hw = (float) (dur * 0.72 * 0.5 / (vx1 - vx0) * plotR);
+                hw = Math.max(0.6f * d, hw) + CONF_PAD * d;
+                float yhi = (float) (top + (yh - hh) / (yh - yl) * hgt), ylo = (float) (top + (yh - ll) / (yh - yl) * hgt);
+                c.drawRect(xm - hw, yhi, xm + hw, ylo, pl);
+            }
         }
         // the marked candle: a tap here or on its feed row
         if (!Double.isNaN(selCycle)) {
