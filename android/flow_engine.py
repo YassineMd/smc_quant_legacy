@@ -19,12 +19,13 @@ WIRE (newline-delimited JSON; arrays are base64 of little-endian float32 unless 
   -> bins    {base, n, full, buy, sell, px, pxh, pxl}                       the store's 1 s bins; base = bin index of
              the first sent (second = base * 1); full = replace the whole store, else replace [base, base+n)
   -> cyc     {i0, total, ts, te (f64), side, strong, done (u8), move, cbuy, csell, o, h, l, c, col, st, pickb (i8),
-             rate, lead (i8: +1 buyers / -1 sellers / 0 unrated)}          rows i0.. replace the tail from i0
+             rate, lead (i8: +1 buyers / -1 sellers / 0 unrated),
+             bias (i8: the Market Position side ACTIVE at the cycle's close, +1 BUY / -1 SELL / 0 neither /
+             -2 not known yet -- see tick_bias)}                            rows i0.. replace the tail from i0
   -> live    {now, px, fcol}                                                every tick
   -> iimp    {mode, n, x0, x1 (f64), v, mult, ..., liib, liis, pliib, pliis, vac, quiet, up, contra, good, form}
   -> interp  {rows: [[t0, t1, head, name, d1, [d2a, d2b], st, strong, forming, col, mv_txt, mv_sign, mv_word] ...]}
   -> liq     {x (f64), b, a, live_t, live_b, live_a, radius}               the LIMIT ORDERS curves as drawn
-  -> tko     {buy (f64 keys), sell, form: [x, y, buy] | null}              the Takeover marks as drawn
   -> explain {k, html}                                                      the I x I click panel for cycle k
   -> hlh     {on, note, pics: [{k, x0, x1, ops?}], labels, dashes}         the HLH Volume Profile geometry (a pic's
              ops are sent once per pic identity; the tablet keeps them by k) -- see RecPainter
@@ -399,8 +400,9 @@ class State:
     cyc_key = None; cyc_t = 0.0; cyc_full_needed = True; cyc_last_total = 0
     cyc_base = None; cyc_cols_sent = None      # the last read's arrays, and the colours the tablet last got
     rev_hist = -1
-    iimp_id = None; interp_id = None; liq_sig = None; tko_id = None
+    iimp_id = None; interp_id = None; liq_sig = None
     cyc_lead_sent = None      # the leaders the tablet last got (a lookback change re-rates every cycle)
+    cyc_bias = None; cyc_bias_sent = None; bias_rev_seen = -1   # the per-cycle bias (tick_bias), as last built / sent
     lines_sig = {"cint": None, "cimp": None}   # the two split panes, each keyed on what it last sent
     hlh_out = None; hlh_t = 0.0; hlh_xm = None; hlh_pics = {}
     hvp_sent = None           # the last "hvp" payload (resent only when it changes)
@@ -526,8 +528,15 @@ def tick_cycles(now, force=False):
     # own clock -- so the join is re-checked every tick, and any candle whose colour moved is re-sent, not just the
     # last few (a bar can fill well after its cycle closed, once the wall columns land)
     cols = w._px_bright_demote(t, cols0)
+    # the BIAS of each finished cycle, from tick_bias's cache (it lands after the cycle closes, and a restart
+    # rebuilds the past bit by bit): rebuilt whenever the rows or the cache moved
+    bias_new = fresh or S.cyc_bias is None or S.bias_rev_seen != BIAS.rev or int(S.cyc_bias.size) != int(t.size)
+    if bias_new:
+        S.cyc_bias = np.array([BIAS.cache.get(round(float(x), 2), -2) for x in t], dtype=np.int8)
+        S.bias_rev_seen = BIAS.rev
+    bias = S.cyc_bias
     prev = S.cyc_cols_sent
-    if not fresh and prev is not None and prev.size == cols.size and np.array_equal(prev, cols):
+    if not fresh and not bias_new and prev is not None and prev.size == cols.size and np.array_equal(prev, cols):
         return
     total = int(t.size)
     full = force or S.cyc_full_needed or total < S.cyc_last_total
@@ -543,16 +552,23 @@ def tick_cycles(now, force=False):
         _d = np.flatnonzero(pl_[:_n] != lead[:_n])
         if _d.size:
             i0 = min(i0, int(_d[0]))
+    pb_ = S.cyc_bias_sent
+    if not full and pb_ is not None and pb_.size:
+        _n = min(int(pb_.size), int(bias.size))
+        _d = np.flatnonzero(pb_[:_n] != bias[:_n])
+        if _d.size:
+            i0 = min(i0, int(_d[0]))
     S.cyc_full_needed = False; S.cyc_last_total = total
     S.cyc_cols_sent = np.array(cols, copy=True)
     S.cyc_lead_sent = np.array(lead, copy=True)
+    S.cyc_bias_sent = np.array(bias, copy=True)
     sl = slice(i0, total)
     send({"t": "cyc", "i0": i0, "total": total, "ts": b64(t[sl], "<f8"), "te": b64(t_end[sl], "<f8"),
           "side": b64(is_buy[sl], "u1"), "strong": b64(strong[sl], "u1"), "done": b64(done[sl], "u1"),
           "move": b64(np.nan_to_num(move[sl], nan=0.0)), "cbuy": b64(cbuy[sl]), "csell": b64(csell[sl]),
           "o": b64(px0[sl]), "h": b64(pxh[sl]), "l": b64(pxl[sl]), "c": b64(px1[sl]),
           "col": b64(cols[sl], "i1"), "st": b64(state[sl], "i1"), "pickb": b64(pick_b[sl], "u1"),
-          "rate": b64(np.nan_to_num(rate[sl], nan=0.0)), "lead": b64(lead[sl], "i1")})
+          "rate": b64(np.nan_to_num(rate[sl], nan=0.0)), "lead": b64(lead[sl], "i1"), "bias": b64(bias[sl], "i1")})
 
 
 def tick_iimp():
@@ -645,16 +661,6 @@ def tick_liq():
           "live_t": float(live[0]) if live else 0.0})
 
 
-def tick_tko():
-    d = w.__dict__.get("_px_iib_last")
-    if d is None or id(d) == S.tko_id:
-        return
-    S.tko_id = id(d)
-    f = d.get("form")
-    send({"t": "tko", "buy": b64(d["buy"], "<f8"), "sell": b64(d["sell"], "<f8"),
-          "form": [float(f[0]), float(f[1]), bool(f[2])] if f else None})
-
-
 def tick_live(now):
     lp = w._engine_live_px()
     # the engine's price can be STALE for the first seconds of a boot (a catch-up bucket): more than 1% off the
@@ -737,22 +743,11 @@ def tick_hvp(st, week_on, now):
     try:
         if st is not None:
             rows = [m for pk in st.periods(week_on, now) if not pk[0] for m in (pk[5] or ())]
-            ok = [m for m in rows if m is not None and m.tB is not None and m.bLo is not None and m.bHi is not None
-                  and m.vah is not None and m.val is not None]
-            if ok:
-                ok.sort(key=lambda m: (float(m.tB), float(m.tA) if m.tA is not None else 0.0))
-                rec = ok[-1]
-                prev = ok[-2] if len(ok) > 1 else None
-                poc = _hlh.H.bloc_poc(rec)
-                dr = 0
-                if prev is not None and poc is not None:
-                    if float(poc) < float(prev.val):
-                        dr = -1
-                    elif float(poc) > float(prev.vah):
-                        dr = 1
-                msg = {"t": "hvp", "on": True, "name": str(rec.name), "lo": float(rec.bLo), "hi": float(rec.bHi),
-                       "poc": float(poc) if poc is not None else None,
-                       "prev": str(prev.name) if prev is not None else None, "dir": dr}
+            nb = _newest_bloc(rows)
+            if nb is not None:
+                rec, prev = nb["rec"], nb["prev"]
+                msg = {"t": "hvp", "on": True, "name": str(rec.name), "lo": nb["lo"], "hi": nb["hi"], "poc": nb["poc"],
+                       "prev": str(prev.name) if prev is not None else None, "dir": nb["dir"]}
     except Exception:
         traceback.print_exc()
         msg = {"t": "hvp", "on": False}
@@ -760,6 +755,185 @@ def tick_hvp(st, week_on, now):
         S.hvp_sent = msg
         send(msg)
         log("hvp %s" % ({k: v for k, v in msg.items() if k != "t"},))
+
+
+def _newest_bloc(rows):
+    """The NEWEST HLH day bloc among `rows` (the row whose candles end latest, tie on start) and how it was created
+    against the one before it: {rec, prev, lo, hi, poc, dir}, or None. ONE pick for the live fade (tick_hvp) and the
+    Takeover's bias history (tick_bias), so the two cannot disagree about which bloc is "the VP"."""
+    ok = [m for m in rows if m is not None and m.tB is not None and m.bLo is not None and m.bHi is not None
+          and m.vah is not None and m.val is not None]
+    if not ok:
+        return None
+    ok.sort(key=lambda m: (float(m.tB), float(m.tA) if m.tA is not None else 0.0))
+    rec = ok[-1]
+    prev = ok[-2] if len(ok) > 1 else None
+    poc = _hlh.H.bloc_poc(rec)
+    dr = 0
+    if prev is not None and poc is not None:
+        if float(poc) < float(prev.val):
+            dr = -1
+        elif float(poc) > float(prev.vah):
+            dr = 1
+    return {"rec": rec, "prev": prev, "lo": float(rec.bLo), "hi": float(rec.bHi),
+            "poc": float(poc) if poc is not None else None, "dir": dr}
+
+
+def _bias_of(px, lo, hi, poc, dr):
+    """The Market Position side ACTIVE at price `px` -- the tablet's PriceTools.fadeMask, to the letter: the bloc
+    rule (under its low fades BUY, over its high fades SELL, inside it the side it was created against fades), then
+    the POC filter (a BUY only below the POC, a SELL only above it). +1 BUY active, -1 SELL active, 0 neither."""
+    if not all(v is not None and math.isfinite(v) for v in (px, lo, hi)):
+        return 0
+    fb = fs = False
+    if px < lo:
+        fb = True
+    elif px > hi:
+        fs = True
+    elif dr < 0:
+        fb = True
+    elif dr > 0:
+        fs = True
+    if poc is not None and math.isfinite(poc):
+        if not (px < poc):
+            fb = True
+        if not (px > poc):
+            fs = True
+    if not fb and fs:
+        return 1
+    if fb and not fs:
+        return -1
+    return 0
+
+
+class _BiasHist:
+    """THE TAKEOVER'S BIAS, per FINISHED cycle, AS IT STOOD at its close (user 2026-09-25: "apply the market position
+    filter to it, thats the bias"; past cycles "rebuilt causally"). For a cycle closing at T on day D the HLH blocs
+    are what the engine would have drawn then: the chain FOLDED through D-1 (its live rows) plus day D's forming
+    period computed from the 1 m candles that had CLOSED by T -- the candle still open at T is left out, so nothing
+    after T enters (a lag of under a minute against the live fade, which reads that candle as it forms). The newest
+    bloc of those (_newest_bloc) and the cycle's CLOSE price give the bias (_bias_of).
+    ⚠ Near-exact, not exact, for the OLDER days: the chain starts at the oldest day the HLH feed holds (HLH_HIST_DAYS),
+    so a merge reaching further back than that, which the live engine could see then, is not replayed."""
+
+    def __init__(self):
+        self.cache = {}         # round(cycle start, 2) -> +1 / -1 / 0
+        self.snaps = {}         # (period key, minute) -> (lo, hi, poc, dir) | None
+        self.chains = None      # {period key: Chain folded through the days BEFORE it}
+        self.sig = None
+        self.span = None
+        self.rev = 0
+        self.t_start = None     # when the rebuild began, and whether its end was logged
+        self.logged = False
+
+
+BIAS = _BiasHist()
+
+
+def _bias_chains(st, sp, p):
+    """{period key: a Chain folded through every finished day before it}, rebuilt only when the days or their
+    candles change (a day roll) -- the per-cycle answers already cached stay: they are about the past."""
+    import copy
+    sig = (tuple((int(k), int(len(pc)), float(pc.t[-1])) for k, pc in sp[:-1]), int(sp[-1][0]))
+    if BIAS.chains is not None and BIAS.sig == sig:
+        return BIAS.chains
+    ch = _hlh.H.Chain(False, p)
+    chains = {}
+    for i, (k, pc) in enumerate(sp):
+        chains[int(k)] = copy.deepcopy(ch)
+        if i < len(sp) - 1:
+            res = _hlh.H.compute_period(pc, False, p, k)
+            if res is not None:                        # the overlay skips an empty period the same way
+                ch.fold(res)
+    BIAS.chains = chains; BIAS.sig = sig; BIAS.snaps = {}
+    return chains
+
+
+def tick_bias(now):
+    """Fill BIAS.cache for the finished cycles of the read, NEWEST FIRST, within ~25 ms a tick -- a restart rebuilds
+    ~72 h of cycles over a minute or two without starving the tablet. HLH off -> nothing (the bias IS the HLH)."""
+    if S.cyc_base is None:
+        return
+    try:
+        if not bool(w._hlh_on()):
+            return
+        st = w._hlh_state()
+        sp = st._split_for(config.HLH_DAY_TF, False)
+    except Exception:
+        return
+    if not sp:
+        return
+    p = st.params()
+    if st.merge_span:
+        p.merge_span = str(st.merge_span)
+    span = str(st.merge_span or "")
+    if BIAS.span is not None and BIAS.span != span:      # the merge rule changed: every answer is stale
+        BIAS.cache = {}; BIAS.chains = None; BIAS.rev += 1
+    BIAS.span = span
+    try:
+        chains = _bias_chains(st, sp, p)
+    except Exception:
+        traceback.print_exc()
+        return
+    by_key = {int(k): pc for k, pc in sp}
+    t, t_end, done, px1 = S.cyc_base[0], S.cyc_base[6], S.cyc_base[7], S.cyc_base[9]
+    t0 = time.perf_counter()
+    added = 0
+    for i in np.flatnonzero(np.asarray(done, dtype=bool))[::-1]:
+        key = round(float(t[i]), 2)
+        if key in BIAS.cache:
+            continue
+        T = float(t_end[i]); px = float(px1[i])
+        dk = int(_hlh.H.period_key(T, False, config.HLH_TZ))
+        pc = by_key.get(dk)
+        if pc is None or dk not in chains:
+            BIAS.cache[key] = 0; added += 1              # older than the days the HLH holds: no bias to give
+            continue
+        m = math.floor(T / 60.0) * 60.0
+        if float(pc.t[-1]) < m - 1e-6:
+            continue                                     # the candle closing at T is not FINAL until the next one
+            #                                              opened (the feed patches the open candle in place)
+        sk = (dk, m)
+        snap = BIAS.snaps.get(sk, "miss")
+        if snap == "miss":
+            try:
+                sel = np.asarray(pc.t) < m               # opened before the minute of T = closed by T
+                rows_f = []
+                if sel.any():
+                    res = _hlh.H.compute_period(pc.keep(sel), False, p, dk)
+                    if res is not None:
+                        rows_f = chains[dk].forming(res)[0]
+                nb = _newest_bloc(chains[dk].live_rows() + list(rows_f))
+                snap = None if nb is None else (nb["lo"], nb["hi"], nb["poc"], nb["dir"], str(nb["rec"].name))
+            except Exception:
+                traceback.print_exc()
+                snap = None
+            BIAS.snaps[sk] = snap
+        BIAS.cache[key] = 0 if snap is None else _bias_of(px, snap[0], snap[1], snap[2], snap[3])
+        added += 1
+        if time.perf_counter() - t0 > 0.025:
+            break
+    if added:
+        BIAS.rev += 1
+        if BIAS.t_start is None:
+            BIAS.t_start = time.time()
+    elif not BIAS.logged and BIAS.t_start is not None:
+        # nothing left to rebuild: one line for the journal (the counts over the finished cycles of the read)
+        vals = [BIAS.cache.get(round(float(t[i]), 2)) for i in np.flatnonzero(np.asarray(done, dtype=bool))]
+        log("bias rebuilt: %d finished cycles -- BUY %d, SELL %d, neither %d, still waiting %d (%.0f s)"
+            % (len(vals), sum(1 for v in vals if v == 1), sum(1 for v in vals if v == -1),
+               sum(1 for v in vals if v == 0), sum(1 for v in vals if v is None), time.time() - BIAS.t_start))
+        BIAS.logged = True
+        # ... and the NEWEST three, with the bloc they were read against: the live fade (tick_hvp) must name the same
+        for i in np.flatnonzero(np.asarray(done, dtype=bool))[-3:]:
+            T = float(t_end[i]); m = math.floor(T / 60.0) * 60.0
+            sn = BIAS.snaps.get((int(_hlh.H.period_key(T, False, config.HLH_TZ)), m))
+            log("  bias @ close %s px %.2f -> %s -> %s" % (time.strftime("%H:%M:%S", time.gmtime(T)), float(px1[i]),
+                sn if sn is None else "%s lo %.2f hi %.2f poc %.4f dir %+d" % (sn[4], sn[0], sn[1], sn[2] or float("nan"), sn[3]),
+                {1: "BUY", -1: "SELL", 0: "neither"}.get(BIAS.cache.get(round(float(t[i]), 2)))))
+    if len(BIAS.cache) > 3 * max(1, int(np.size(t))):    # keep it to the read (plus its re-keyed starts)
+        keep = set(round(float(x), 2) for x in t)
+        BIAS.cache = {k: v for k, v in BIAS.cache.items() if k in keep}
 
 
 def tick_bp(now):
@@ -825,8 +999,8 @@ def on_cmd(c):
     if k == "hi":
         if cl is not None:
             cl.ready = True
-        S.bins_sent = None; S.cyc_full_needed = True; S.iimp_id = None; S.interp_id = None; S.liq_sig = None; S.tko_id = None
-        S.cyc_lead_sent = None
+        S.bins_sent = None; S.cyc_full_needed = True; S.iimp_id = None; S.interp_id = None; S.liq_sig = None
+        S.cyc_lead_sent = None; S.cyc_bias_sent = None
         S.lines_sig = {"cint": None, "cimp": None}
         S.hlh_out = None; S.hlh_pics = {}; S.bp_sig = None; S.hvp_sent = None
         hello()
@@ -935,11 +1109,12 @@ def engine_tick():
         if rh != S.rev_hist:
             S.rev_hist = rh; S.cyc_full_needed = True
         tick_bins()
+        tick_bias(now)
         tick_cycles(now, force=S.cyc_full_needed)
         tick_iimp()
         w._lines_tick(now)                      # the same crosses() read, so a memo hit
         tick_lines("cint"); tick_lines("cimp")
-        tick_interp(); tick_liq(); tick_tko()
+        tick_interp(); tick_liq()
         tick_hlh(now); tick_bp(now)
     except Exception:
         traceback.print_exc()
