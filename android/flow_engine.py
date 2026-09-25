@@ -496,6 +496,8 @@ def bright_areas(t, te_c, done, cbuy, csell, px0, px1, pxh, pxl, lead):
     sides from the same leaders the tablet gets (`lead`). For the conflict boxes' reach."""
     n_lb = int(w._lb_n()); n_mn = int(w._lb_min_n())
     R = w._iimp_rate(t, te_c, done, cbuy, csell, px0, px1, pxh, pxl, n_lb, n_mn)
+    _rt = np.isfinite(R["imb"]) & np.isfinite(R["score"])                  # what the I x I could rate, for the log
+    S.rated_n = int(_rt.sum()); S.rated_t0 = float(t[np.flatnonzero(_rt)[0]]) if _rt.any() else float("nan")
     dn = np.asarray(done, dtype=bool)
     sm_b, sm_s, rated = w._lines_values("cimp", dn, ~dn, R["ar_b"], R["ar_s"], R["score"], R["score_pb"], R["short"])
     keep = rated & np.isfinite(sm_b) & np.isfinite(sm_s)
@@ -541,9 +543,11 @@ def tick_cycles(now, force=False):
             _recolour = False
         if now - getattr(S, "cols_log_t", 0.0) > 60.0:     # the breakout gate rates every cycle of the read: watch it
             S.cols_log_t = now
-            log("candle colours: %d cycles in %.0f ms, rated %d times in the last minute (breakouts %d, absorbed %d, vacuum %d)" % (
+            log("candle colours: %d cycles in %.0f ms, rated %d times in the last minute (breakouts %d, absorbed %d, vacuum %d, "
+                "normal against the leader %d)" % (
                 int(t.size), getattr(S, "cols_ms", 0.0), getattr(S, "cols_n", 0),
-                int(np.isin(cols0, (1, 2)).sum()), int(np.isin(cols0, (0, 6)).sum()), int(np.isin(cols0, (9, 10, 11, 12)).sum())))
+                int(np.isin(cols0, (1, 2)).sum()), int(np.isin(cols0, (0, 6)).sum()), int(np.isin(cols0, (9, 10, 11, 12)).sum()),
+                int(np.isin(cols0, (13, 14)).sum())))
             S.cols_n = 0
         pick_b, rate, state = w._cycle_impact(is_buy, strong, move, cbuy, csell)
         # THE LEADER of every cycle (user 2026-09-25, the tablet's KEPT TICKS BY LEADER pane): the I x I pane's own
@@ -582,6 +586,13 @@ def tick_cycles(now, force=False):
             _hm = lambda x: time.strftime("%d %H:%M:%S", time.gmtime(float(x)))
             _ar = lambda a, j: ("%s-%s %.2f" % (_hm(a[1]), _hm(a[2])[3:], a[j])) if a is not None else "none"
             _k0 = {round(float(t[k]), 2): int(k) for k in np.flatnonzero(conf)}
+            _g = list(getattr(w, "_wall_grid", {}) or {})
+            _C = float(config.IIMP_WALL_COL_SECS)
+            log("I x I rated %d of %d cycles, from %s; wall grid %d columns, %s -> %s" % (
+                getattr(S, "rated_n", -1), int(t.size),
+                time.strftime("%d %H:%M", time.gmtime(S.rated_t0)) if np.isfinite(getattr(S, "rated_t0", float("nan"))) else "-",
+                len(_g), time.strftime("%d %H:%M", time.gmtime(min(_g) * _C)) if _g else "-",
+                time.strftime("%d %H:%M", time.gmtime((max(_g) + 1) * _C)) if _g else "-"))
             log("conflict boxes: %d areas (%.0f ms);%s" % (len(S.dom_areas), getattr(S, "dom_ms", 0.0), "".join(
                 " | %s %.2f-%.2f lime[%s] purple[%s]" % (_hm(t0_)[3:], float(cfl[_k0[round(t0_, 2)]]), float(cfh[_k0[round(t0_, 2)]]),
                                                         _ar(al_, 3), _ar(ap_, 4))

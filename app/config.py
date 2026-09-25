@@ -661,6 +661,10 @@ VAC_CANDLE_FILL_A = 56          # the vacuum candle's body, alpha out of 255 (~2
 # side's aggressive $/s against its own last N, the card's two tape bars -- at or above this. The tablet boxes the candle
 # in red, high to low ("the box should be RED color 2px width from the high to the low of the conflict bar").
 CONFLICT_TAPE_MIN = 3.0
+# THE AGAINST-THE-LEADER BORDER (orange / blue) on a vacuum or normal candle (user 2026-09-25: "make the borders
+# thickers for the candles who have blue orange borders normal and vaccum"): px on the PC, dp on the tablet
+# (ChartView.CONTRA_BORDER_W mirrors it); every other candle outline stays 1.
+CONTRA_BORDER_W = 2.0
 # ... and its REACH (user 2026-09-25): no longer the bar's own high / low. The LOW is the low of the closest PREVIOUS
 # lime LINES IMPACT area whose low is below the bar's low, the HIGH the high of the closest previous purple area whose
 # high is above the bar's high -- looking back no further than this. One found and not the other: the other side takes

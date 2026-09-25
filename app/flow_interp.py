@@ -91,15 +91,20 @@ C_VACUUM_UP, C_VACUUM_DN = 9, 10
 # pair's colours). The faint body and the wicks stay the vacuum's green / red.
 C_VACUUM_UP_X, C_VACUUM_DN_X = 11, 12
 VACUUM_PX_COLS = (C_VACUUM_UP, C_VACUUM_DN, C_VACUUM_UP_X, C_VACUUM_DN_X)
+# ... and the same border on a NORMAL candle (user 2026-09-25: "same goes for the normal candles"): the Chart Style's
+# plain candle, UP on a sellers' lead -> a BLUE border, DOWN on a buyers' lead -> an ORANGE border; its body and wicks
+# stay plain. PLAIN_PX_COLS = every candle code the old PC Takeover reads as the neutral candle it used to be.
+C_NORMAL_UP_X, C_NORMAL_DN_X = 13, 14
+PLAIN_PX_COLS = VACUUM_PX_COLS + (C_NORMAL_UP_X, C_NORMAL_DN_X)
 C_ABSORB = C_ABSORB_BUY                     # kept for anything still importing the old name
 BAR_COL = ("#FF9500", "#00C853", "#FF1F1F", "#E2574C", "#6B7A82", "#4E5C64", "#2979FF", "#76FF03", "#D500F9",
-           "#00C853", "#FF1F1F", "#00C853", "#FF1F1F")
+           "#00C853", "#FF1F1F", "#00C853", "#FF1F1F", "#6B7A82", "#6B7A82")
 # ... and TEXT is per THEME. It was not: on the white Simple BW ground every name drew in a pale dark-theme
 # colour and was barely readable.
 TXT_DARK = ("#FFB84D", "#2BE86B", "#FF5A5A", "#F0857C", "#9AAAB2", "#6B7A82", "#7FB2FF", "#9CFF57", "#E57BFF",
-            "#2BE86B", "#FF5A5A", "#2BE86B", "#FF5A5A")
+            "#2BE86B", "#FF5A5A", "#2BE86B", "#FF5A5A", "#9AAAB2", "#9AAAB2")
 TXT_LIGHT = ("#A85C00", "#00822F", "#C40D0D", "#A8382F", "#5A666D", "#6B7A82", "#0B4FA8", "#3F7F00", "#8E00B0",
-             "#00822F", "#C40D0D", "#00822F", "#C40D0D")
+             "#00822F", "#C40D0D", "#00822F", "#C40D0D", "#5A666D", "#5A666D")
 
 # the card's I x I strip wears the I x I PANE's own three colours (config.IIMP_BUY_COL / IIMP_SELL_COL /
 # IIMP_CONTRA_COL), so the miniature bar on a card and the bar in the pane are one object; text tints per theme

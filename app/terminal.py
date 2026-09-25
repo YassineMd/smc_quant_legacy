@@ -52,7 +52,8 @@ from .flow_interp import (FlowInterpPanel, build_rows as _interp_build_rows, pre
                           BREAK_ABSORBED as _BREAK_ABSORBED,
                           vacuum_ok as _vacuum_ok, C_VACUUM_UP as _C_VAC_UP, C_VACUUM_DN as _C_VAC_DN,
                           C_VACUUM_UP_X as _C_VAC_UP_X, C_VACUUM_DN_X as _C_VAC_DN_X,
-                          VACUUM_PX_COLS as _VAC_PX_COLS,
+                          VACUUM_PX_COLS as _VAC_PX_COLS, PLAIN_PX_COLS as _PLAIN_PX_COLS,
+                          C_NORMAL_UP_X as _C_NORM_UP_X, C_NORMAL_DN_X as _C_NORM_DN_X,
                           )
 from .region_state import EXH_WINDOW, exhaustion_mults as _exhaustion_mults
 from .alerts import AlertsLedger
@@ -19479,7 +19480,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
               np.where(brk & (cls == _BREAK_ABSORBED), np.where(lead > 0, _C_AB_BUY, _C_AB_SELL),
               np.where(heavy & ~big, np.where(side, _C_AB_BUY, _C_AB_SELL),
               np.where(big & vok, np.where(up, np.where(contra, _C_VAC_UP_X, _C_VAC_UP),
-                                            np.where(contra, _C_VAC_DN_X, _C_VAC_DN)), -1))))
+                                            np.where(contra, _C_VAC_DN_X, _C_VAC_DN)),
+              # a NORMAL candle that closed against its leader (user 2026-09-25): the plain candle with that border
+              np.where(contra, np.where(up, _C_NORM_UP_X, _C_NORM_DN_X), -1)))))
         return np.where(ok, col, -1).astype(np.int64)
 
     def _px_gate_pending(self, t0: float) -> bool:
@@ -19600,6 +19603,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     _lo_pen = pg.mkPen(_STATE_BAR_COL[_C_AB_SELL], width=_hw)
                     _lo_pen.setCosmetic(True); _lo_pen.setCapStyle(QtCore.Qt.FlatCap)
                     _wcache[_C_AB_SELL] = _lo_pen
+            elif ci in (_C_NORM_UP_X, _C_NORM_DN_X):
+                # a NORMAL candle AGAINST ITS LEADER (user 2026-09-25): the Chart Style's plain candle, only its BORDER
+                # (the candle's pen, below) in the absorbed colour -- its wicks keep the style's own pen
+                _hi_pen = _lo_pen = (_blk if bw else _gry)
             elif ci in (_C_VAC_UP_X, _C_VAC_DN_X):
                 # a VACUUM AGAINST ITS LEADER (user 2026-09-25): only the BORDER takes the absorbed colour (the candle's
                 # own pen below); both wicks keep the vacuum's solid green / red
@@ -19610,13 +19617,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 _lo_pen = _hi_pen
             hp.append(_hi_pen)
             lp.append(_lo_pen)
-            if ci < 0:
-                if bw:
-                    br.append(_fill if float(closes[i]) < float(opens[i]) else _hollow)
-                    pn.append(_blk)
-                else:
-                    br.append(_dn if float(closes[i]) < float(opens[i]) else _up)
-                    pn.append(_gry)
+            if ci < 0 or ci in (_C_NORM_UP_X, _C_NORM_DN_X):
+                _dn_ = float(closes[i]) < float(opens[i])
+                br.append((_fill if _dn_ else _hollow) if bw else (_dn if _dn_ else _up))
+                if ci < 0:
+                    pn.append(_blk if bw else _gry)
+                else:                              # up on a sellers' lead: BLUE; down on a buyers' lead: ORANGE
+                    _bp = _wcache.get(("nb", ci))
+                    if _bp is None:
+                        _bp = pg.mkPen(_STATE_BAR_COL[_C_AB_SELL if ci == _C_NORM_UP_X else _C_AB_BUY],
+                                       width=float(config.CONTRA_BORDER_W))
+                        _bp.setCosmetic(True)
+                        _wcache[("nb", ci)] = _bp
+                    pn.append(_bp)
                 continue
             e = _cache.get(ci)
             if e is None:
@@ -19628,7 +19641,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     # ... against its leader: a BLUE border going up on a sellers' lead, ORANGE going down on a buyers'
                     _bc = (_STATE_BAR_COL[_C_AB_SELL] if ci == _C_VAC_UP_X else
                            _STATE_BAR_COL[_C_AB_BUY] if ci == _C_VAC_DN_X else _c)
-                    _p = pg.mkPen(_bc, width=1.0)
+                    _p = pg.mkPen(_bc, width=(float(config.CONTRA_BORDER_W) if ci in (_C_VAC_UP_X, _C_VAC_DN_X) else 1.0))
                     _p.setCosmetic(True)
                     e = (pg.mkBrush(_q.red(), _q.green(), _q.blue(), int(config.VAC_CANDLE_FILL_A)), _p)
                     _cache[ci] = e
@@ -23494,6 +23507,11 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 r["card_why_not"] = str(raw.get("why_not") or "") or None
                 r["card_weak"] = (not bool(c[7])) if int(c[6]) != _FI.ST_FORMING else None
                 r["candle_colour"] = COL.get(int(c[9]), str(c[9]))
+                if int(c[9]) == _FI.C_QUIET and str(c[3]) == "NORMAL" and raw.get("i_contra"):
+                    # a NORMAL candle that closed against its leader (2026-09-25): the plain candle, bordered
+                    r["candle_colour"] = ("plain (normal), orange border (buyers led, it closed down)"
+                                          if int(raw.get("i_lead") or 0) > 0
+                                          else "plain (normal), blue border (sellers led, it closed up)")
                 if int(c[9]) == _FI.C_VACUUM:              # the PRICE candle (2026-09-25): faint green / red, not salmon
                     _upv = str(c[3]).endswith("buy")
                     r["candle_colour"] = "faint green (vacuum up)" if _upv else "faint red (vacuum down)"
@@ -24842,7 +24860,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         # could carry a badge at all -- a BREAKOUT in the making. Always in, it re-laid every badge ~5 times a second
         # for nothing (measured on the first live boot: median 25 us per frame against 7 us idle).
         _fl = None
-        _flt = _fcol < 0 or _fcol in _VAC_PX_COLS          # a light-flow candle: neutral, or a faint VACUUM (2026-09-25)
+        _flt = _fcol < 0 or _fcol in _PLAIN_PX_COLS        # a light-flow candle: neutral, a faint VACUUM or a bordered NORMAL
         if lc and (_fcol in (1, 2, 7, 8) or (_flt and _fvac != 0)):    # a BREAKOUT (C_BREAK_* and the bright C_BREAK_*_X), a VACUUM or a QUIET forming
             try:
                 # ... the close too when it is a light-flow candle: its "kept" moves with every print
@@ -24926,7 +24944,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 # VACUUM candle (2026-09-25) counts as neutral here: it used to be drawn neutral, and the badge's rule
                 # has not changed
                 _vf = vac[fin]
-                _neutral = (ccol[j] < 0) | np.isin(ccol[j], _VAC_PX_COLS)
+                _neutral = (ccol[j] < 0) | np.isin(ccol[j], _PLAIN_PX_COLS)
                 _kb = _kept_ok(co[j], ch[j], cc[j], 1.0); _ks = _kept_ok(co[j], cl[j], cc[j], -1.0)
                 mb = ok & agree_b[fin] & (np.isin(ccol[j], BREAK_BUY_COLS) | (_neutral & (_vf > 0) & _kb))
                 ms = ok & agree_s[fin] & (np.isin(ccol[j], BREAK_SELL_COLS) | (_neutral & (_vf < 0) & _ks))
@@ -24937,7 +24955,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         # the FORMING candle: the overlay's own geometry, the live read's state, the dict's forming row
         fdraw = None
         _fside = 1 if _fcol in BREAK_BUY_COLS else (-1 if _fcol in BREAK_SELL_COLS else
-                                                    (_fvac if (_fcol < 0 or _fcol in _VAC_PX_COLS) else 0))
+                                                    (_fvac if (_fcol < 0 or _fcol in _PLAIN_PX_COLS) else 0))
         if lc and _fl is not None and form.any() and _fside != 0:
             k = int(np.flatnonzero(form)[-1])
             try:

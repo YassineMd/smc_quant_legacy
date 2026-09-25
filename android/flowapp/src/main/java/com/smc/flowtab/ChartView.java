@@ -277,6 +277,10 @@ public final class ChartView extends View {
     // 11 / 12 = a vacuum that closed AGAINST its I x I leader (user 2026-09-25): up on a sellers' lead -> a BLUE border,
     // down on a buyers' lead -> an ORANGE border; body and wicks stay the vacuum's (flow_interp.C_VACUUM_UP_X / _DN_X)
     private static final int C_VAC_UP_X = 11, C_VAC_DN_X = 12;
+    // 13 / 14 = a NORMAL candle that closed against its leader (user 2026-09-25: "same goes for the normal candles"): the
+    // plain candle, up on a sellers' lead -> a BLUE border, down on a buyers' lead -> ORANGE (flow_interp.C_NORMAL_*_X)
+    private static final int C_NORM_UP_X = 13, C_NORM_DN_X = 14;
+    private static final float CONTRA_BORDER_W = 2f;   // dp: the orange / blue border (config.CONTRA_BORDER_W); others 1
     private static final float CONF_PAD = 3f;        // dp: how far a CONFLICT bar's red box stands off its body, each side
     private static final double LN2 = Math.log(2.0);
 
@@ -874,13 +878,15 @@ public final class ChartView extends View {
         }
         else if (bw) { fill = down ? Color.BLACK : Color.WHITE; pen = Color.BLACK; }
         else { fill = down ? RED : TEAL; pen = Color.parseColor("#9aa4ae"); }
+        if (col == C_NORM_UP_X) border = BAR_COL[C_AB_SELL];          // a plain candle up on a sellers' lead: BLUE border
+        else if (col == C_NORM_DN_X) border = BAR_COL[C_AB_BUY];      // ... down on a buyers' lead: ORANGE border
         pl.setStrokeWidth(1 * d); pl.setColor(pen);
         c.drawLine(xm, yhh, xm, Math.min(yo, yc), pl); c.drawLine(xm, Math.max(yo, yc), xm, yll, pl);
         if (hiWick != 0) { pl.setColor(hiWick); pl.setStrokeWidth(2.8f * d); c.drawLine(xm, yhh, xm, Math.min(yo, yc), pl); }
         if (loWick != 0) { pl.setColor(loWick); pl.setStrokeWidth(2.8f * d); c.drawLine(xm, Math.max(yo, yc), xm, yll, pl); }
         float y0 = Math.min(yo, yc), y1 = Math.max(yo, yc); if (y1 - y0 < 1) y1 = y0 + 1;
         pf.setColor(fill); c.drawRect(xm - hw, y0, xm + hw, y1, pf);
-        pl.setColor(border != 0 ? border : pen); pl.setStrokeWidth(1 * d); c.drawRect(xm - hw, y0, xm + hw, y1, pl);
+        pl.setColor(border != 0 ? border : pen); pl.setStrokeWidth((border != 0 ? CONTRA_BORDER_W : 1f) * d); c.drawRect(xm - hw, y0, xm + hw, y1, pl);
     }
 
     // ------------------------------------------------------------------ THE TAKEOVER (user 2026-09-25: REPLACES the I x I rule)
