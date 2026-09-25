@@ -23076,7 +23076,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             if abs(float(t[_j]) - float(sel)) < 1.0:
                 ksel = _j
 
-        X = self._auction_extras(t, t_end_c, done, ii, ex, k0, now)
+        X = self._auction_extras(t, t_end_c, done, ii, ex, k0, now, px0=px0, px1=px1)
 
         def row(k):
             a = au["rows"][k]
@@ -23277,7 +23277,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         return {"window_s": int(round(win)), "buy_usd": round(bu), "sell_usd": round(se),
                 "buy_pct": round(100.0 * bu / tot, 1) if tot > 0 else None}
 
-    def _auction_extras(self, t, t_end_c, done, ii, ex, k0, now):
+    def _auction_extras(self, t, t_end_c, done, ii, ex, k0, now, px0=None, px1=None):
         """Per cycle, what the other panes and the cards show beside the auction reading (user 2026-09-24: "claude
         should have access to the other data"): the CARD (state, candle colour, move line, flow / speed / tape /
         book, the absorbed push), each side's $, the resting liquidity, the LINES INTEREST / LINES IMPACT values and
@@ -23318,6 +23318,32 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             dside, _gap, dgain = self._lines_dom_bands(lm_b, lm_s, keep)
         except Exception as _e:
             print("AUCTION LINES: %s" % _e)
+        # -- THE BRIGHT AREA'S KEPT FILTER (user 2026-09-25, the tablet's rule, ChartView.domBright): a band is bright only
+        # when the KEPT TICKS lines agree -- its side's rolling-3 kept strictly above the other's at that cycle. Kept = the
+        # engine's leader (each side's $/s against its own last N) x the cycle's move in ticks, over the last 3 CLOSED
+        # cycles; the forming one adds its would-close-now value to the last 2 closed.
+        ksd = None
+        try:
+            if px0 is not None and px1 is not None:
+                _ab = np.asarray(ii["ar_b_raw"], dtype=np.float64); _as = np.asarray(ii["ar_s_raw"], dtype=np.float64)
+                with np.errstate(invalid="ignore"):
+                    _okl = np.isfinite(_ab) & np.isfinite(_as) & (_ab > 0) & (_as > 0)
+                    _ld = np.where(_okl, np.where(_ab >= _as, 1, -1), 0)
+                    _mvt = np.nan_to_num(np.rint((np.asarray(px1, dtype=np.float64) - np.asarray(px0, dtype=np.float64))
+                                                 / float(config.TICK_SIZE)), nan=0.0)
+                _kb = np.where(_ld > 0, _mvt, 0.0); _ks = np.where(_ld < 0, -_mvt, 0.0)
+                _dn = np.asarray(done, dtype=bool)
+                ksd = np.zeros(n, dtype=np.int8); _buf = []
+                for _k in range(n):
+                    if _dn[_k]:
+                        _buf.append((_kb[_k], _ks[_k])); _buf = _buf[-3:]
+                        _sb = sum(v[0] for v in _buf); _ss = sum(v[1] for v in _buf)
+                    else:
+                        _sb = _kb[_k] + sum(v[0] for v in _buf[-2:]); _ss = _ks[_k] + sum(v[1] for v in _buf[-2:])
+                    ksd[_k] = 1 if _sb > _ss else (-1 if _ss > _sb else 0)
+        except Exception as _e:
+            print("AUCTION KEPT: %s" % _e)
+            ksd = None
         # -- the Big Player events, each in the cycle it happened in (the store is fed whatever the toggle: _bp_always)
         try:
             thr = float(self.menu.big_player_min_usd())
@@ -23390,7 +23416,8 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 j = int(kidx[k]) if kidx is not None else -1
                 if j >= 0 and dside is not None and int(dside[j]) != 0:
                     r["impact_band"] = "buyers" if int(dside[j]) > 0 else "sellers"
-                    r["impact_band_bright"] = bool(fin(dgain[j]) and float(dgain[j]) >= lg)
+                    r["impact_band_bright"] = bool(fin(dgain[j]) and float(dgain[j]) >= lg and ksd is not None
+                                                   and int(ksd[k]) == int(dside[j]))
                 else:
                     r["impact_band"] = None
             evs = bp.get(k)

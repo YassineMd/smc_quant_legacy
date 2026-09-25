@@ -55,8 +55,10 @@ Left, top to bottom (panes can be hidden, so check which ones are there):
     share of the push kept at the close. A hollow bar = it did not convert.
   - A dot beyond the bar = a heavy (filled dot) or thin (hollow dot) wall of resting orders in the way.
 - **LINES INTEREST / LINES IMPACT** (optional): each side's interest or impact as a smoothed line. LINES IMPACT
-  also tints a BAND wherever one side's line stands at least 0.3x above the other's, BRIGHT where that side got there
-  by climbing (+0.3x since the band opened) rather than by the other side falling away.
+  also tints a BAND wherever one side's line stands at least 0.3x above the other's (teal = buyers, red = sellers),
+  BRIGHT (lime = buyers, purple = sellers)
+  only where that side got there by climbing (+0.3x since the band opened) AND its KEPT TICKS (the ticks each side's
+  leader kept over the last 3 closed cycles) stand above the other side's.
 - Right: the **INTERPRETATION** feed, one card per cycle, newest first: the state, the move in ticks, the tape
   (each side's aggressive $/s against its normal), the book, a small flow × speed map (its dot's square wears the
   card's state colour), and the I×I strip (interest, impact, wall, kept) with a short "why". A NORMAL card that sat

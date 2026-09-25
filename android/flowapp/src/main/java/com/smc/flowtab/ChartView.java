@@ -518,6 +518,7 @@ public final class ChartView extends View {
             s.liveAnim = lcCur;
         } else s.liveAnim = s.livePx;
         if (tools != null && !Double.isNaN(s.livePx)) tools.onPrice(s.livePx, now);
+        domKeptBuild(s);                              // the bright areas' kept filter, for PRICE and LINES IMPACT alike
         if (paneOn[PANE_PRICE]) drawPrice(c, s, now);
         if (paneOn[PANE_FLOW]) drawFlow(c, s, now);
         if (paneOn[PANE_LIQ]) drawLiq(c, s);
@@ -1631,8 +1632,74 @@ public final class ChartView extends View {
         }
     }
 
-    private static boolean domBright(FlowModel.Lines L, int i) {
-        return L.dgain != null && i < L.dgain.length && L.dgain[i] > -900f && L.dgain[i] >= (float) L.gain;
+    // THE BRIGHT AREA'S KEPT FILTER (user 2026-09-25: "for the purple the kept ticks red line should be above the green
+    // line / for the lime green the kept ticks green line should be above the red line"): an area is BRIGHT only when,
+    // besides its leader's climb, the KEPT TICKS lines agree -- the area's side strictly above the other at the area's
+    // own cycle (the value the Kept pane draws across that candle; the forming cycle's would-close-now value).
+    // Otherwise the area stays, in its ordinary shade. Rolling 3 whatever the Kept pane shows, as the Takeover reads it.
+    private Object[] domKeptKey = null;
+    private byte[] domKept = new byte[0];            // per LINES IMPACT row: +1 buyers' kept above, -1 sellers', 0 a tie
+    private int domKeptForm = 0;                     // the same for the forming cycle's row, every frame
+
+    private void domKeptBuild(Snap s) {
+        FlowModel.Lines L = s.cimp;
+        double[] lx0 = L != null ? L.x0 : null;
+        int ln = lx0 == null ? 0 : Math.min(L.n, lx0.length);
+        Object[] key = {s.cT, s.cDone, s.cC, s.cO, s.cLead, s.n, s.tick, lx0};
+        if (domKeptKey == null || !java.util.Arrays.equals(domKeptKey, key)) {
+            domKeptKey = key;
+            byte[] out = new byte[ln];
+            float[] rb = new float[TKO_KEPT_N], rs = new float[TKO_KEPT_N];
+            int cnt = 0;
+            for (int i = 0; i < s.n && ln > 0; i++) {
+                if (s.cDone == null || i >= s.cDone.length || s.cDone[i] == 0) continue;
+                float[] kv = keptOf(s, i, s.cC[i]);
+                rb[cnt % TKO_KEPT_N] = kv[0]; rs[cnt % TKO_KEPT_N] = kv[1]; cnt++;
+                float sb = 0, ss = 0;
+                for (int q = 0; q < Math.min(cnt, TKO_KEPT_N); q++) { sb += rb[q]; ss += rs[q]; }
+                int j = nearest(lx0, s.cT[i]);
+                if (j < 0 || j >= ln || Math.abs(lx0[j] - s.cT[i]) > 1.0) continue;
+                out[j] = (byte) (sb > ss ? 1 : (ss > sb ? -1 : 0));
+            }
+            domKept = out;
+        }
+        domKeptForm = 0;                              // the forming cycle: its kept if it closed now + the last closed ones
+        int n = s.n, last = n - 1;
+        if (n > 0 && s.cDone != null && last < s.cDone.length && s.cDone[last] == 0 && !Double.isNaN(s.livePx)) {
+            float[] kv = keptOf(s, last, s.livePx);
+            float sb = kv[0], ss = kv[1];
+            int got = 1;
+            for (int i = last - 1; i >= 0 && got < TKO_KEPT_N; i--) {
+                if (s.cDone[i] == 0) continue;
+                float[] q = keptOf(s, i, s.cC[i]); sb += q[0]; ss += q[1]; got++;
+            }
+            domKeptForm = sb > ss ? 1 : (ss > sb ? -1 : 0);
+        }
+        long nowMs = System.currentTimeMillis();         // what the filter keeps, last 6 h (logcat FLOW)
+        if (nowMs - domLogAt > 10000 && L != null && L.dside != null) {
+            domLogAt = nowMs;
+            java.text.SimpleDateFormat hf = new java.text.SimpleDateFormat("HH:mm:ss", Locale.US);
+            hf.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
+            StringBuilder out = new StringBuilder(); int nClimb = 0, nBright = 0;
+            for (int i = 0; i < ln && i < L.dside.length; i++) {
+                if (L.dside[i] == 0 || L.x0[i] < nowMs / 1000.0 - 6 * 3600.0) continue;
+                if (!(L.dgain != null && i < L.dgain.length && L.dgain[i] > -900f && L.dgain[i] >= (float) L.gain)) continue;
+                nClimb++;
+                if (!domBright(L, i)) continue;
+                nBright++;
+                out.append(L.dside[i] > 0 ? " B" : " S").append(hf.format(new java.util.Date((long) (L.x0[i] * 1000))));
+            }
+            android.util.Log.i("FLOW", "DOM: last 6 h, climbed areas " + nClimb + ", bright after the kept filter " + nBright + ":" + out);
+        }
+    }
+    private long domLogAt = 0;
+
+    private boolean domBright(FlowModel.Lines L, int i) {
+        if (!(L.dgain != null && i < L.dgain.length && L.dgain[i] > -900f && L.dgain[i] >= (float) L.gain)) return false;
+        int sd = L.dside != null && i < L.dside.length ? L.dside[i] : 0;
+        boolean form = L.form != null && i < L.form.length && L.form[i] != 0;
+        int kv = form ? domKeptForm : (i < domKept.length ? domKept[i] : 0);
+        return sd != 0 && kv == sd;                   // lime: buyers' kept above; purple: sellers' kept above
     }
 
     /** The area's paint. The BRIGHT band is the user's own pair (#66FF00 / #BE03FD), not teal / red at more alpha:
