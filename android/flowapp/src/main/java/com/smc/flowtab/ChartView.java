@@ -1822,10 +1822,14 @@ public final class ChartView extends View {
         }
         c.restore();
         keptAxis(c, r, top, hgt, ylo, yhi);
-        // the END LABELS: each line's last CLOSED value, at the right axis, nudged apart
-        if (m > 0) {
+        // the END LABELS, at the right axis, nudged apart: each line's CURRENT value -- the end of the forming tail
+        // while a cycle is forming, so they move with it live (user 2026-09-25: "the badges on the y axis of the kept
+        // ticks are not changing with the live/forming lines"), the last close otherwise. The lines themselves still
+        // step only at closes: the forming cycle is in the badges and the tail, never in the stepped totals.
+        if (m > 0 || fm != null) {
             int nl = keptNet ? 3 : 2;
-            double[] val = {vb[m - 1], vs[m - 1], vb[m - 1] - vs[m - 1]};
+            double cb = fm != null ? fm[0] : vb[m - 1], cs = fm != null ? fm[1] : vs[m - 1];
+            double[] val = {cb, cs, cb - cs};
             int[] cols = {KEPT_BUY, KEPT_SELL, KEPT_NET};
             float[] ys = new float[nl]; String[] txt = new String[nl]; int[] cl = new int[nl];
             for (int i = 0; i < nl; i++) {
