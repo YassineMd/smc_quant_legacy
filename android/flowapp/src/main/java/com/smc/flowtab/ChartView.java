@@ -271,8 +271,9 @@ public final class ChartView extends View {
     // up through sellers, bright purple down through buyers -- flow_interp.C_BREAK_*_X, the engine's colour index
     private static final int C_AB_BUY = 0, C_BRK_BUY = 1, C_BRK_SELL = 2, C_AB_SELL = 6, C_BRK_BUY_X = 7, C_BRK_SELL_X = 8;
     // 9 / 10 = a VACUUM candle (user 2026-09-25: "use very low opacity red/green for vaccum"): the breakout green / red,
-    // FAINT -- flow_interp.C_VACUUM_UP / C_VACUUM_DN; the alphas mirror config.VAC_CANDLE_FILL_A / VAC_CANDLE_PEN_A
-    private static final int C_VAC_UP = 9, C_VAC_DN = 10, VAC_FILL_A = 56, VAC_PEN_A = 115;
+    // with the outline and wicks SOLID like a breakout's and the body FAINT -- flow_interp.C_VACUUM_UP / C_VACUUM_DN;
+    // the body's alpha mirrors config.VAC_CANDLE_FILL_A
+    private static final int C_VAC_UP = 9, C_VAC_DN = 10, VAC_FILL_A = 56;
     private static final double LN2 = Math.log(2.0);
 
     public ChartView(Context ctx, FlowModel model) {
@@ -816,10 +817,10 @@ public final class ChartView extends View {
         else if (col == C_BRK_BUY_X || col == C_BRK_SELL_X) {       // the bright pair keeps a darker outline: neon on white washes out
             fill = BAR_COL[col]; pen = Color.rgb(Color.red(fill) * 2 / 3, Color.green(fill) * 2 / 3, Color.blue(fill) * 2 / 3);
         }
-        else if (col == C_VAC_UP || col == C_VAC_DN) {              // a vacuum: the breakout hue, faint body, fainter-than-solid outline
+        else if (col == C_VAC_UP || col == C_VAC_DN) {              // a vacuum: the breakout's green / red, solid outline, faint body
             int h = BAR_COL[col == C_VAC_UP ? C_BRK_BUY : C_BRK_SELL];
             fill = Color.argb(VAC_FILL_A, Color.red(h), Color.green(h), Color.blue(h));
-            pen = Color.argb(VAC_PEN_A, Color.red(h), Color.green(h), Color.blue(h));
+            pen = h;
         }
         else if (bw) { fill = down ? Color.BLACK : Color.WHITE; pen = Color.BLACK; }
         else { fill = down ? RED : TEAL; pen = Color.parseColor("#9aa4ae"); }

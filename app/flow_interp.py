@@ -78,8 +78,8 @@ C_BREAK_BUY_X, C_BREAK_SELL_X = 7, 8
 BREAK_BUY_COLS = (C_BREAK_BUY, C_BREAK_BUY_X)
 BREAK_SELL_COLS = (C_BREAK_SELL, C_BREAK_SELL_X)
 # A VACUUM CANDLE (user 2026-09-25: "use very low opacity red/green for vaccum"): the PRICE pane's candles only -- the
-# cards keep C_VACUUM. Up = the breakout green, down = the breakout red, both drawn FAINT (config.VAC_CANDLE_FILL_A /
-# VAC_CANDLE_PEN_A). APPENDED like the others, so the three tuples below stay parallel.
+# cards keep C_VACUUM. Up = the breakout green, down = the breakout red: outline and wicks solid as a breakout's, the body
+# FAINT (config.VAC_CANDLE_FILL_A). APPENDED like the others, so the three tuples below stay parallel.
 C_VACUUM_UP, C_VACUUM_DN = 9, 10
 VACUUM_PX_COLS = (C_VACUUM_UP, C_VACUUM_DN)
 C_ABSORB = C_ABSORB_BUY                     # kept for anything still importing the old name

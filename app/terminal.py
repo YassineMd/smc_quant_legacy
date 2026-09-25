@@ -19610,11 +19610,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             if e is None:
                 _c = _STATE_BAR_COL[ci]
                 if ci in _VAC_PX_COLS:
-                    # a VACUUM (user 2026-09-25: "very low opacity red/green"): the breakout hue, faint -- the body
-                    # at VAC_CANDLE_FILL_A, the outline and wicks at VAC_CANDLE_PEN_A so its high and low stay legible
+                    # a VACUUM (user 2026-09-25): the breakout candle's own green / red -- outline and wicks SOLID,
+                    # as a breakout's -- with the body at the low VAC_CANDLE_FILL_A
                     _q = QtGui.QColor(_c)
-                    _p = pg.mkPen(QtGui.QColor(_q.red(), _q.green(), _q.blue(), int(config.VAC_CANDLE_PEN_A)),
-                                  width=1.0)
+                    _p = pg.mkPen(_c, width=1.0)
                     _p.setCosmetic(True)
                     e = (pg.mkBrush(_q.red(), _q.green(), _q.blue(), int(config.VAC_CANDLE_FILL_A)), _p)
                     _cache[ci] = e
