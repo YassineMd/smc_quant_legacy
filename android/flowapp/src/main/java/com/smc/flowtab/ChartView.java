@@ -1678,9 +1678,11 @@ public final class ChartView extends View {
     // leader subtracts from that leader. The leader is the engine's ("lead" in the cycle rows: the I x I pane's own
     // rule, the side whose aggressive $/s runs further above its last N); an unrated cycle gives both sides 0.
     // ROLLING = each point the sum over the last N closed cycles; CUMULATIVE = the running total since 00:00 UTC,
-    // back to 0 at every midnight. STEPPED: a value moves only when a cycle CLOSES. The FORMING cycle ("but i still
-    // wanna see the live one forming") is a thin dotted tail to the value it would give if it closed now, at the live
-    // price and its current leader -- never in the totals or the end labels.
+    // back to 0 at every midnight. STEPPED, each CLOSED cycle's value drawn ACROSS ITS OWN CANDLE (user 2026-09-25:
+    // the line under a Takeover badge must be the value the rule read -- "the green line is below the red line but
+    // still the signal fired": the steps used to start at each close, i.e. under the NEXT candle). A cycle draws
+    // nothing until it has closed. The FORMING cycle ("but i still wanna see the live one forming") is a thin dotted
+    // step across the forming candle to the value it would give if it closed now -- never in the totals.
     private static final int KEPT_BUY = Color.parseColor("#1D9E75"), KEPT_SELL = Color.parseColor("#E24B4A"),
             KEPT_NET = Color.parseColor("#8a8a8a");
     private static final int KEPT_N_MAX = 60, KEPT_N_DEFAULT = 3;   // default 3 (user 2026-09-25: "smoothing 3 by default")
@@ -1690,7 +1692,7 @@ public final class ChartView extends View {
     private final RectF kmRoll = new RectF(), kmCum = new RectF(), kmNet = new RectF();
     // the CLOSED series, rebuilt only when the cycles, the mode or N change (not every frame)
     private Object[] keptKey = null;
-    private double[] kTe = new double[0]; private float[] kVb = new float[0], kVs = new float[0];
+    private double[] kTs = new double[0], kTe = new double[0]; private float[] kVb = new float[0], kVs = new float[0];
     private int kM = 0;
 
     private static double keptDay(double t) { return Math.floor(t / 86400.0); }
@@ -1700,7 +1702,7 @@ public final class ChartView extends View {
         if (keptKey != null && java.util.Arrays.equals(keptKey, key)) return;
         keptKey = key;
         int n = s.n;
-        double[] te = new double[n]; float[] kb = new float[n], ks = new float[n];
+        double[] ts = new double[n], te = new double[n]; float[] kb = new float[n], ks = new float[n];
         int m = 0;
         for (int i = 0; i < n; i++) {
             boolean dn = s.cDone != null && i < s.cDone.length && s.cDone[i] != 0;
@@ -1708,7 +1710,7 @@ public final class ChartView extends View {
             int ld = s.cLead != null && i < s.cLead.length ? s.cLead[i] : 0;
             double mv = (s.cC[i] - s.cO[i]) / Math.max(1e-12, s.tick);
             long t = Double.isNaN(mv) ? 0 : Math.round(mv);
-            te[m] = s.cTe[i];
+            ts[m] = s.cT[i]; te[m] = s.cTe[i];
             kb[m] = ld > 0 ? t : 0;
             ks[m] = ld < 0 ? -t : 0;
             m++;
@@ -1729,7 +1731,7 @@ public final class ChartView extends View {
                 vs[j] = (float) (ps[j + 1] - ps[a]);
             }
         }
-        kTe = te; kVb = vb; kVs = vs; kM = m;
+        kTs = ts; kTe = te; kVb = vb; kVs = vs; kM = m;
         // what the forming tail adds to: kept per closed cycle, for the rolling window's last N - 1
         kKb = kb; kKs = ks;
     }
@@ -1759,12 +1761,12 @@ public final class ChartView extends View {
         float top = r.top + TITLE_H, hgt = r.bottom - top;
         keptBuild(s);
         int m = kM;
-        double[] te = kTe; float[] vb = kVb, vs = kVs;
+        double[] ts = kTs, te = kTe; float[] vb = kVb, vs = kVs;
         double[] fm = keptForming(s, now);
-        // the closed cycles on screen, plus one either side so a step enters and leaves the pane
+        // the closed cycles whose candle is on screen, plus one either side so a step enters and leaves the pane
         int j0 = 0; while (j0 < m && te[j0] < vx0) j0++;
         j0 = Math.max(0, j0 - 1);
-        int j1 = m - 1; while (j1 >= 0 && te[j1] > vx1) j1--;
+        int j1 = m - 1; while (j1 >= 0 && ts[j1] > vx1) j1--;
         j1 = Math.min(m - 1, j1 + 1);
         // the fit: what is on screen, the tail, and zero
         double lo = 0, hi = 0;
@@ -1800,35 +1802,29 @@ public final class ChartView extends View {
             float lastX = 0, lastY = 0; boolean any = false;
             for (int j = j0; j <= j1 && j >= 0; j++) {
                 double v = kind == 0 ? vb[j] : (kind == 1 ? vs[j] : vb[j] - vs[j]);
-                float x = xPx(te[j]), y = (float) (top + (yhi - v) / range * hgt);
-                if (!started) { path.moveTo(x, y); started = true; prevY = y; lastX = x; lastY = y; any = true; continue; }
-                if (keptCum && keptDay(te[j]) != keptDay(te[j - 1])) {   // midnight: back to 0
-                    float xm = xPx(keptDay(te[j]) * 86400.0);
-                    path.lineTo(xm, prevY); path.lineTo(xm, yZero); prevY = yZero;
-                }
-                path.lineTo(x, prevY); path.lineTo(x, y);            // STEPPED: held, then the close moves it
-                prevY = y; lastX = x; lastY = y;
+                float x0 = xPx(ts[j]), x1 = xPx(te[j]), y = (float) (top + (yhi - v) / range * hgt);
+                if (!started) { path.moveTo(x0, y); started = true; any = true; }
+                else { path.lineTo(x0, prevY); path.lineTo(x0, y); }   // the step at the candle's START ...
+                path.lineTo(x1, y);                                     // ... held across the candle to its close
+                prevY = y; lastX = x1; lastY = y;
             }
             pl.setColor(col);
             if (kind == 0) { pl.setStrokeWidth(1.8f * d); pl.setPathEffect(null); }
             else if (kind == 1) { pl.setStrokeWidth(1.8f * d); pl.setPathEffect(new DashPathEffect(new float[]{6 * d, 4 * d}, 0)); }
             else { pl.setStrokeWidth(1.4f * d); pl.setPathEffect(new DashPathEffect(new float[]{1.5f * d, 3 * d}, 0)); }
             if (any) c.drawPath(path, pl);
-            // the FORMING tail: thin, dotted, from the last close to what closing now would give
+            // the FORMING candle: a thin dotted step at its start to what closing now would give, held to now
+            // (keptForming already starts a new UTC day at 0 in Cumulative)
             if (fm != null && any && j1 == m - 1) {
                 double fv = kind == 0 ? fm[0] : (kind == 1 ? fm[1] : fm[0] - fm[1]);
-                if (keptCum && m > 0 && keptDay(te[m - 1]) != keptDay(now)) {   // the tail starts a new day at 0
-                    float xm = xPx(keptDay(now) * 86400.0);
-                    pl.setPathEffect(new DashPathEffect(new float[]{1.5f * d, 3 * d}, 0)); pl.setStrokeWidth(1.1f * d);
-                    c.drawLine(lastX, lastY, xm, lastY, pl); c.drawLine(xm, lastY, xm, yZero, pl);
-                    lastX = xm; lastY = yZero;
-                }
-                float fx = xPx(xNow), fy = (float) (top + (yhi - fv) / range * hgt);
+                float xs = xPx(s.cT[s.n - 1]), fx = xPx(xNow), fy = (float) (top + (yhi - fv) / range * hgt);
                 pl.setPathEffect(new DashPathEffect(new float[]{1.5f * d, 3 * d}, 0)); pl.setStrokeWidth(1.1f * d);
-                c.drawLine(lastX, lastY, fx, fy, pl);
+                if (xs > lastX + 0.5f) c.drawLine(lastX, lastY, xs, lastY, pl);   // a gap before the forming candle
+                c.drawLine(xs, lastY, xs, fy, pl);
+                c.drawLine(xs, fy, Math.max(xs, fx), fy, pl);
                 pl.setPathEffect(null);
                 pf.setColor(Color.argb(170, Color.red(col), Color.green(col), Color.blue(col)));
-                c.drawCircle(fx, fy, 2.4f * d, pf);
+                c.drawCircle(Math.max(xs, fx), fy, 2.4f * d, pf);
             }
             pl.setPathEffect(null);
         }
