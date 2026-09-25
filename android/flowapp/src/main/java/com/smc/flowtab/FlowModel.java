@@ -43,6 +43,7 @@ public final class FlowModel {
     public byte[] cSide = new byte[0], cStrong = new byte[0], cDone = new byte[0], cCol = new byte[0], cSt = new byte[0], cPickB = new byte[0];
     public byte[] cLead = new byte[0];      // the I x I leader: +1 buyers, -1 sellers, 0 unrated (KEPT TICKS BY LEADER)
     public byte[] cConf = new byte[0];      // 1 = a CONFLICT bar: both sides' tapes >= config.CONFLICT_TAPE_MIN (red box)
+    public float[] cCfh = new float[0], cCfl = new float[0];   // ... its box's high / low (terminal._conflict_boxes), NaN off one
     public float[] cMove = new float[0], cBuy = new float[0], cSell = new float[0], cO = new float[0], cH = new float[0], cL = new float[0], cC = new float[0], cRate = new float[0];
 
     // ---- live
@@ -163,6 +164,8 @@ public final class FlowModel {
         return out;
     }
 
+    private static float[] nans(int n) { float[] a = new float[n]; java.util.Arrays.fill(a, Float.NaN); return a; }
+
     // ------------------------------------------------------------------ ingest (feed thread)
     public void onHello(JSONObject m) {
         synchronized (lock) {
@@ -218,11 +221,13 @@ public final class FlowModel {
         float[] mv = f32(m.optString("move")), cb = f32(m.optString("cbuy")), cs = f32(m.optString("csell")), o = f32(m.optString("o")), h = f32(m.optString("h")), l = f32(m.optString("l")), c = f32(m.optString("c")), rate = f32(m.optString("rate"));
         byte[] lead = m.has("lead") ? i8(m.optString("lead")) : new byte[t.length];   // an older engine: all unrated
         byte[] conf = m.has("cf") ? i8(m.optString("cf")) : new byte[t.length];       // ... and no conflict bars
+        float[] cfh = m.has("cfh") ? f32(m.optString("cfh")) : nans(t.length), cfl = m.has("cfl") ? f32(m.optString("cfl")) : nans(t.length);
         synchronized (lock) {
             if (i0 == 0 || i0 > nCyc) {                                   // a full table, or a tail we cannot splice onto
                 if (i0 > nCyc) return;
                 cT = t; cTe = te; cSide = side; cStrong = strong; cDone = done; cCol = col; cSt = st; cPickB = pickb;
                 cMove = mv; cBuy = cb; cSell = cs; cO = o; cH = h; cL = l; cC = c; cRate = rate; cLead = lead; cConf = conf;
+                cCfh = cfh; cCfl = cfl;
             } else {
                 cT = replace(cT, i0, t, total); cTe = replace(cTe, i0, te, total);
                 cSide = replace(cSide, i0, side, total); cStrong = replace(cStrong, i0, strong, total); cDone = replace(cDone, i0, done, total);
@@ -232,6 +237,7 @@ public final class FlowModel {
                 cRate = replace(cRate, i0, rate, total);
                 cLead = replace(cLead, i0, lead, total);
                 cConf = replace(cConf, i0, conf, total);
+                cCfh = replace(cCfh, i0, cfh, total); cCfl = replace(cCfl, i0, cfl, total);
             }
             nCyc = total; version++;
         }

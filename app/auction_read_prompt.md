@@ -42,9 +42,12 @@ Left, top to bottom (panes can be hidden, so check which ones are there):
   - **HLH lines**: each bloc's VAH / VAL, with dashes for its POC;
   - **$ bubbles**: Big Player prints of $500K+, and diamonds for sweeps and bursts;
   - **▲ / ▼ Takeover marks**: one side took over the cycle;
-  - **a red box from a candle's high to its low**: a CONFLICT bar, where both sides' tapes are at least 3x
-    (`tape_buyers_x` and `tape_sellers_x` both 3 or more): both sides aggressed hard in the same cycle.
-    Consecutive conflict bars share ONE box, from the run's highest high to its lowest low;
+  - **a red box**: a CONFLICT bar, where both sides' tapes are at least 3x (`tape_buyers_x` and `tape_sellers_x`
+    both 3 or more): both sides aggressed hard in the same cycle. Consecutive conflict bars share ONE box. Its LOW
+    is the low of the closest previous lime LINES IMPACT area whose low is below the bar's low, its HIGH the high of
+    the closest previous purple area whose high is above the bar's high, looking back 24 h at most; when only one is
+    found, the other side takes the same distance from the bar; when neither, the bar's own high / low. The box's
+    levels are not in the data;
   - the price badge at the right edge: the live price and the forming cycle's age.
 - **BUY / SELL FLOW**: taker $ per 60 s, buyers teal and sellers red. Where the lines cross is where cycles start.
 - **LIMIT ORDERS**: the resting bid $ and ask $ within ±N ticks of the mid, over time.

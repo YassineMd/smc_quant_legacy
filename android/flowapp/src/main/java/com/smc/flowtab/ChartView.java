@@ -492,6 +492,7 @@ public final class ChartView extends View {
             s.binBase = M.binBase; s.buy = M.buy; s.sell = M.sell;
             s.n = M.nCyc; s.cT = M.cT; s.cTe = M.cTe; s.cSide = M.cSide; s.cStrong = M.cStrong; s.cDone = M.cDone; s.cCol = M.cCol; s.cSt = M.cSt;
             s.cMove = M.cMove; s.cO = M.cO; s.cH = M.cH; s.cL = M.cL; s.cC = M.cC; s.cLead = M.cLead; s.cConf = M.cConf;
+            s.cCfh = M.cCfh; s.cCfl = M.cCfl;
             s.livePx = M.livePx; s.formCol = M.formCol; s.win = M.win; s.dec = M.dec; s.tick = M.tick;
             s.lqX = M.lqX; s.lqB = M.lqB; s.lqA = M.lqA;
             s.mode = M.iimpMode; s.iN = M.iN; s.iX0 = M.iX0; s.iX1 = M.iX1; s.iV = M.iV; s.iMult = M.iMult; s.iScore = M.iScore; s.iWall = M.iWall; s.iKept = M.iKept;
@@ -540,7 +541,7 @@ public final class ChartView extends View {
 
     private static final class Snap {
         long binBase; float[] buy, sell; float[][] series;
-        int n; double[] cT, cTe; byte[] cSide, cStrong, cDone, cCol, cSt, cLead, cConf; float[] cMove, cO, cH, cL, cC;
+        int n; double[] cT, cTe; byte[] cSide, cStrong, cDone, cCol, cSt, cLead, cConf; float[] cMove, cO, cH, cL, cC, cCfh, cCfl;
         double livePx, win, tick; int formCol, dec;
         double[] lqX; float[] lqB, lqA;
         String mode; int iN, iSmn; double[] iX0, iX1; float[] iV, iMult, iScore, iWall, iKept, iSbuy, iSsell, iLiib, iLiis, iLyb, iLys, iPback, iReach, iMv; byte[] iUp, iContra, iGood, iForm;
@@ -664,6 +665,13 @@ public final class ChartView extends View {
                     xl = Math.min(xl, xm - hw); xr = Math.max(xr, xm + hw);
                     rHi = Math.max(rHi, hh); rLo = Math.min(rLo, ll);
                 }
+                // THE BOX'S REACH (user 2026-09-25): no longer the run's own high / low -- the engine's cfh / cfl, down to the
+                // closest previous LIME area's low below it and up to the closest previous PURPLE area's high above it
+                // (24 h at most; one found -> the other side mirrors its distance; none -> the run's own). Held to at
+                // least the candles, so a live wick the engine has not seen yet never pokes out of its box.
+                float eh = (s.cCfh != null && i < s.cCfh.length) ? s.cCfh[i] : Float.NaN;
+                float el = (s.cCfl != null && i < s.cCfl.length) ? s.cCfl[i] : Float.NaN;
+                if (!Float.isNaN(eh) && !Float.isNaN(el)) { rHi = Math.max(rHi, eh); rLo = Math.min(rLo, el); }
                 if (xr >= xl) {
                     float yhi = (float) (top + (yh - rHi) / (yh - yl) * hgt), ylo = (float) (top + (yh - rLo) / (yh - yl) * hgt);
                     c.drawRect(xl - CONF_PAD * d, yhi, xr + CONF_PAD * d, ylo, pl);

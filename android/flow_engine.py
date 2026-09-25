@@ -19,7 +19,8 @@ WIRE (newline-delimited JSON; arrays are base64 of little-endian float32 unless 
   -> bins    {base, n, full, buy, sell, px, pxh, pxl}                       the store's 1 s bins; base = bin index of
              the first sent (second = base * 1); full = replace the whole store, else replace [base, base+n)
   -> cyc     {i0, total, ts, te (f64), side, strong, done (u8), move, cbuy, csell, o, h, l, c, col, st, pickb (i8),
-             rate, lead (i8: +1 buyers / -1 sellers / 0 unrated), cf (u8: 1 = a CONFLICT bar)}
+             rate, lead (i8: +1 buyers / -1 sellers / 0 unrated), cf (u8: 1 = a CONFLICT bar),
+             cfh, cfl (the conflict box's high / low, NaN off a conflict bar)}
                                                                             rows i0.. replace the tail from i0
   -> live    {now, px, fcol}                                                every tick
   -> iimp    {mode, n, x0, x1 (f64), v, mult, ..., liib, liis, pliib, pliis, vac, quiet, up, contra, good, form}
@@ -402,6 +403,8 @@ class State:
     iimp_id = None; interp_id = None; liq_sig = None
     cyc_lead_sent = None      # the leaders the tablet last got (a lookback change re-rates every cycle)
     cyc_conf_sent = None      # ... and the conflict flags (both tapes >= CONFLICT_TAPE_MIN)
+    cyc_cfh_sent = None; cyc_cfl_sent = None   # ... and the conflict boxes' reach (NaN off a conflict bar)
+    dom_areas = None          # LINES IMPACT's bright areas over the whole read: (side, t0, t1, low, high)
     lines_sig = {"cint": None, "cimp": None}   # the two split panes, each keyed on what it last sent
     hlh_out = None; hlh_t = 0.0; hlh_xm = None; hlh_pics = {}
     hvp_sent = None           # the last "hvp" payload (resent only when it changes)
@@ -487,6 +490,20 @@ def tick_bins(force=False):
                 prev[k][lo:hi] = cur[k][lo:hi]
 
 
+def bright_areas(t, te_c, done, cbuy, csell, px0, px1, pxh, pxl, lead):
+    """LINES IMPACT's BRIGHT areas (lime / purple, after the kept filter) over the WHOLE read, as the tablet boxes them
+    on its PRICE pane -- the pane's own arithmetic (_iimp_rate -> _lines_values -> _lines_dom_bands), the Kept Ticks
+    sides from the same leaders the tablet gets (`lead`). For the conflict boxes' reach."""
+    n_lb = int(w._lb_n()); n_mn = int(w._lb_min_n())
+    R = w._iimp_rate(t, te_c, done, cbuy, csell, px0, px1, pxh, pxl, n_lb, n_mn)
+    dn = np.asarray(done, dtype=bool)
+    sm_b, sm_s, rated = w._lines_values("cimp", dn, ~dn, R["ar_b"], R["ar_s"], R["score"], R["score_pb"], R["short"])
+    keep = rated & np.isfinite(sm_b) & np.isfinite(sm_s)
+    dside, _gap, dgain = w._lines_dom_bands(sm_b, sm_s, keep)
+    ksd = w._kept_sides(dn, lead, px0, px1, float(config.TICK_SIZE))
+    return w._bright_areas(t, te_c, pxh, pxl, np.flatnonzero(keep), dside, dgain, ksd, float(config.LIMP_DOM_GAIN))
+
+
 def tick_cycles(now, force=False):
     st = w._flow
     sp_ = st.span()
@@ -518,8 +535,10 @@ def tick_cycles(now, force=False):
             S.cols_ms = 1000.0 * (time.perf_counter() - _tc)
             S.cols0 = cols0; S.cols_key = _ck; S.cols_t = now
             S.cols_n = getattr(S, "cols_n", 0) + 1
+            _recolour = True
         else:
             cols0 = S.cols0
+            _recolour = False
         if now - getattr(S, "cols_log_t", 0.0) > 60.0:     # the breakout gate rates every cycle of the read: watch it
             S.cols_log_t = now
             log("candle colours: %d cycles in %.0f ms, rated %d times in the last minute (breakouts %d, absorbed %d, vacuum %d)" % (
@@ -544,11 +563,34 @@ def tick_cycles(now, force=False):
         # at or above CONFLICT_TAPE_MIN -- the tablet boxes that candle in red
         _cm = float(config.CONFLICT_TAPE_MIN)
         conf = (ok & (ar_b >= _cm) & (ar_s >= _cm)).astype(np.uint8)
+        # ... and its REACH (user 2026-09-25): the box runs from the closest previous LIME area's low to the closest
+        # previous PURPLE area's high (terminal._conflict_boxes). Those areas are LINES IMPACT's, over the WHOLE read so
+        # the 24 h look-back is there whatever the tablet's view -- rebuilt with the candle colours (the I x I rating is
+        # the costly part), while the boxes follow every tick (the forming bar's own high / low move them).
+        if _recolour or getattr(S, "dom_areas", None) is None:
+            _ta = time.perf_counter()
+            try:
+                S.dom_areas = bright_areas(t, te_c, done, cbuy, csell, px0, px1, pxh, pxl, lead)
+            except Exception as _e:
+                log("conflict areas: %s" % _e)
+                S.dom_areas = []
+            S.dom_ms = 1000.0 * (time.perf_counter() - _ta)
+        _why = []
+        cfh, cfl = w._conflict_boxes(t, pxh, pxl, conf, S.dom_areas, float(config.CONFLICT_LOOKBACK_SECS), _why)
+        if now - getattr(S, "cf_log_t", 0.0) > 60.0:          # what the boxes reach to, last 6 h (the engine's log)
+            S.cf_log_t = now
+            _hm = lambda x: time.strftime("%d %H:%M:%S", time.gmtime(float(x)))
+            _ar = lambda a, j: ("%s-%s %.2f" % (_hm(a[1]), _hm(a[2])[3:], a[j])) if a is not None else "none"
+            _k0 = {round(float(t[k]), 2): int(k) for k in np.flatnonzero(conf)}
+            log("conflict boxes: %d areas (%.0f ms);%s" % (len(S.dom_areas), getattr(S, "dom_ms", 0.0), "".join(
+                " | %s %.2f-%.2f lime[%s] purple[%s]" % (_hm(t0_)[3:], float(cfl[_k0[round(t0_, 2)]]), float(cfh[_k0[round(t0_, 2)]]),
+                                                        _ar(al_, 3), _ar(ap_, 4))
+                for (t0_, al_, ap_) in _why if t0_ >= now - 6 * 3600.0 and round(t0_, 2) in _k0)))
         S.cyc_base = (t, is_buy, strong, move, cbuy, csell, t_end, done, px0, px1, pxh, pxl, cols0, pick_b, rate, state,
-                      lead, conf)
+                      lead, conf, cfh, cfl)
         S.cyc_key = key
     (t, is_buy, strong, move, cbuy, csell, t_end, done, px0, px1, pxh, pxl, cols0, pick_b, rate, state, lead,
-     conf) = S.cyc_base
+     conf, cfh, cfl) = S.cyc_base
     # THE BRIGHT PAIR (7 / 8) needs its I x I bar ORANGE AND FILLED (user 2026-09-23), and that pane re-rates on its
     # own clock -- so the join is re-checked every tick, and any candle whose colour moved is re-sent, not just the
     # last few (a bar can fill well after its cycle closed, once the wall columns land)
@@ -564,23 +606,28 @@ def tick_cycles(now, force=False):
         _d = np.flatnonzero(prev[:_n] != cols[:_n])
         if _d.size:
             i0 = min(i0, int(_d[0]))
-    for pl_, cur_ in ((S.cyc_lead_sent, lead), (S.cyc_conf_sent, conf)):   # a leader or a conflict flag that moved
+    for pl_, cur_ in ((S.cyc_lead_sent, lead), (S.cyc_conf_sent, conf),       # a leader, a conflict flag or a box
+                      (S.cyc_cfh_sent, cfh), (S.cyc_cfl_sent, cfl)):           # reach that moved
         if not full and pl_ is not None and pl_.size:
             _n = min(int(pl_.size), int(cur_.size))
-            _d = np.flatnonzero(pl_[:_n] != cur_[:_n])
+            _a, _b = pl_[:_n], cur_[:_n]
+            _neq = (~((_a == _b) | (np.isnan(_a) & np.isnan(_b)))) if _a.dtype.kind == "f" else (_a != _b)
+            _d = np.flatnonzero(_neq)
             if _d.size:
                 i0 = min(i0, int(_d[0]))
     S.cyc_full_needed = False; S.cyc_last_total = total
     S.cyc_cols_sent = np.array(cols, copy=True)
     S.cyc_lead_sent = np.array(lead, copy=True)
     S.cyc_conf_sent = np.array(conf, copy=True)
+    S.cyc_cfh_sent = np.array(cfh, dtype=np.float64, copy=True); S.cyc_cfl_sent = np.array(cfl, dtype=np.float64, copy=True)
     sl = slice(i0, total)
     send({"t": "cyc", "i0": i0, "total": total, "ts": b64(t[sl], "<f8"), "te": b64(t_end[sl], "<f8"),
           "side": b64(is_buy[sl], "u1"), "strong": b64(strong[sl], "u1"), "done": b64(done[sl], "u1"),
           "move": b64(np.nan_to_num(move[sl], nan=0.0)), "cbuy": b64(cbuy[sl]), "csell": b64(csell[sl]),
           "o": b64(px0[sl]), "h": b64(pxh[sl]), "l": b64(pxl[sl]), "c": b64(px1[sl]),
           "col": b64(cols[sl], "i1"), "st": b64(state[sl], "i1"), "pickb": b64(pick_b[sl], "u1"),
-          "rate": b64(np.nan_to_num(rate[sl], nan=0.0)), "lead": b64(lead[sl], "i1"), "cf": b64(conf[sl], "u1")})
+          "rate": b64(np.nan_to_num(rate[sl], nan=0.0)), "lead": b64(lead[sl], "i1"), "cf": b64(conf[sl], "u1"),
+          "cfh": b64(cfh[sl]), "cfl": b64(cfl[sl])})
 
 
 def tick_iimp():
@@ -855,7 +902,7 @@ def on_cmd(c):
         if cl is not None:
             cl.ready = True
         S.bins_sent = None; S.cyc_full_needed = True; S.iimp_id = None; S.interp_id = None; S.liq_sig = None
-        S.cyc_lead_sent = None; S.cyc_conf_sent = None
+        S.cyc_lead_sent = None; S.cyc_conf_sent = None; S.cyc_cfh_sent = None; S.cyc_cfl_sent = None
         S.lines_sig = {"cint": None, "cimp": None}
         S.hlh_out = None; S.hlh_pics = {}; S.bp_sig = None; S.hvp_sent = None
         hello()

@@ -22323,6 +22323,106 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         dn = joined & (step <= -_t)
         return a[up], b[up], a[dn], b[dn]
 
+    @staticmethod
+    def _kept_sides(done, lead, px0, px1, tick, n_roll=3):
+        """+1 / -1 / 0 per cycle: which side's ROLLING kept ticks stand strictly above the other's -- the tablet's KEPT
+        TICKS pane read at each cycle (ChartView.domKeptBuild): each CLOSED cycle's move in ticks credited to its leader
+        (the engine's rule: each side's $/s against its own last N), summed over the last n_roll closed cycles, its own
+        included; the forming cycle adds its would-close-now value to the last n_roll - 1 closed ones."""
+        n = int(np.size(done))
+        out = np.zeros(n, dtype=np.int8)
+        if n == 0:
+            return out
+        with np.errstate(invalid="ignore"):
+            mvt = np.nan_to_num(np.rint((np.asarray(px1, dtype=np.float64) - np.asarray(px0, dtype=np.float64))
+                                        / float(tick)), nan=0.0)
+        ld = np.asarray(lead)
+        kb = np.where(ld > 0, mvt, 0.0); ks = np.where(ld < 0, -mvt, 0.0)
+        dn = np.asarray(done, dtype=bool)
+        buf = []
+        for k in range(n):
+            if dn[k]:
+                buf.append((kb[k], ks[k])); buf = buf[-n_roll:]
+                sb = sum(v[0] for v in buf); ss = sum(v[1] for v in buf)
+            else:
+                prev = buf[-(n_roll - 1):] if n_roll > 1 else []
+                sb = kb[k] + sum(v[0] for v in prev); ss = ks[k] + sum(v[1] for v in prev)
+            out[k] = 1 if sb > ss else (-1 if ss > sb else 0)
+        return out
+
+    @staticmethod
+    def _bright_areas(t, t_end, pxh, pxl, rows, dside, dgain, ksd, gain_min):
+        """The LINES IMPACT BRIGHT areas -- lime (+1, buyers) / purple (-1, sellers), after the kept filter -- as the
+        PRICE pane boxes them (ChartView.drawDomBoxes): runs of consecutive band rows with the same side AND brightness
+        and no gap in time, each (side, t0, t1, low, high) over its cycles' candles. `rows` = each band row's cycle
+        index; dside / dgain are per row (_lines_dom_bands), ksd per cycle (_kept_sides)."""
+        out = []
+        m = int(np.size(rows))
+
+        def bright(r):
+            sd = int(dside[r]); g = float(dgain[r])
+            return sd != 0 and math.isfinite(g) and g >= float(gain_min) and int(ksd[int(rows[r])]) == sd
+        i = 0
+        while i < m:
+            sd = int(dside[i])
+            if sd == 0:
+                i += 1
+                continue
+            b = bright(i); j = i
+            while (j + 1 < m and int(dside[j + 1]) == sd and bright(j + 1) == b
+                   and float(t[int(rows[j + 1])]) - float(t_end[int(rows[j])]) <= 1.0):
+                j += 1
+            if b:
+                ks = np.asarray(rows[i:j + 1], dtype=np.int64)
+                lo_ = np.asarray(pxl, dtype=np.float64)[ks]; hi_ = np.asarray(pxh, dtype=np.float64)[ks]
+                lo_ = lo_[np.isfinite(lo_)]; hi_ = hi_[np.isfinite(hi_)]
+                if lo_.size and hi_.size:
+                    out.append((sd, float(t[ks[0]]), float(t_end[ks[-1]]), float(lo_.min()), float(hi_.max())))
+            i = j + 1
+        return out
+
+    @staticmethod
+    def _conflict_boxes(t, pxh, pxl, conf, areas, lookback, explain=None):
+        """(high, low) per cycle of every CONFLICT run -- consecutive conflict bars share ONE box -- NaN elsewhere
+        (user 2026-09-25). LOW: the low of the closest PREVIOUS lime area (ended by the run's start, within `lookback`)
+        whose low is below the run's low. HIGH: the high of the closest previous purple area whose high is above the
+        run's high. One found and not the other: the other side takes the SAME distance from the run ("conflict candle
+        high 100, low 99; lime low 98.5; no purple -> 100.5 / 98.5"). Neither: the run's own high / low. `explain`, a
+        list, gets (run start, the lime area used or None, the purple area used or None) per run."""
+        n = int(np.size(t))
+        hi = np.full(n, np.nan); lo = np.full(n, np.nan)
+        lime = sorted((a for a in areas if a[0] > 0), key=lambda a: -a[2])      # most recent END first
+        purple = sorted((a for a in areas if a[0] < 0), key=lambda a: -a[2])
+        cf = np.asarray(conf).astype(bool)
+        pxh = np.asarray(pxh, dtype=np.float64); pxl = np.asarray(pxl, dtype=np.float64)
+        i = 0
+        while i < n:
+            if not cf[i]:
+                i += 1
+                continue
+            j = i
+            while j + 1 < n and cf[j + 1]:
+                j += 1
+            h_ = pxh[i:j + 1]; l_ = pxl[i:j + 1]
+            h_ = h_[np.isfinite(h_)]; l_ = l_[np.isfinite(l_)]
+            if h_.size and l_.size:
+                rh = float(h_.max()); rl = float(l_.min()); t0 = float(t[i])
+                al = next((a for a in lime if t0 - lookback <= a[2] <= t0 + 1.0 and a[3] < rl), None)
+                ap = next((a for a in purple if t0 - lookback <= a[2] <= t0 + 1.0 and a[4] > rh), None)
+                if explain is not None:
+                    explain.append((t0, al, ap))
+                blo = al[3] if al is not None else None
+                bhi = ap[4] if ap is not None else None
+                if blo is not None and bhi is None:
+                    bhi = rh + (rl - blo)
+                elif bhi is not None and blo is None:
+                    blo = rl - (bhi - rh)
+                elif blo is None:
+                    blo, bhi = rl, rh
+                hi[i:j + 1] = bhi; lo[i:j + 1] = blo
+            i = j + 1
+        return hi, lo
+
     def _lines_dom_bands(self, sm_b, sm_s, keep):
         """Per drawn cycle: (side, gap, gain) -- which side owns the band, how wide it is, how far the leader
         has climbed INSIDE it.
@@ -23329,18 +23429,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 with np.errstate(invalid="ignore"):
                     _okl = np.isfinite(_ab) & np.isfinite(_as) & (_ab > 0) & (_as > 0)
                     _ld = np.where(_okl, np.where(_ab >= _as, 1, -1), 0)
-                    _mvt = np.nan_to_num(np.rint((np.asarray(px1, dtype=np.float64) - np.asarray(px0, dtype=np.float64))
-                                                 / float(config.TICK_SIZE)), nan=0.0)
-                _kb = np.where(_ld > 0, _mvt, 0.0); _ks = np.where(_ld < 0, -_mvt, 0.0)
-                _dn = np.asarray(done, dtype=bool)
-                ksd = np.zeros(n, dtype=np.int8); _buf = []
-                for _k in range(n):
-                    if _dn[_k]:
-                        _buf.append((_kb[_k], _ks[_k])); _buf = _buf[-3:]
-                        _sb = sum(v[0] for v in _buf); _ss = sum(v[1] for v in _buf)
-                    else:
-                        _sb = _kb[_k] + sum(v[0] for v in _buf[-2:]); _ss = _ks[_k] + sum(v[1] for v in _buf[-2:])
-                    ksd[_k] = 1 if _sb > _ss else (-1 if _ss > _sb else 0)
+                ksd = self._kept_sides(done, _ld, px0, px1, float(config.TICK_SIZE))
         except Exception as _e:
             print("AUCTION KEPT: %s" % _e)
             ksd = None
