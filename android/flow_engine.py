@@ -37,6 +37,7 @@ WIRE (newline-delimited JSON; arrays are base64 of little-endian float32 unless 
   <- view    {x0, x1, follow}                                               the tablet's x range (epoch seconds)
   <- mode    {v}                                                            the I x I dropdown
   <- tog     {k, v}                                                         k: lines | hlh | bigplayer | takeover
+  <- bpmin   {usd}                                                          the Big Player MIN PRINT slider
   <- explain {k}                                                            k = the cycle's start (x0)
   <- mark    {t0 | null}                                                    the marked card / candle changed: kept in the
              snapshot FILE the Claude connector reads (android/auction_mcp.py)
@@ -946,6 +947,11 @@ def on_cmd(c):
             else:
                 w._lp_(key)["smn"] = n; w._lp_(key)["sig"] = None
             S.lines_sig[key] = None
+    elif k == "bpmin":                                    # the tablet's Big Player MIN PRINT slider (user 2026-09-25)
+        try:
+            w.menu.set_big_player_min_usd(float(c.get("usd")))  # tick_bp's signature carries the threshold: marks follow
+        except Exception as ex:
+            log("bpmin: %s" % ex)
     elif k == "tog":
         key = str(c.get("k", "")); v = bool(c.get("v", True))
         if key == "lines":

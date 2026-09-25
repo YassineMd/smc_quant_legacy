@@ -72,6 +72,7 @@ public final class MainActivity extends Activity implements EngineClient.Listene
         chart.showTakeover = prefs.getBoolean("takeover", true);
         chart.showHlh = prefs.getBoolean("hlh", false);
         chart.showBp = prefs.getBoolean("bigplayer", false);
+        bpMin = prefs.getFloat("bp_min", (float) BP_DEFAULT);
         chart.initTools(prefs, new PriceTools.Events() {
             @Override public void toast(String msg) { Toast.makeText(MainActivity.this, msg, Toast.LENGTH_SHORT).show(); }
             @Override public void changed() { chart.dataChanged(); }
@@ -140,6 +141,7 @@ public final class MainActivity extends Activity implements EngineClient.Listene
         feed.sendToggle("takeover", chart.showTakeover);
         feed.sendToggle("hlh", chart.showHlh);
         feed.sendToggle("bigplayer", chart.showBp);
+        feed.sendBpMin(bpMin);
         feed.sendToggle("bw", bw);
         markKnown = false;                          // the engine may have restarted: tell it the mark again
         if (interp != null) markChanged();
@@ -298,6 +300,7 @@ public final class MainActivity extends Activity implements EngineClient.Listene
         toggle(col, "Drawing toolbar", "drawbar", chart.tools.showBar, v -> { chart.tools.showBar = v; if (!v) chart.tools.tool = null; });
         section(col, "Indicator");
         toggle(col, "Big Player", "bigplayer", chart.showBp, v -> { chart.showBp = v; feed.sendToggle("bigplayer", v); });
+        bpSlider(col);
         toggle(col, "HLH Volume Profile", "hlh", chart.showHlh, v -> { chart.showHlh = v; feed.sendToggle("hlh", v); });
         toggle(col, "Lines Impact areas on Price", "domprice", chart.showDomPrice, v -> chart.showDomPrice = v);
         section(col, "Indicator  ›  Cycle Chart");
@@ -312,6 +315,65 @@ public final class MainActivity extends Activity implements EngineClient.Listene
     }
 
     private interface OnTog { void set(boolean v); }
+
+    // THE BIG PLAYER MIN PRINT slider (user 2026-09-25: "add a slider for the big player under its toggle"): the terminal's
+    // own (hamburger.bp_slider) -- log $50K .. $10M over 1000 steps, default the user's $500K -- so a value round-trips
+    // exactly. It sets the ENGINE's threshold (its offscreen terminal draws the marks), which the Claude connector's
+    // big_player_min_usd also reads. Saved in prefs ("bp_min") and re-sent on every (re)connect.
+    private static final double BP_LO = 50_000.0, BP_HI = 10_000_000.0, BP_DEFAULT = 500_000.0;
+    private double bpMin = BP_DEFAULT;
+
+    private static int bpStep(double usd) {
+        double c = Math.max(BP_LO, Math.min(BP_HI, usd));
+        return (int) Math.round(1000.0 * (Math.log10(c) - Math.log10(BP_LO)) / (Math.log10(BP_HI) - Math.log10(BP_LO)));
+    }
+
+    private static double bpUsd(int step) {
+        return Math.pow(10.0, Math.log10(BP_LO) + (step / 1000.0) * (Math.log10(BP_HI) - Math.log10(BP_LO)));
+    }
+
+    private static String bpFmt(double a) {                  // hamburger._bub_fmt_usd
+        return a >= 1e6 ? String.format(java.util.Locale.US, "$%.2fM", a / 1e6) : String.format(java.util.Locale.US, "$%.0fK", a / 1e3);
+    }
+
+    private void bpSlider(LinearLayout col) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding((int) Ui.dp(this, 34), 0, 0, (int) Ui.dp(this, 4));
+        TextView cap = new TextView(this);
+        cap.setText("MIN PRINT");
+        cap.setTextColor(Color.parseColor("#7a8496"));
+        cap.setTextSize(11);
+        cap.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
+        TextView val = new TextView(this);
+        val.setText("≥ " + bpFmt(bpUsd(bpStep(bpMin))));
+        val.setTextColor(Color.parseColor("#f0b90b"));
+        val.setTextSize(13);
+        val.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
+        val.setMinWidth((int) Ui.dp(this, 84));
+        android.widget.SeekBar sb = new android.widget.SeekBar(this);
+        sb.setMax(1000);
+        sb.setProgress(bpStep(bpMin));
+        android.content.res.ColorStateList gold = android.content.res.ColorStateList.valueOf(Color.parseColor("#f0b90b"));
+        sb.setProgressTintList(gold); sb.setThumbTintList(gold);
+        sb.setOnSeekBarChangeListener(new android.widget.SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(android.widget.SeekBar s, int p, boolean fromUser) {
+                if (!fromUser) return;
+                bpMin = bpUsd(p);
+                val.setText("≥ " + bpFmt(bpMin));
+            }
+            @Override public void onStartTrackingTouch(android.widget.SeekBar s) { }
+            @Override public void onStopTrackingTouch(android.widget.SeekBar s) {   // one rebuild per drag, not one per step
+                prefs.edit().putFloat("bp_min", (float) bpMin).apply();
+                feed.sendBpMin(bpMin);
+            }
+        });
+        row.addView(cap);
+        row.addView(sb, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        row.addView(val);
+        col.addView(row);
+    }
 
     private void section(LinearLayout col, String name) {
         TextView tv = new TextView(this);

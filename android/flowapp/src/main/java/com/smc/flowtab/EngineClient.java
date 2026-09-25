@@ -63,6 +63,13 @@ public final class EngineClient extends Thread {
         } catch (Exception ignored) { }
     }
 
+    /** The Big Player MIN PRINT slider moved (user 2026-09-25): the smallest print / player, in USD, the marks show. */
+    public void sendBpMin(double usd) {
+        try {
+            send(new JSONObject().put("t", "bpmin").put("usd", usd));
+        } catch (Exception ignored) { }
+    }
+
     /** A smoothing slider moved: "iimp" (Lines Buyer/Seller), "cint" or "cimp". */
     public void sendSmooth(String kind, int n) {
         try {
