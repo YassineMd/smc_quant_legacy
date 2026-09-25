@@ -28,6 +28,7 @@ public final class InterpView extends View {
     private final FlowModel model;
     private List<FlowModel.Row> rows = new ArrayList<>();
     private float[] ys = new float[0];                // each card's top, from the first card's top
+    private float[] hs = new float[0];                // each card's height: CARD_H + its why-not lines (2026-09-25)
     private float total = 0f;
     private float scroll = 0f;
     private double topT0 = Double.NaN;                // the newest cycle, to keep a reader's place as cards arrive
@@ -38,7 +39,7 @@ public final class InterpView extends View {
     private final Paint pText = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path card = new Path();
     private final RectF rf = new RectF();
-    private final float d, PAD, TOPY, CARD_H, CARD_GAP, SEP_H;
+    private final float d, PAD, TOPY, CARD_H, CARD_GAP, SEP_H, WHY_NOT_LH;
     private final DashPathEffect dashed;
     private final Typeface sans = Typeface.DEFAULT, bold = Typeface.DEFAULT_BOLD, mono = Typeface.MONOSPACE;
     // 7 / 8 = a breakout against its leader (the I x I orange bar): bright green up, bright purple down (flow_interp)
@@ -71,6 +72,7 @@ public final class InterpView extends View {
         d = getResources().getDisplayMetrics().density;
         PAD = 10 * d; TOPY = PAD + 40 * d;             // the first card clears the hamburger button (46 dp)
         CARD_H = 192 * d; CARD_GAP = 7 * d; SEP_H = 24 * d;       // 114 + the I x I strip (2026-09-24)
+        WHY_NOT_LH = 14.5f * d;                        // a card with a why-not line grows by this per line, two at most
         dashed = new DashPathEffect(new float[]{4 * d, 3 * d}, 0);
         setBackgroundColor(Color.parseColor("#141414"));
         fling = new OverScroller(ctx);
@@ -101,12 +103,30 @@ public final class InterpView extends View {
     private static String hour(FlowModel.Row r) { return r.head != null && r.head.length() >= 2 ? r.head.substring(0, 2) : ""; }
 
     private void layout(List<FlowModel.Row> rs) {
-        float[] out = new float[rs.size()]; float y = 0f;
+        float[] out = new float[rs.size()], hh = new float[rs.size()]; float y = 0f;
+        float tw = getWidth() > 0 ? getWidth() - 2 * PAD - 32 * d : 0f;
         for (int i = 0; i < rs.size(); i++) {
             if (i > 0 && !hour(rs.get(i)).equals(hour(rs.get(i - 1)))) y += SEP_H;
-            out[i] = y; y += CARD_H + CARD_GAP;
+            out[i] = y;
+            hh[i] = CARD_H + WHY_NOT_LH * whyNotLines(rs.get(i), tw).size();
+            y += hh[i] + CARD_GAP;
         }
-        ys = out; total = y;
+        ys = out; hs = hh; total = y;
+    }
+
+    /** The why-not line of a card wrapped to its text width, two lines at most -- ONE wrap for the layout and the
+     * painter, so a card is exactly as tall as what it draws. Before the view has a width it counts one line. */
+    private List<String> whyNotLines(FlowModel.Row r, float tw) {
+        List<String> out = new ArrayList<>();
+        if (r.whyNot == null || r.whyNot.isEmpty()) return out;
+        if (tw <= 0) { out.add(r.whyNot); return out; }
+        return wrap(r.whyNot, bold, 10.5f, tw, 2);
+    }
+
+    @Override protected void onSizeChanged(int w, int h, int ow, int oh) {
+        super.onSizeChanged(w, h, ow, oh);
+        layout(rows);                                  // the why-not lines wrap to the width
+        scroll = clampScroll(scroll);
     }
 
     private float maxScroll() { return Math.max(0f, TOPY + total + PAD - getHeight()); }
@@ -117,7 +137,7 @@ public final class InterpView extends View {
         int lo = 0, hi = ys.length;                   // the last card whose top is at or above yy
         while (lo < hi) { int m = (lo + hi) >>> 1; if (ys[m] <= yy) lo = m + 1; else hi = m; }
         int i = lo - 1;
-        return (i >= 0 && i < rows.size() && yy < ys[i] + CARD_H) ? i : -1;
+        return (i >= 0 && i < rows.size() && i < hs.length && yy < ys[i] + hs[i]) ? i : -1;
     }
 
     /** Bring the card of the cycle starting nearest t0 into view and mark it (its candle was tapped). */
@@ -131,7 +151,8 @@ public final class InterpView extends View {
         if (best >= 0 && best < ys.length) {
             selT0 = rs.get(best).t0;
             fling.forceFinished(true);
-            scroll = clampScroll(TOPY + ys[best] - Math.max(0f, (getHeight() - CARD_H) / 2f));
+            float bh = best < hs.length ? hs[best] : CARD_H;
+            scroll = clampScroll(TOPY + ys[best] - Math.max(0f, (getHeight() - bh) / 2f));
         }
         invalidate();
     }
@@ -185,7 +206,7 @@ public final class InterpView extends View {
         pFill.setColor(col(dark ? "#2a3138" : "#dddddd"));
         c.drawRect(PAD, 20 * d, w - PAD, 21 * d, pFill);
         List<FlowModel.Row> rs = rows;
-        if (ys.length != rs.size()) layout(rs);
+        if (ys.length != rs.size() || hs.length != rs.size()) layout(rs);
         c.save();
         c.clipRect(0, 21 * d, w, h);
         float base = TOPY - scroll, x = PAD, cw = w - 2 * PAD;
@@ -193,8 +214,8 @@ public final class InterpView extends View {
             float y = base + ys[i];
             if (y > h) break;
             if (i > 0 && !hour(rs.get(i)).equals(hour(rs.get(i - 1))) && y - SEP_H < h && y > 0) drawSep(c, rs.get(i), x, y - SEP_H, cw, dim);
-            if (y + CARD_H < 20 * d) continue;
-            drawCard(c, rs.get(i), x, y, cw, dim, det);
+            if (y + hs[i] < 20 * d) continue;
+            drawCard(c, rs.get(i), x, y, cw, hs[i], dim, det);
         }
         c.restore();
         if (rs.isEmpty()) text(c, model.connected ? "waiting for the first cycles" : "connecting to the engine...", PAD, 44 * d, sans, 11, dim);
@@ -223,11 +244,11 @@ public final class InterpView extends View {
         if (r.st == ST_BREAK) return "Breakout · " + side;
         if (r.st == ST_ABSORB) return "buy".equals(side) ? "Buyer absorbed" : "Seller absorbed";
         if (r.st == ST_VACUUM) return "Vacuum · " + side;
-        if (r.st == ST_QUIET) return "Quiet";
+        if (r.st == ST_QUIET) return "Normal";      // NORMAL, not quiet (user 2026-09-25): the index keeps its name
         return "Forming";
     }
 
-    private void drawCard(Canvas c, FlowModel.Row r, float x, float y, float cw, int dim, int det) {
+    private void drawCard(Canvas c, FlowModel.Row r, float x, float y, float cw, float ch, int dim, int det) {
         int ci = Math.max(0, Math.min(BAR_COL.length - 1, r.col));
         int scol = col(BAR_COL[ci]);
         int tcol = col((dark ? TXT_DARK : TXT_LIGHT)[ci]);
@@ -236,7 +257,7 @@ public final class InterpView extends View {
         boolean warm = "-".equals(r.name);
 
         // ---- the card itself: white on the white page in Simple BW, held apart by a hairline
-        rf.set(x, y, x + cw, y + CARD_H);
+        rf.set(x, y, x + cw, y + ch);
         card.reset(); card.addRoundRect(rf, 8 * d, 8 * d, Path.Direction.CW);
         pFill.setStyle(Paint.Style.FILL);
         pFill.setColor(col(dark ? "#1a1f25" : "#ffffff"));
@@ -255,9 +276,9 @@ public final class InterpView extends View {
         pFill.setColor(r.strong ? scol : alpha(scol, 110));
         float rw = (r.strong ? 4 : 3) * d;
         if (r.forming) {
-            for (float yy = y + 2 * d; yy < y + CARD_H - 2 * d; yy += 10 * d) c.drawRect(x, yy, x + rw, yy + 6 * d, pFill);
+            for (float yy = y + 2 * d; yy < y + ch - 2 * d; yy += 10 * d) c.drawRect(x, yy, x + rw, yy + 6 * d, pFill);
         } else {
-            c.drawRect(x, y, x + rw, y + CARD_H, pFill);
+            c.drawRect(x, y, x + rw, y + ch, pFill);
         }
         c.restore();
 
@@ -334,11 +355,15 @@ public final class InterpView extends View {
         pct(c, Math.max(nx, L + 36 * d + 44 * d + 46 * d), kb, "sellers", r.ask, mvp, dim, det);
 
         // ---- the quadrant: the two numbers the state is READ from -- flow (effort, left -> right) against speed
-        // (result, bottom -> top). Breakout top-right, absorbed bottom-right, vacuum top-left, quiet bottom-left.
-        int[][] cells = {{0, 0, C_VACUUM}, {1, 0, C_BREAK_BUY}, {0, 1, C_QUIET}, {1, 1, C_ABSORB_BUY}};
-        for (int[] cl : cells) {
-            pFill.setColor(alpha(col(BAR_COL[cl[2]]), dark ? 46 : 38));
-            c.drawRect(qx + cl[0] * q / 2, qy + cl[1] * q / 2, qx + (cl[0] + 1) * q / 2, qy + (cl[1] + 1) * q / 2, pFill);
+        // (result, bottom -> top). Since the I x I gates (2026-09-25) the square no longer decides the state -- a heavy,
+        // fast cycle can be a breakout, an absorption or NORMAL -- so ONLY the square holding the dot is coloured, in
+        // the card's own state colour (user: "Dot's square = state"); the other three stay neutral.
+        int litX = -1, litY = -1;
+        if (ok(r.vr) && r.vr > 0 && ok(r.sr) && r.sr > 0) { litX = r.vr > 1.0 ? 1 : 0; litY = (r.sr > 1.0 && !r.flat) ? 0 : 1; }
+        for (int cx = 0; cx < 2; cx++) for (int cy = 0; cy < 2; cy++) {
+            boolean lit = cx == litX && cy == litY;
+            pFill.setColor(lit ? alpha(scol, dark ? 110 : 90) : alpha(col(BAR_COL[C_QUIET]), dark ? 24 : 16));
+            c.drawRect(qx + cx * q / 2, qy + cy * q / 2, qx + (cx + 1) * q / 2, qy + (cy + 1) * q / 2, pFill);
         }
         pLine.setStrokeWidth(1 * d); pLine.setColor(col(dark ? "#4a545c" : "#c3c9ce"));
         c.drawLine(qx + q / 2, qy, qx + q / 2, qy + q, pLine);
@@ -400,6 +425,10 @@ public final class InterpView extends View {
         pLine.setStyle(Paint.Style.STROKE); pLine.setPathEffect(null); pLine.setStrokeWidth(1 * d);
         pLine.setColor(col(dark ? "#262d34" : "#e6e9ec"));
         c.drawLine(x + 14 * d, sy, x + cw - 14 * d, sy, pLine);
+        // THE WHY-NOT (user 2026-09-25): which condition a NORMAL card that sat in the breakout or vacuum square failed,
+        // above the I x I reading's why; layout() grew the card by these lines
+        List<String> wn = whyNotLines(r, cw - 32 * d);
+        for (int j = 0; j < wn.size(); j++) text(c, wn.get(j), x + 16 * d, sy + 59 * d + j * WHY_NOT_LH, bold, 10.5f, det);
         if (r.iLead == 0) {
             text(c, "I×I  not rated yet -- it needs a few cycles of history and the book at the open", x + 16 * d, sy + 30 * d, sans, 10.5f, dim);
             return;
@@ -472,7 +501,8 @@ public final class InterpView extends View {
         // ---- the why, two lines at most
         if (r.iWhy != null && !r.iWhy.isEmpty()) {
             List<String> ln = wrap(r.iWhy, sans, 10.5f, cw - 32 * d, 2);
-            for (int j = 0; j < ln.size(); j++) text(c, ln.get(j), x + 16 * d, sy + 59 * d + j * 14.5f * d, sans, 10.5f, det);
+            float wy = sy + 59 * d + wn.size() * WHY_NOT_LH;
+            for (int j = 0; j < ln.size(); j++) text(c, ln.get(j), x + 16 * d, wy + j * 14.5f * d, sans, 10.5f, det);
         }
     }
 

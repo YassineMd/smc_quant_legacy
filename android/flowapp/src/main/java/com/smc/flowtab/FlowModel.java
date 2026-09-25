@@ -91,6 +91,8 @@ public final class FlowModel {
         public int iLead; public boolean iGood, iContra; public String iWhy = "";
         public double iMult = Double.NaN, iImp = Double.NaN, iWall = Double.NaN, iKept = Double.NaN, iPb = Double.NaN, iGive = Double.NaN;
         public double iReach = Double.NaN, iLmv = Double.NaN; public boolean iShort;     // a push under 4 ticks (2026-09-24)
+        // a NORMAL card that sat in the breakout or vacuum square: which condition failed (flow_interp.gate_why_not)
+        public String whyNot = "";
     }
     private static double num(JSONObject o, String k) {
         return (o == null || o.isNull(k) || !o.has(k)) ? Double.NaN : o.optDouble(k, Double.NaN);
@@ -388,6 +390,7 @@ public final class FlowModel {
                     row.iMult = num(x, "i_mult"); row.iImp = num(x, "i_imp"); row.iWall = num(x, "i_wall");
                     row.iKept = num(x, "i_kept"); row.iPb = num(x, "i_pb"); row.iGive = num(x, "i_give");
                     row.iReach = num(x, "i_reach"); row.iLmv = num(x, "i_lmv"); row.iShort = x.optBoolean("i_short", false);
+                    row.whyNot = x.isNull("why_not") ? "" : x.optString("why_not", "");
                 }
                 out.add(row);
             }

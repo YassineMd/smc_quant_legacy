@@ -47,7 +47,11 @@ from PySide6 import QtCore, QtGui, QtWidgets
 # The four states carry the user's own palette from the state-space picture: green absorption, amber breakout,
 # red vacuum, grey quiet.
 ST_ABSORB, ST_BREAK, ST_VACUUM, ST_QUIET, ST_FORMING = 0, 1, 2, 3, 4
-STATE_NAME = ("ABSORPTION", "BREAKOUT", "VACUUM", "QUIET", "forming")
+# NORMAL, not QUIET (user 2026-09-25: "we are no longer gonna have quiet, we gonna replace everything that is not
+# vaccume,breakout or absorption by Normal instead of quiet / keep the gray color"): every cycle that is none of the
+# three named states. Only the WORD changed -- the index keeps its old name, ST_QUIET, all through the code.
+ST_NORMAL = ST_QUIET
+STATE_NAME = ("ABSORPTION", "BREAKOUT", "VACUUM", "NORMAL", "forming")
 
 
 def state_label(st, side):
@@ -503,6 +507,47 @@ def vacuum_ok(lead, wall, opp, wall_max=1.0, opp_max=1.0):
                 & (np.asarray(opp, dtype=np.float64) < float(opp_max)))
 
 
+def gate_why_not(qst, lead, wall, opp, imp, kept, short, contra, brk=(1.0, 1.5, 0.70, 1.0), vac=(1.0, 1.0)):
+    """THE CARD'S WHY-NOT (user 2026-09-25): one line for a cycle the quadrant map put in the BREAKOUT or VACUUM square
+    that ended NORMAL -- which of that state's I x I conditions failed, in the numbers the card's tiles print. `brk` /
+    `vac` are build_rows' thresholds, `opp` the tape of the side NOT leading. "" when nothing failed."""
+    fin = lambda v: v is not None and math.isfinite(v)
+    fx = lambda v: "–" if not fin(v) else (("%.0f×" % v) if v >= 10 else ("%.2f×" % v))
+    thr = lambda v: "%g×" % float(v)
+    name = "breakout" if qst == ST_BREAK else "vacuum"
+    if int(lead) == 0:
+        return "Not a %s: the I×I could not rate it" % name
+    other = "sellers'" if int(lead) > 0 else "buyers'"
+    parts = []
+    if qst == ST_BREAK:
+        wall_min, imp_min, kept_min, opp_min = [float(v) for v in brk]
+        if not ((fin(wall) and wall >= wall_min) or (fin(opp) and opp >= opp_min)):
+            if wall_min == opp_min:
+                parts.append("wall %s and %s tape %s (either needs %s)" % (fx(wall), other, fx(opp), thr(wall_min)))
+            else:
+                parts.append("wall %s (needs %s) and %s tape %s (needs %s)" % (fx(wall), thr(wall_min), other,
+                                                                               fx(opp), thr(opp_min)))
+        if short:
+            parts.append("a short push (under %gt)" % IIMP_KEEP_MIN_TICKS)
+        else:
+            if not (fin(imp) and imp >= imp_min):
+                parts.append("impact %s (needs %s)" % (fx(imp), thr(imp_min)))
+            if contra:
+                parts.append("price closed against the leader")
+            elif not (fin(kept) and kept >= kept_min):
+                parts.append("kept %s (needs %d%%)" % (("%d%%" % int(round(100.0 * kept))) if fin(kept) else "–",
+                                                      int(round(100.0 * kept_min))))
+    else:
+        wall_max, opp_max = [float(v) for v in vac]
+        if not fin(wall):
+            parts.append("no wall reading yet")
+        elif not wall < wall_max:
+            parts.append("wall %s (needs under %s)" % (fx(wall), thr(wall_max)))
+        if not (fin(opp) and opp < opp_max):
+            parts.append("%s tape %s (needs under %s)" % (other, fx(opp), thr(opp_max)))
+    return ("Not a %s: %s" % (name, ", ".join(parts))) if parts else ""
+
+
 def _quadrant(heavy, big, up, dom_buy):
     """The user's quadrant map. Breakout and vacuum name the direction PRICE went; absorption names the side
     doing the AGGRESSING -- the one being absorbed -- which is the cycle's own dominance flag, i.e. exactly
@@ -600,7 +645,7 @@ def build_rows(t, t_end, done, move, side_dom, vol_ratio, speed_ratio,
     with np.errstate(divide="ignore", invalid="ignore"):
         conf = np.minimum(np.abs(np.log2(np.maximum(vr, 1e-9))), np.abs(np.log2(np.maximum(sr, 1e-9))))
 
-    def _raw(k, st, side, dur):
+    def _raw(k, st, side, dur, why_not=""):
         """The NUMBERS behind a row (2026-09-23 card redesign): the feed now DRAWS them -- the effort x result
         quadrant, the tape bars, the book arrows, the give-back bar -- instead of only printing sentences.
         Appended as the row's 14th element, so every reader of the first 13 is untouched."""
@@ -611,7 +656,7 @@ def build_rows(t, t_end, done, move, side_dom, vol_ratio, speed_ratio,
         out = {"st": int(st), "side": side or "", "mv": float(mv[k]), "flat": bool(flat[k]), "dur": float(dur),
                "px0": p0, "px1": p1, "hi": ph, "lo": pl, "vr": _at(vr, k), "sr": _at(sr, k),
                "buy": _at(buy_ratio, k), "sell": _at(sell_ratio, k), "bid": _at(bid_ratio, k),
-               "ask": _at(ask_ratio, k), "push": push, "give": give, "gb": frac}
+               "ask": _at(ask_ratio, k), "push": push, "give": give, "gb": frac, "why_not": str(why_not or "")}
         if iimp is not None:
             # the I x I PANE's reading of this cycle (user 2026-09-24): the card's summary strip and its short why.
             # FLAT keys, never a nested dict: the engine turns NaN into null one level deep, and Android's JSON
@@ -630,9 +675,9 @@ def build_rows(t, t_end, done, move, side_dom, vol_ratio, speed_ratio,
         return bool(iimp_contra(_at(buy_ratio, k), _at(sell_ratio, k), mv[k]))
 
     def _gate(st, side, k):
-        """The 2026-09-25 gates on one row. BREAKOUT (breakout_class): stays one, turns ABSORBED by its leader, or QUIET.
-        VACUUM (vacuum_ok, on the I x I leader's wall and the other side's tape): stays one or turns QUIET. No I x I
-        reading at all -> QUIET: neither gate can be passed on nothing."""
+        """The 2026-09-25 gates on one row. BREAKOUT (breakout_class): stays one, turns ABSORBED by its leader, or
+        NORMAL. VACUUM (vacuum_ok, on the I x I leader's wall and the other side's tape): stays one or turns NORMAL. No
+        I x I reading at all -> NORMAL: neither gate can be passed on nothing."""
         if st == ST_VACUUM:
             if iimp is None:
                 return ST_QUIET, ""
@@ -654,6 +699,18 @@ def build_rows(t, t_end, done, move, side_dom, vol_ratio, speed_ratio,
         if c == BREAK_ABSORBED:
             return ST_ABSORB, ("buy" if int(iimp["lead"][k]) > 0 else "sell")
         return ST_QUIET, ""
+
+    def _why_not(qst, st, k):
+        """The card's why-not line: only for a row the quadrant map put in the BREAKOUT or VACUUM square and the gate
+        turned NORMAL (user 2026-09-25)."""
+        if st != ST_NORMAL or qst not in (ST_BREAK, ST_VACUUM):
+            return ""
+        if iimp is None:
+            return "Not a %s: no I×I reading" % ("breakout" if qst == ST_BREAK else "vacuum")
+        ld = int(iimp["lead"][k])
+        opp = _at(iimp["is"], k) if ld > 0 else (_at(iimp["ib"], k) if ld < 0 else float("nan"))
+        return gate_why_not(qst, ld, _at(iimp["wall"], k), opp, _at(iimp["imp"], k), _at(iimp["kept"], k),
+                            bool(iimp["short"][k]), bool(iimp["contra"][k]), brk, vac)
 
     rows = []
     order = range(n - 1, -1, -1)
@@ -679,7 +736,8 @@ def build_rows(t, t_end, done, move, side_dom, vol_ratio, speed_ratio,
                 rows.append((t0, t0 + el, head, "forming", "", ("", ""), ST_FORMING, False, False, C_FORMING, "", 0, "",
                              _raw(k, ST_FORMING, "", el)))
                 continue
-            st, side = _gate(*_quadrant(heavy[k], big[k], up[k], sd[k]), k)
+            qst, qside = _quadrant(heavy[k], big[k], up[k], sd[k])
+            st, side = _gate(qst, qside, k)
             _mt, _mw, _ms = move_text(_at(px_start, k), _at(px_end, k), mv[k], flat[k], sr[k],
                                       slow_c, fast_c, px_dec)
             if st == ST_ABSORB:
@@ -692,18 +750,20 @@ def build_rows(t, t_end, done, move, side_dom, vol_ratio, speed_ratio,
             rows.append((t0, t0 + el, head, state_label(st, side),
                          _line1(vr[k], buy_ratio, sell_ratio, k),
                          _line2(bid_ratio, ask_ratio, k),
-                         st, bool(conf[k] >= float(weak_below)), True,
-                         colour_of(st, side, _contra(k)), _mt, _ms, _mw, _raw(k, st, side, el)))
+                         st, st == ST_NORMAL or bool(conf[k] >= float(weak_below)), True,
+                         colour_of(st, side, _contra(k)), _mt, _ms, _mw, _raw(k, st, side, el, _why_not(qst, st, k))))
             continue
         if not ok[k]:
             rows.append((t0, t1, "%s - %s - %s" % (_clock(t0), _clock(t1), dur_text(t1 - t0)),
                          "-", "not enough history yet", ("", ""), ST_QUIET, False, False, C_QUIET, "", 0, "",
                          _raw(k, -1, "", t1 - t0)))
             continue
-        st, side = _gate(*_quadrant(heavy[k], big[k], up[k], sd[k]), k)
+        qst, qside = _quadrant(heavy[k], big[k], up[k], sd[k])
+        st, side = _gate(qst, qside, k)
         _mt, _mw, _ms = move_text(_at(px_start, k), _at(px_end, k), mv[k], flat[k], sr[k],
                                   slow_c, fast_c, px_dec)
-        _strong = bool(conf[k] >= float(weak_below))
+        # a NORMAL card claims no state, so it is never "weak" (2026-09-25): weak says a NAMED state sits near its line
+        _strong = st == ST_NORMAL or bool(conf[k] >= float(weak_below))
         if st == ST_ABSORB:
             # an absorbed row is measured off its HIGH (buy) or LOW (sell), not open-to-close
             _at_, _aw, _fr = absorb_move_text(side == "buy", _at(px_start, k), _at(px_end, k),
@@ -722,7 +782,8 @@ def build_rows(t, t_end, done, move, side_dom, vol_ratio, speed_ratio,
                      _line1(vr[k], buy_ratio, sell_ratio, k),
                      _line2(bid_ratio, ask_ratio, k),
                      st, _strong, False,
-                     colour_of(st, side, _contra(k)), _mt, _ms, _mw, _raw(k, st, side, t1 - t0)))
+                     colour_of(st, side, _contra(k)), _mt, _ms, _mw,
+                     _raw(k, st, side, t1 - t0, _why_not(qst, st, k))))
     return rows
 
 
@@ -945,14 +1006,41 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
         except Exception:
             return ""
 
+    WHY_NOT_LH = 13     # the why-not line (2026-09-25): a card that carries one grows by this per line, two at most
+
+    def _why_not_text(self, i) -> str:
+        try:
+            row = self._rows[i]
+            raw = row[13] if len(row) > 13 and isinstance(row[13], dict) else {}
+            return str(raw.get("why_not") or "")
+        except Exception:
+            return ""
+
+    def _why_not_lines(self, i, cw=None) -> list:
+        """The why-not line of card i, wrapped to the card's text width (two lines at most) -- ONE wrap for the layout
+        and the painter, so a card is exactly as tall as what it draws."""
+        wn = self._why_not_text(i)
+        if not wn:
+            return []
+        if cw is None:
+            cw = self.viewport().width() - 2 * self.PAD
+        return self._wrap(wn, QtGui.QFontMetrics(self._fonts()["chip"]), max(60, cw - 32), 2)
+
+    def _card_h(self, i) -> int:
+        hs = getattr(self, "_hs", None)
+        return int(hs[i]) if (hs is not None and 0 <= i < len(hs)) else self.CARD_H
+
     def _layout(self):
-        ys, y = [], 0
+        ys, hs, y = [], [], 0
         for i in range(len(self._rows)):
             if i > 0 and self._hour(i) != self._hour(i - 1):
                 y += self.SEP_H
             ys.append(y)
-            y += self.CARD_H + self.CARD_GAP
+            h_ = self.CARD_H + self.WHY_NOT_LH * len(self._why_not_lines(i))
+            hs.append(h_)
+            y += h_ + self.CARD_GAP
         self._ys = ys
+        self._hs = hs
         self._total = y
 
     # ---- data -------------------------------------------------------------------------------------------
@@ -1032,6 +1120,7 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
 
     def resizeEvent(self, ev):
         super().resizeEvent(ev)
+        self._layout()                                # the why-not lines wrap to the width
         self._update_scroll()
         if self._lb_edit is not None and self._lb_edit.isVisible():
             self._lb_edit.setGeometry(self._foot_rects()[2])
@@ -1043,7 +1132,7 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
             return -1
         yy = y + self.verticalScrollBar().value() - self.PAD - self.TOP
         i = bisect.bisect_right(ys, yy) - 1
-        return int(i) if (0 <= i < len(self._rows) and yy < ys[i] + self.CARD_H) else -1
+        return int(i) if (0 <= i < len(self._rows) and yy < ys[i] + self._card_h(i)) else -1
 
     def mouseMoveEvent(self, ev):
         pos = ev.position().toPoint()
@@ -1113,8 +1202,8 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
             return "Buyer absorbed" if side == "buy" else "Seller absorbed"
         if st == ST_VACUUM:
             return "Vacuum · %s" % side
-        if st == ST_QUIET:
-            return "Quiet"
+        if st == ST_NORMAL:
+            return "Normal"
         return "Forming"
 
     def _paint_event(self, ev):
@@ -1140,7 +1229,7 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
         off = self.verticalScrollBar().value()
         base = self.PAD + self.TOP - off
         ys = self._ys
-        first = max(0, bisect.bisect_right(ys, off - self.PAD - self.TOP - self.CARD_H) - 1)
+        first = max(0, bisect.bisect_right(ys, off - self.PAD - self.TOP - self.CARD_H - 2 * self.WHY_NOT_LH) - 1)
         x = self.PAD; cw = w - 2 * self.PAD
         for i in range(int(first), len(self._rows)):
             y = base + ys[i]
@@ -1148,7 +1237,7 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
                 break
             if i > 0 and self._hour(i) != self._hour(i - 1):
                 self._draw_sep(p, F, x, y - self.SEP_H, cw, i, dim)
-            if y + self.CARD_H < 20:
+            if y + self._card_h(i) < 20:
                 continue
             self._draw_card(p, F, i, x, y, cw, dim, det)
         p.restore()
@@ -1185,7 +1274,8 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
                 return nan
 
         # ---- the card itself
-        rect = QtCore.QRectF(x, y, cw, self.CARD_H)
+        CH = self._card_h(i)
+        rect = QtCore.QRectF(x, y, cw, CH)
         path = QtGui.QPainterPath(); path.addRoundedRect(rect, 8, 8)
         # light = Chart Style Simple BW (user 2026-09-23: "it should be white"): white cards on the white page,
         # held apart by a hairline instead of a tint
@@ -1211,11 +1301,11 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
         rw = 4 if strong else 3
         if forming:
             _yy = y + 2
-            while _yy < y + self.CARD_H - 2:
+            while _yy < y + CH - 2:
                 p.fillRect(QtCore.QRectF(x, _yy, rw, 6), rc)
                 _yy += 10
         else:
-            p.fillRect(QtCore.QRectF(x, y, rw, self.CARD_H), rc)
+            p.fillRect(QtCore.QRectF(x, y, rw, CH), rc)
         p.restore()
 
         L = x + 14
@@ -1348,16 +1438,24 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
         pct(L + 34 + 40 + 44, y + 98, "sellers", g("ask"))
 
         # ---- the quadrant: the two numbers the state is READ from -- flow (effort, left -> right) against speed
-        # (result, bottom -> top). Breakout top-right, absorbed bottom-right, vacuum top-left, quiet bottom-left.
+        # (result, bottom -> top). Since the I x I gates (2026-09-25) the square no longer decides the state -- a
+        # heavy, fast cycle can be a breakout, an absorption or NORMAL -- so ONLY the square holding the dot is
+        # coloured, in the card's own state colour (user: "Dot's square = state"); the other three stay neutral.
         qy = y + 30; q = 44
-        for (cx, cy, c) in ((0, 0, BAR_COL[C_VACUUM]), (1, 0, BAR_COL[C_BREAK_BUY]),
-                            (0, 1, BAR_COL[C_QUIET]), (1, 1, BAR_COL[C_ABSORB_BUY])):
-            qc = QtGui.QColor(c); qc.setAlpha(46 if dk else 38)
-            p.fillRect(QtCore.QRectF(qx + cx * q / 2, qy + cy * q / 2, q / 2, q / 2), qc)
+        vr = g("vr"); sr = g("sr")
+        lit = None
+        if math.isfinite(vr) and vr > 0 and math.isfinite(sr) and sr > 0:
+            lit = (1 if vr > 1.0 else 0, 0 if (sr > 1.0 and not raw.get("flat")) else 1)
+        for cx in (0, 1):
+            for cy in (0, 1):
+                if lit == (cx, cy):
+                    qc = QtGui.QColor(scol); qc.setAlpha(110 if dk else 90)
+                else:
+                    qc = QtGui.QColor(BAR_COL[C_QUIET]); qc.setAlpha(24 if dk else 16)
+                p.fillRect(QtCore.QRectF(qx + cx * q / 2, qy + cy * q / 2, q / 2, q / 2), qc)
         p.setPen(QtGui.QPen(QtGui.QColor("#4a545c" if dk else "#c3c9ce"), 1))
         p.drawLine(QtCore.QPointF(qx + q / 2, qy), QtCore.QPointF(qx + q / 2, qy + q))
         p.drawLine(QtCore.QPointF(qx, qy + q / 2), QtCore.QPointF(qx + q, qy + q / 2))
-        vr = g("vr"); sr = g("sr")
         if math.isfinite(vr) and vr > 0 and math.isfinite(sr) and sr > 0:
             ex = max(-1.5, min(1.5, math.log2(vr))) / 1.5 * (q / 2 - 4)
             ey = max(-1.5, min(1.5, math.log2(sr))) / 1.5 * (q / 2 - 4)
@@ -1379,7 +1477,7 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
             sw = str(mv_word)
             p.setPen(det)
             p.drawText(QtCore.QPointF(qx + q / 2 - fmt.horizontalAdvance(sw) / 2, qy + q + 25), sw)
-        self._draw_iimp_strip(p, F, raw, x, y, cw, dim, det)
+        self._draw_iimp_strip(p, F, raw, x, y, cw, dim, det, self._why_not_lines(i, cw))
 
     @staticmethod
     def _wrap(text, fm, width, max_lines):
@@ -1405,7 +1503,7 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
             lines[-1] = fm.elidedText(lines[-1], QtCore.Qt.ElideRight, int(width))
         return lines
 
-    def _draw_iimp_strip(self, p, F, raw, x, y, cw, dim, det):
+    def _draw_iimp_strip(self, p, F, raw, x, y, cw, dim, det, why_not=()):
         """THE I x I READING of the cycle, under the book row (user 2026-09-24: "add the summary that i see on top
         (interest, impact, wall and kept) in the interpretation, and just below it ... the why ... one or two
         sentences ... beautifully incorporated"). Left: the pane's own bar in MINIATURE -- the side's colour (orange
@@ -1423,6 +1521,11 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
                 return v if math.isfinite(v) else nan
             except Exception:
                 return nan
+        # THE WHY-NOT (user 2026-09-25): which condition a NORMAL card that sat in the breakout or vacuum square failed,
+        # above the I x I reading's why; the card grew by these lines (_layout)
+        for j, ln in enumerate(why_not):
+            p.setFont(F["chip"]); p.setPen(det)
+            p.drawText(QtCore.QPointF(x + 16, sy + 54 + j * self.WHY_NOT_LH), ln)
         lead = int(raw.get("i_lead") or 0) if isinstance(raw, dict) else 0
         if lead == 0:
             p.setFont(F["label"]); p.setPen(dim)
@@ -1520,5 +1623,6 @@ class FlowInterpPanel(QtWidgets.QAbstractScrollArea):
         why = str(raw.get("i_why") or "")
         if why:
             p.setFont(F["why"]); p.setPen(det)
+            _wy = sy + 54 + len(why_not) * self.WHY_NOT_LH
             for j, ln in enumerate(self._wrap(why, QtGui.QFontMetrics(F["why"]), cw - 32, 2)):
-                p.drawText(QtCore.QPointF(x + 16, sy + 54 + j * 13), ln)
+                p.drawText(QtCore.QPointF(x + 16, _wy + j * 13), ln)

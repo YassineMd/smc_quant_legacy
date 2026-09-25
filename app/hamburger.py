@@ -1880,11 +1880,14 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
         self.interp_on.setToolTip(
             "A vertical feed down the right-hand side, newest cycle first: start -> end -> duration, then what "
             "the cycle WAS. Aggressive $ per second against this cycle's recent baseline, crossed with how "
-            "fast price moved, gives the four states from the state-space map -- BREAKOUT (heavy flow, price "
-            "reprices), ABSORPTION (heavy flow, price holds), VACUUM (little flow, price gaps anyway) and "
-            "QUIET -- plus the side. A cycle sitting near its own baseline on either axis is drawn DIM and "
-            "marked weak. The bid/ask book figures beside each state are EVIDENCE, not part of the "
-            "classification. Click a row to centre the chart on that cycle.")
+            "fast price moved, places it on the state-space map; the I x I reading then decides -- BREAKOUT "
+            "(heavy flow, fast price, the leader's wall or the other side's tape at least 1x, impact at least "
+            "1.5x, at least 70% kept), ABSORPTION (heavy flow, price holds -- or a heavy, fast cycle that "
+            "closed against a leader whose push converted), VACUUM (little flow, fast price, the leader's wall "
+            "and the other side's tape under 1x) and NORMAL for everything else -- plus the side. A named "
+            "state sitting near its own baseline on either axis is drawn DIM and marked weak. The bid/ask book "
+            "figures beside each state are EVIDENCE, not part of the classification. Click a row to centre "
+            "the chart on that cycle.")
         self.interp_on.toggled.connect(lambda on: self.interpPaneToggled.emit(bool(on)))
         l4.addWidget(self.interp_on)
         self.flow_sec.addWidget(w4)

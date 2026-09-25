@@ -36,7 +36,7 @@ Left, top to bottom (panes can be hidden, so check which ones are there):
     interest was absorbed);
   - faint green / faint red = VACUUM up / down: light flow and fast price, AND the leader's wall and the other
     side's tape both under 1x (nothing stood in the leader's way);
-  - any other heavy, fast or light, fast cycle is QUIET; quiet candles are plain black (down) / white (up).
+  - every other cycle is NORMAL (called QUIET before 2026-09-25): plain black (down) / white (up).
   On top of the candles:
   - **HLH lines**: each bloc's VAH / VAL, with dashes for its POC;
   - **$ bubbles**: Big Player prints of $500K+, and diamonds for sweeps and bursts;
@@ -57,8 +57,10 @@ Left, top to bottom (panes can be hidden, so check which ones are there):
   also tints a BAND wherever one side's line stands at least 0.3x above the other's, BRIGHT where that side got there
   by climbing (+0.3x since the band opened) rather than by the other side falling away.
 - Right: the **INTERPRETATION** feed, one card per cycle, newest first: the state, the move in ticks, the tape
-  (each side's aggressive $/s against its normal), the book, and the I×I strip (interest, impact, wall, kept) with
-  a short "why". A card with a blue outline is the one I marked.
+  (each side's aggressive $/s against its normal), the book, a small flow × speed map (its dot's square wears the
+  card's state colour), and the I×I strip (interest, impact, wall, kept) with a short "why". A NORMAL card that sat
+  in the breakout or vacuum square also says which condition failed. A card with a blue outline is the one I
+  marked.
 
 ## 3. The data snapshot
 
@@ -117,8 +119,11 @@ Left, top to bottom (panes can be hidden, so check which ones are there):
     value defended. "Contested: …" = both sides moved price their way, leader named first.
   - `why`: the I×I pane's own sentence for the cycle.
   - The CARD, as the INTERPRETATION feed draws it:
-    - `card_state`: BREAKOUT buy / sell, BUYER ABSORBED, SELLER ABSORBED, VACUUM buy / sell, QUIET, forming (the
-      tablet writes it "Breakout · buy" etc.); `card_weak` = true when the card is marked "weak".
+    - `card_state`: BREAKOUT buy / sell, BUYER ABSORBED, SELLER ABSORBED, VACUUM buy / sell, NORMAL, forming (the
+      tablet writes it "Breakout · buy" etc.; history rows recorded before 2026-09-25 17:00 UTC say QUIET for
+      NORMAL); `card_weak` = true when the card is marked "weak" (a NORMAL card never is).
+    - `card_why_not`: on a NORMAL card that sat in the breakout or vacuum square, which of that state's conditions
+      failed, e.g. "Not a breakout: impact 1.30× (needs 1.5×), kept 62% (needs 70%)"; null otherwise.
     - `candle_colour`: the PRICE candle's colour and what it means.
     - `card_move`: the card's price line (`116.46 -> 116.55   +9t`; for an absorbed cycle `lo` / `hi` then the
       close); `card_move_word`: the word beside it (fast up, drifting down, 84% given back, fully reversed...).

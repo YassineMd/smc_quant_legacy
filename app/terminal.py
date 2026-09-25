@@ -23344,7 +23344,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         except Exception as _e:
             print("AUCTION BIGPLAYER: %s" % _e)
         COL = {_FI.C_ABSORB_BUY: "orange (buyers absorbed)", _FI.C_BREAK_BUY: "green (breakout up)",
-               _FI.C_BREAK_SELL: "red (breakout down)", _FI.C_VACUUM: "salmon (vacuum)", _FI.C_QUIET: "gray (quiet)",
+               _FI.C_BREAK_SELL: "red (breakout down)", _FI.C_VACUUM: "salmon (vacuum)", _FI.C_QUIET: "gray (normal)",
                _FI.C_FORMING: "forming", _FI.C_ABSORB_SELL: "blue (sellers absorbed)",
                _FI.C_BREAK_BUY_X: "bright green (breakout up while buyers' lead was absorbed)",
                _FI.C_BREAK_SELL_X: "bright purple (breakout down while sellers' lead was absorbed)"}
@@ -23360,6 +23360,8 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             if c is not None:
                 raw = c[13] if len(c) > 13 and isinstance(c[13], dict) else {}
                 r["card_state"] = str(c[3])
+                # a NORMAL card that sat in the breakout or vacuum square says which condition failed (2026-09-25)
+                r["card_why_not"] = str(raw.get("why_not") or "") or None
                 r["card_weak"] = (not bool(c[7])) if int(c[6]) != _FI.ST_FORMING else None
                 r["candle_colour"] = COL.get(int(c[9]), str(c[9]))
                 if int(c[9]) == _FI.C_VACUUM:              # the PRICE candle (2026-09-25): faint green / red, not salmon
