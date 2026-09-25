@@ -19444,7 +19444,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # bearish-fill / bullish-hollow pair -- colouring all six (which I did first) makes the two that
         # matter compete with four that do not, which is the opposite of what a colour code is for.
         # THE BREAKOUT GATE (user 2026-09-25, flow_interp.breakout_class): heavy AND fast is a BREAKOUT only when the
-        # I x I leader's wall is above 1x, its impact at least 1.5x and its kept at least 70%; what used to be BRIGHT
+        # I x I leader's wall is at least 1x OR the other side's tape at least 1x, its impact at least 1.5x and its kept
+        # at least 70%; what used to be BRIGHT
         # (price closed against a leader whose push converted) is ABSORBED, named by the leader; the rest of heavy +
         # fast is a plain candle (QUIET). Read on the I x I pane's own rating of THIS read (_iimp_rate + _iimp_core),
         # the same lookback, so the candle and the card cannot disagree. No prices -> no reading -> no breakout.
@@ -19457,8 +19458,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 C_ = self._iimp_core(self._iimp_rate(t, te, done, cbuy, csell, px0, px1, pxh, pxl,
                                                      self._lb_n(), self._lb_min_n()), px0, px1)
                 cls = _breakout_class(C_["lead"], C_["wall"], C_["imp"], C_["kept"], C_["short"], C_["good"],
-                                      C_["contra"], float(config.BREAK_WALL_MIN), float(config.BREAK_IMPACT_MIN),
-                                      float(config.BREAK_KEPT_MIN))
+                                      C_["contra"], C_["opp"], float(config.BREAK_WALL_MIN),
+                                      float(config.BREAK_IMPACT_MIN), float(config.BREAK_KEPT_MIN),
+                                      float(config.BREAK_OPP_TAPE_MIN))
                 lead = C_["lead"]
             except Exception as _e:
                 print("PX BREAKOUT GATE: %s" % _e)
@@ -20829,7 +20831,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                                   reject_weak=float(config.ABSORB_REJECT_WEAK),
                                   iimp=({_kk: _v[k] for _kk, _v in _ii.items()} if _ii is not None else None),
                                   brk=(float(config.BREAK_WALL_MIN), float(config.BREAK_IMPACT_MIN),
-                                       float(config.BREAK_KEPT_MIN)))
+                                       float(config.BREAK_KEPT_MIN), float(config.BREAK_OPP_TAPE_MIN)))
         rows = self._interp_bright_demote(rows)
         # THE AUCTION READING (2026-09-24): computed with the cards' I x I reading and kept for the snapshot file (the
         # Claude connector, /auction-read) -- NEVER drawn on the cards (the card strip was removed at the user's word:
@@ -22952,7 +22954,9 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         good = rated & (score >= 0.0) & ~short
         return {"lb": lb, "rated": rated, "lmv": lmv, "kept": kept, "imp": imp, "contra": contra, "good": good,
                 "lead": np.where(rated, np.where(lb, 1, -1), 0), "wall": np.where(rated, R["wall"], np.nan),
-                "short": rated & short}
+                "short": rated & short,
+                # the OTHER side's tape: its aggressive $/s x its own normal -- the card's tape bar for that side
+                "opp": np.where(rated, np.where(lb, R["ar_s"], R["ar_b"]), np.nan)}
 
     def _interp_iimp(self, t, t_end_c, done, cbuy, csell, px0, px1, pxh, pxl):
         """The I x I pane's reading of every cycle, for the Interpretation CARDS (user 2026-09-24: "add the summary

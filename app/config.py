@@ -639,8 +639,10 @@ IIMP_WALL_RADIUS = 25           # the wall is read within +-this many ticks of m
 # 31/97 I x I and 40/91 LINES IMPACT cycles changed between a cold and a warm read of the same view).
 IIMP_WALL_COL_SECS = 15         # the snapshots come every ~30 s; 15 s columns never skip one
 # THE BREAKOUT GATE (user 2026-09-25: "the wall should be > 1x, the impact >= 1.5x and the kept >= 70%"), ADDED to heavy
-# flow + fast price, read on the I x I pane's numbers for the cycle's leader (flow_interp.breakout_class)
-BREAK_WALL_MIN = 1.0            # the wall in the leader's way, x its normal: strictly above
+# flow + fast price, read on the I x I pane's numbers for the cycle's leader (flow_interp.breakout_class). Updated the
+# same day: "its either wall >=1x or opposite tape >=1x" -- the leader met a wall OR the other side's aggression.
+BREAK_WALL_MIN = 1.0            # the wall in the leader's way, x its normal: at least ...
+BREAK_OPP_TAPE_MIN = 1.0        # ... OR the OTHER side's tape (its aggressive $/s x its own normal): at least
 BREAK_IMPACT_MIN = 1.5          # the leader's impact (reach x its usual): at least; a SHORT push quotes none
 BREAK_KEPT_MIN = 0.70           # the share of that reach kept at the close: at least
 IIMP_WALL_CHUNK = 900           # columns per request (3.75 h; ~50 KB, the Limit Orders pane's own budget)

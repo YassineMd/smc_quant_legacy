@@ -452,6 +452,8 @@ def same_side_diff_loop(vals, is_dom_buy, done, n_base: int, min_n: int) -> np.n
 
 # THE BREAKOUT GATE (user 2026-09-25). Heavy AND fast is no longer enough: "the wall should be > 1x, the impact >= 1.5x
 # and the kept >= 70%" -- ADDED to heavy + fast, read on the INTEREST x IMPACT pane's own numbers for the cycle's LEADER;
+# then, the same day, "its either wall >=1x or opposite tape >=1x": the leader met a wall at least its normal OR the
+# other side's aggression (its tape: its $/s x its own normal, the card's other tape bar) was at least normal;
 # a heavy + fast cycle that fails is QUIET (plain candle, gray card). And "for the purple bright and green bright that do
 # not fit the definition of breakout they should be labeled as absorbed buy/sell because the interest was on one side
 # and the candle closed the opposite side": what used to be drawn BRIGHT -- price closed against the leader although the
@@ -460,16 +462,19 @@ def same_side_diff_loop(vals, is_dom_buy, done, n_base: int, min_n: int) -> np.n
 BREAK_QUIET, BREAK_ABSORBED, BREAK_OK = 0, 1, 2
 
 
-def breakout_class(lead, wall, imp, kept, short, good, contra, wall_min=1.0, imp_min=1.5, kept_min=0.70):
+def breakout_class(lead, wall, imp, kept, short, good, contra, opp, wall_min=1.0, imp_min=1.5, kept_min=0.70,
+                   opp_min=1.0):
     """What a cycle the quadrant map calls BREAKOUT (heavy AND fast) is under the 2026-09-25 rule, element-wise, from the
-    I x I reading of its LEADER (lead +1 buyers / -1 sellers / 0 unrated): BREAK_OK when the wall is above wall_min x,
-    the impact at least imp_min x on a real push (a SHORT push quotes no multiple) and at least kept_min of the reach is
-    kept at the close; BREAK_ABSORBED when price closed against the leader although its push converted (the old bright
-    pair); BREAK_QUIET otherwise, an unrated cycle included."""
+    I x I reading of its LEADER (lead +1 buyers / -1 sellers / 0 unrated): BREAK_OK when the wall is at least wall_min x
+    OR the other side's tape (`opp`) at least opp_min x, the impact at least imp_min x on a real push (a SHORT push
+    quotes no multiple) and at least kept_min of the reach is kept at the close; BREAK_ABSORBED when price closed against
+    the leader although its push converted (the old bright pair); BREAK_QUIET otherwise, an unrated cycle included."""
     lead = np.asarray(lead)
     with np.errstate(invalid="ignore"):
         rated = lead != 0
-        ok = (rated & (np.asarray(wall, dtype=np.float64) > float(wall_min))
+        met = ((np.asarray(wall, dtype=np.float64) >= float(wall_min))
+               | (np.asarray(opp, dtype=np.float64) >= float(opp_min)))
+        ok = (rated & met
               & (np.asarray(imp, dtype=np.float64) >= float(imp_min)) & ~np.asarray(short, dtype=bool)
               & (np.asarray(kept, dtype=np.float64) >= float(kept_min)))
         ab = rated & ~ok & np.asarray(contra, dtype=bool) & np.asarray(good, dtype=bool)
@@ -546,7 +551,7 @@ def build_rows(t, t_end, done, move, side_dom, vol_ratio, speed_ratio,
                bid_ratio, ask_ratio, buy_ratio, sell_ratio, flat_ticks, weak_below, max_rows,
                now=None, live=True, px_start=None, px_end=None, px_dec=2,
                slow_c=0.65, fast_c=1.50, px_hi=None, px_lo=None,
-               tick=0.01, push_min=2.0, reject_weak=0.68, iimp=None, brk=(1.0, 1.5, 0.70)):
+               tick=0.01, push_min=2.0, reject_weak=0.68, iimp=None, brk=(1.0, 1.5, 0.70, 1.0)):
     """One display row per cycle, NEWEST FIRST. Pure function of arrays -- no Qt, so it is directly testable.
 
     Every string is built here, once per rebuild, so paintEvent only ever draws pre-made text."""
@@ -608,8 +613,10 @@ def build_rows(t, t_end, done, move, side_dom, vol_ratio, speed_ratio,
             return st, side
         if iimp is None:
             return ST_QUIET, ""
-        c = int(breakout_class(iimp["lead"][k], _at(iimp["wall"], k), _at(iimp["imp"], k), _at(iimp["kept"], k),
-                               bool(iimp["short"][k]), bool(iimp["good"][k]), bool(iimp["contra"][k]), *brk))
+        ld = int(iimp["lead"][k])
+        opp = _at(iimp["is"], k) if ld > 0 else (_at(iimp["ib"], k) if ld < 0 else float("nan"))   # the OTHER side's tape
+        c = int(breakout_class(ld, _at(iimp["wall"], k), _at(iimp["imp"], k), _at(iimp["kept"], k),
+                               bool(iimp["short"][k]), bool(iimp["good"][k]), bool(iimp["contra"][k]), opp, *brk))
         if c == BREAK_OK:
             return st, side
         if c == BREAK_ABSORBED:

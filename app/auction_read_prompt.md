@@ -29,8 +29,8 @@ If I add a question, answer it using all of this. If I don't, give the read desc
 Left, top to bottom (panes can be hidden, so check which ones are there):
 - **PRICE**: one candle per **flow cycle**. A cycle starts each time the buy-flow and sell-flow lines cross, so
   one side dominates each candle. Candle colour = the cycle's state:
-  - green / red = BREAKOUT up / down: heavy flow AND fast price, AND the leader's wall above 1x, its impact at least
-    1.5x and at least 70% of its reach kept (the I×I strip's numbers);
+  - green / red = BREAKOUT up / down: heavy flow AND fast price, AND the leader's wall at least 1x OR the other
+    side's tape at least 1x, its impact at least 1.5x and at least 70% of its reach kept (the I×I strip's numbers);
   - orange = BUYERS ABSORBED, blue = SELLERS ABSORBED: heavy flow without the speed, or a heavy, fast cycle that
     closed AGAINST its leader after that leader's push converted (named by the leader: the side that held the
     interest was absorbed);
