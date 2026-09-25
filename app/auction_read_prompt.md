@@ -28,10 +28,13 @@ If I add a question, answer it using all of this. If I don't, give the read desc
 
 Left, top to bottom (panes can be hidden, so check which ones are there):
 - **PRICE**: one candle per **flow cycle**. A cycle starts each time the buy-flow and sell-flow lines cross, so
-  one side dominates each candle. Candle colour = the cycle's state: green = breakout up, red = breakout down,
-  orange = BUYERS ABSORBED, blue = SELLERS ABSORBED, salmon = vacuum (price moved on thin flow), gray = quiet.
-  Bright green / bright purple = a breakout whose leading side still got absorbed (a breakout and an absorption at
-  once). In the Simple BW style, candles without a strong state are plain black (down) or white (up).
+  one side dominates each candle. Candle colour = the cycle's state:
+  - green / red = BREAKOUT up / down: heavy flow AND fast price, AND the leader's wall above 1x, its impact at least
+    1.5x and at least 70% of its reach kept (the I×I strip's numbers);
+  - orange = BUYERS ABSORBED, blue = SELLERS ABSORBED: heavy flow without the speed, or a heavy, fast cycle that
+    closed AGAINST its leader after that leader's push converted (named by the leader: the side that held the
+    interest was absorbed);
+  - any other heavy, fast cycle is QUIET; vacuum (fast on thin flow) and quiet are plain black (down) / white (up).
   On top of the candles:
   - **HLH lines**: each bloc's VAH / VAL, with dashes for its POC;
   - **$ bubbles**: Big Player prints of $500K+, and diamonds for sweeps and bursts;

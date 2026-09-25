@@ -503,7 +503,27 @@ def tick_cycles(now, force=False):
     fresh = force or key != S.cyc_key or S.cyc_base is None
     if fresh:
         px0, px1 = st.crosses_px(A, B, *XARGS); pxh, pxl = st.crosses_hl(A, B, *XARGS)
-        cols0 = w._px_state_cols(t, t_end, done, move, is_buy, strong, cbuy, csell)
+        # THE CANDLE COLOURS carry the breakout gate (2026-09-25), which rates EVERY cycle of the 72 h read on the
+        # I x I pane's numbers: MEASURED ~70 ms over 2,310 cycles. The tablet colours the FORMING candle from "live"
+        # (fcol), so the closed candles only change when a cycle closes, when a late wall column lands (final within
+        # ~45 s) or when the tape behind them moves (force) -- recomputed then, and at most every 10 s otherwise.
+        _nfin = int(np.count_nonzero(np.asarray(done, dtype=bool)))
+        _ck = (int(t.size), _nfin, round(float(t[-1]), 2), int(w._lb_n()))
+        if (force or getattr(S, "cols0", None) is None or getattr(S, "cols_key", None) != _ck
+                or now - getattr(S, "cols_t", 0.0) >= 10.0 or int(S.cols0.size) != int(t.size)):
+            _tc = time.perf_counter()
+            cols0 = w._px_state_cols(t, t_end, done, move, is_buy, strong, cbuy, csell, px0, px1, pxh, pxl)
+            S.cols_ms = 1000.0 * (time.perf_counter() - _tc)
+            S.cols0 = cols0; S.cols_key = _ck; S.cols_t = now
+            S.cols_n = getattr(S, "cols_n", 0) + 1
+        else:
+            cols0 = S.cols0
+        if now - getattr(S, "cols_log_t", 0.0) > 60.0:     # the breakout gate rates every cycle of the read: watch it
+            S.cols_log_t = now
+            log("candle colours: %d cycles in %.0f ms, rated %d times in the last minute (breakouts %d, absorbed %d)" % (
+                int(t.size), getattr(S, "cols_ms", 0.0), getattr(S, "cols_n", 0),
+                int(np.isin(cols0, (1, 2)).sum()), int(np.isin(cols0, (0, 6)).sum())))
+            S.cols_n = 0
         pick_b, rate, state = w._cycle_impact(is_buy, strong, move, cbuy, csell)
         # THE LEADER of every cycle (user 2026-09-25, the tablet's KEPT TICKS BY LEADER pane): the I x I pane's own
         # rule (_iimp_rate's lead_buy) -- the side whose aggressive $/s runs further above the median of the previous

@@ -450,6 +450,32 @@ def same_side_diff_loop(vals, is_dom_buy, done, n_base: int, min_n: int) -> np.n
     return out
 
 
+# THE BREAKOUT GATE (user 2026-09-25). Heavy AND fast is no longer enough: "the wall should be > 1x, the impact >= 1.5x
+# and the kept >= 70%" -- ADDED to heavy + fast, read on the INTEREST x IMPACT pane's own numbers for the cycle's LEADER;
+# a heavy + fast cycle that fails is QUIET (plain candle, gray card). And "for the purple bright and green bright that do
+# not fit the definition of breakout they should be labeled as absorbed buy/sell because the interest was on one side
+# and the candle closed the opposite side": what used to be drawn BRIGHT -- price closed against the leader although the
+# leader's push converted -- is ABSORBED, named by the leader. (Kept >= 70% means price closed the leader's way, so a
+# breakout can no longer be bright at all.)
+BREAK_QUIET, BREAK_ABSORBED, BREAK_OK = 0, 1, 2
+
+
+def breakout_class(lead, wall, imp, kept, short, good, contra, wall_min=1.0, imp_min=1.5, kept_min=0.70):
+    """What a cycle the quadrant map calls BREAKOUT (heavy AND fast) is under the 2026-09-25 rule, element-wise, from the
+    I x I reading of its LEADER (lead +1 buyers / -1 sellers / 0 unrated): BREAK_OK when the wall is above wall_min x,
+    the impact at least imp_min x on a real push (a SHORT push quotes no multiple) and at least kept_min of the reach is
+    kept at the close; BREAK_ABSORBED when price closed against the leader although its push converted (the old bright
+    pair); BREAK_QUIET otherwise, an unrated cycle included."""
+    lead = np.asarray(lead)
+    with np.errstate(invalid="ignore"):
+        rated = lead != 0
+        ok = (rated & (np.asarray(wall, dtype=np.float64) > float(wall_min))
+              & (np.asarray(imp, dtype=np.float64) >= float(imp_min)) & ~np.asarray(short, dtype=bool)
+              & (np.asarray(kept, dtype=np.float64) >= float(kept_min)))
+        ab = rated & ~ok & np.asarray(contra, dtype=bool) & np.asarray(good, dtype=bool)
+    return np.where(ok, BREAK_OK, np.where(ab, BREAK_ABSORBED, BREAK_QUIET))
+
+
 def _quadrant(heavy, big, up, dom_buy):
     """The user's quadrant map. Breakout and vacuum name the direction PRICE went; absorption names the side
     doing the AGGRESSING -- the one being absorbed -- which is the cycle's own dominance flag, i.e. exactly
@@ -520,7 +546,7 @@ def build_rows(t, t_end, done, move, side_dom, vol_ratio, speed_ratio,
                bid_ratio, ask_ratio, buy_ratio, sell_ratio, flat_ticks, weak_below, max_rows,
                now=None, live=True, px_start=None, px_end=None, px_dec=2,
                slow_c=0.65, fast_c=1.50, px_hi=None, px_lo=None,
-               tick=0.01, push_min=2.0, reject_weak=0.68, iimp=None):
+               tick=0.01, push_min=2.0, reject_weak=0.68, iimp=None, brk=(1.0, 1.5, 0.70)):
     """One display row per cycle, NEWEST FIRST. Pure function of arrays -- no Qt, so it is directly testable.
 
     Every string is built here, once per rebuild, so paintEvent only ever draws pre-made text."""
@@ -575,6 +601,21 @@ def build_rows(t, t_end, done, move, side_dom, vol_ratio, speed_ratio,
         """The I x I pane's orange for this row: its tape ratios ARE the pane's interest (same lookback)."""
         return bool(iimp_contra(_at(buy_ratio, k), _at(sell_ratio, k), mv[k]))
 
+    def _gate(st, side, k):
+        """The 2026-09-25 breakout gate on one row (breakout_class): a BREAKOUT stays one, turns ABSORBED by its leader,
+        or QUIET. No I x I reading at all -> QUIET: the gate cannot be passed on nothing."""
+        if st != ST_BREAK:
+            return st, side
+        if iimp is None:
+            return ST_QUIET, ""
+        c = int(breakout_class(iimp["lead"][k], _at(iimp["wall"], k), _at(iimp["imp"], k), _at(iimp["kept"], k),
+                               bool(iimp["short"][k]), bool(iimp["good"][k]), bool(iimp["contra"][k]), *brk))
+        if c == BREAK_OK:
+            return st, side
+        if c == BREAK_ABSORBED:
+            return ST_ABSORB, ("buy" if int(iimp["lead"][k]) > 0 else "sell")
+        return ST_QUIET, ""
+
     rows = []
     order = range(n - 1, -1, -1)
     for k in order:
@@ -599,7 +640,7 @@ def build_rows(t, t_end, done, move, side_dom, vol_ratio, speed_ratio,
                 rows.append((t0, t0 + el, head, "forming", "", ("", ""), ST_FORMING, False, False, C_FORMING, "", 0, "",
                              _raw(k, ST_FORMING, "", el)))
                 continue
-            st, side = _quadrant(heavy[k], big[k], up[k], sd[k])
+            st, side = _gate(*_quadrant(heavy[k], big[k], up[k], sd[k]), k)
             _mt, _mw, _ms = move_text(_at(px_start, k), _at(px_end, k), mv[k], flat[k], sr[k],
                                       slow_c, fast_c, px_dec)
             if st == ST_ABSORB:
@@ -620,7 +661,7 @@ def build_rows(t, t_end, done, move, side_dom, vol_ratio, speed_ratio,
                          "-", "not enough history yet", ("", ""), ST_QUIET, False, False, C_QUIET, "", 0, "",
                          _raw(k, -1, "", t1 - t0)))
             continue
-        st, side = _quadrant(heavy[k], big[k], up[k], sd[k])
+        st, side = _gate(*_quadrant(heavy[k], big[k], up[k], sd[k]), k)
         _mt, _mw, _ms = move_text(_at(px_start, k), _at(px_end, k), mv[k], flat[k], sr[k],
                                   slow_c, fast_c, px_dec)
         _strong = bool(conf[k] >= float(weak_below))

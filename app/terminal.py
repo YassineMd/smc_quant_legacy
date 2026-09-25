@@ -48,6 +48,8 @@ from .flow_interp import (FlowInterpPanel, build_rows as _interp_build_rows, pre
                           C_BREAK_BUY as _C_BRK_BUY, C_BREAK_SELL as _C_BRK_SELL,
                           C_BREAK_BUY_X as _C_BRK_BUY_X, C_BREAK_SELL_X as _C_BRK_SELL_X,
                           iimp_contra as _iimp_contra,
+                          breakout_class as _breakout_class, BREAK_OK as _BREAK_OK,
+                          BREAK_ABSORBED as _BREAK_ABSORBED,
                           )
 from .region_state import EXH_WINDOW, exhaustion_mults as _exhaustion_mults
 from .alerts import AlertsLedger
@@ -19418,7 +19420,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         except Exception:
             pass
 
-    def _px_state_cols(self, t, t_end, done, move, is_buy, strong, cbuy, csell):
+    def _px_state_cols(self, t, t_end, done, move, is_buy, strong, cbuy, csell, px0=None, px1=None, pxh=None,
+                       pxl=None):
         """A colour index per cycle, from the SAME quadrant map the Interpretation feed classifies with.
 
         ⚠ the ratios need history from BEFORE the drawn window -- which is exactly why _px_tick reads back
@@ -19440,25 +19443,38 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # ABSORBED. VACUUM and QUIET deliberately come back as -1 and are drawn on the Chart Style's own
         # bearish-fill / bullish-hollow pair -- colouring all six (which I did first) makes the two that
         # matter compete with four that do not, which is the opposite of what a colour code is for.
-        # A BREAKOUT whose I x I bar is ORANGE (user 2026-09-23) -- its leader is not the way price broke -- takes
-        # the bright pair. The leader is read exactly as the I x I pane reads it: each side's aggressive $/s over its
-        # own last N, the SAME lookback, so the candle and the orange bar cannot disagree.
+        # THE BREAKOUT GATE (user 2026-09-25, flow_interp.breakout_class): heavy AND fast is a BREAKOUT only when the
+        # I x I leader's wall is above 1x, its impact at least 1.5x and its kept at least 70%; what used to be BRIGHT
+        # (price closed against a leader whose push converted) is ABSORBED, named by the leader; the rest of heavy +
+        # fast is a plain candle (QUIET). Read on the I x I pane's own rating of THIS read (_iimp_rate + _iimp_core),
+        # the same lookback, so the candle and the card cannot disagree. No prices -> no reading -> no breakout.
         te = np.array(t_end, dtype=np.float64, copy=True)
         if n and not bool(done[-1]):
             te[-1] = max(float(t[-1]), min(time.time(), float(te[-1])))
-        dur = np.maximum(te - np.asarray(t, dtype=np.float64), 1e-9)
-        try:
-            _arb = _interp_prev(np.maximum(np.asarray(cbuy, dtype=np.float64), 0.0) / dur, done,
-                                self._lb_n(), self._lb_min_n(), include_open=True)
-            _ars = _interp_prev(np.maximum(np.asarray(csell, dtype=np.float64), 0.0) / dur, done,
-                                self._lb_n(), self._lb_min_n(), include_open=True)
-            cx = _iimp_contra(_arb, _ars, move)
-        except Exception:
-            cx = np.zeros(n, dtype=bool)
-        col = np.where(heavy & big, np.where(up, np.where(cx, _C_BRK_BUY_X, _C_BRK_BUY),
-                                             np.where(cx, _C_BRK_SELL_X, _C_BRK_SELL)),
-              np.where(heavy, np.where(side, _C_AB_BUY, _C_AB_SELL), -1))
+        cls = np.zeros(n, dtype=np.int64); lead = np.zeros(n, dtype=np.int64)
+        if px0 is not None and px1 is not None and pxh is not None and pxl is not None:
+            try:
+                C_ = self._iimp_core(self._iimp_rate(t, te, done, cbuy, csell, px0, px1, pxh, pxl,
+                                                     self._lb_n(), self._lb_min_n()), px0, px1)
+                cls = _breakout_class(C_["lead"], C_["wall"], C_["imp"], C_["kept"], C_["short"], C_["good"],
+                                      C_["contra"], float(config.BREAK_WALL_MIN), float(config.BREAK_IMPACT_MIN),
+                                      float(config.BREAK_KEPT_MIN))
+                lead = C_["lead"]
+            except Exception as _e:
+                print("PX BREAKOUT GATE: %s" % _e)
+        brk = heavy & big
+        col = np.where(brk & (cls == _BREAK_OK), np.where(up, _C_BRK_BUY, _C_BRK_SELL),
+              np.where(brk & (cls == _BREAK_ABSORBED), np.where(lead > 0, _C_AB_BUY, _C_AB_SELL),
+              np.where(heavy & ~big, np.where(side, _C_AB_BUY, _C_AB_SELL), -1)))
         return np.where(ok, col, -1).astype(np.int64)
+
+    def _px_gate_pending(self, t0: float) -> bool:
+        """True while the breakout gate of the cycle starting at t0 cannot be FINAL: its wall -- the far side's resting
+        $ at the OPEN, from the canonical grid column that ends at or before it (_iimp_wall) -- is not in the grid yet,
+        or is still PROVISIONAL (fetched before its snapshot landed). The PRICE pane's cache re-rates such a candle once
+        that column is final instead of freezing a colour rated without it (2026-09-25)."""
+        c = int(np.floor(float(t0) / float(config.IIMP_WALL_COL_SECS))) - 1
+        return (c not in self._wall_grid) or (c in self._wall_prov)
 
     def _px_quadrants(self, t, t_end, done, move, is_buy, strong, cbuy, csell):
         """(ok, heavy, big, up, side) per cycle -- the quadrant map's two axes, or None when they cannot be rated.
@@ -19808,7 +19824,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
         def _cols():
             if not _memo:
-                _memo.append(self._px_state_cols(t, t_end, done, move, is_buy, strong, cbuy, csell))
+                _memo.append(self._px_state_cols(t, t_end, done, move, is_buy, strong, cbuy, csell,
+                                                 px0, px1, pxh, pxl))
             return _memo[0]
 
         def _depth():                              # cheap; asked on most ticks, so memoised like _cols
@@ -19873,7 +19890,8 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
 
         def _cols():
             if not _memo:
-                _memo.append(self._px_state_cols(t, t_end, done, move, is_buy, strong, cbuy, csell))
+                _memo.append(self._px_state_cols(t, t_end, done, move, is_buy, strong, cbuy, csell,
+                                                 px0, px1, pxh, pxl))
             return _memo[0]
 
         def _depth():                              # cheap; asked on most ticks, so memoised like _cols
@@ -20023,9 +20041,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                             break
             if old is not None and abs(float(t_end[k]) - float(old[1])) <= 0.5:
                 _older = int(old[8]) != _R                       # the tape behind that rating has changed
-                if int(old[7]) >= _N and not _older:
+                if not _older and not np.isfinite(float(old[9])):
+                    # rated while its BREAKOUT GATE could not be final (its wall column missing or provisional; the
+                    # read start is stored as +inf for exactly that): re-rated once the column is final, not before
+                    if self._px_gate_pending(float(t[k])):
+                        continue
+                elif int(old[7]) >= _N and not _older:
                     continue                      # FINAL: the full window, and nothing behind it has changed
-                if not _older:
+                elif not _older:
                     if float(a) >= float(old[9]) - 1.0:
                         continue                  # starts no earlier than the read that rated it: it cannot
                     #                               stand on more history, so the depth is what it was
@@ -20122,9 +20145,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         gained = 0
         for k, key, old in _want:
             ci = int(cols[k]); dk = int(_dep[k])
+            _aa = float("inf") if self._px_gate_pending(float(t[k])) else float(a)   # see PASS 1: re-rate when final
             if (old is not None and abs(float(t_end[k]) - float(old[1])) <= 0.5
                     and round(float(old[0]), 3) == key):
-                cache[key] = old[:6] + (ci, dk, float(_R), float(a))   # the same cycle, re-rated: colour, depth, R, from where
+                cache[key] = old[:6] + (ci, dk, float(_R), _aa)   # the same cycle, re-rated: colour, depth, R, from where
             else:
                 # ⚠⚠ a cycle ALREADY CACHED can legitimately GROW: crosses() MERGES consecutive same-side
                 # cycles, so as live tape arrives the run this cycle heads can swallow the next one -- same
@@ -20137,7 +20161,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 # whole entry is replaced, with THIS read's colour, depth and R; a shallow rating is picked
                 # up by the next read that stands on more, which is exactly what those slots are for.
                 cache[key] = (float(t[k]), float(t_end[k]), float(px0[k]), float(pxh[k]), float(pxl[k]),
-                              float(px1[k]), ci, dk, float(_R), float(a))
+                              float(px1[k]), ci, dk, float(_R), _aa)
             gained += 1
         gained += _dropped
         if not gained:
@@ -20803,7 +20827,9 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                                   px_hi=pxh[k], px_lo=pxl[k], tick=float(config.TICK_SIZE),
                                   push_min=float(config.ABSORB_PUSH_MIN_TICKS),
                                   reject_weak=float(config.ABSORB_REJECT_WEAK),
-                                  iimp=({_kk: _v[k] for _kk, _v in _ii.items()} if _ii is not None else None))
+                                  iimp=({_kk: _v[k] for _kk, _v in _ii.items()} if _ii is not None else None),
+                                  brk=(float(config.BREAK_WALL_MIN), float(config.BREAK_IMPACT_MIN),
+                                       float(config.BREAK_KEPT_MIN)))
         rows = self._interp_bright_demote(rows)
         # THE AUCTION READING (2026-09-24): computed with the cards' I x I reading and kept for the snapshot file (the
         # Claude connector, /auction-read) -- NEVER drawn on the cards (the card strip was removed at the user's word:
@@ -22908,12 +22934,11 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             s2 = ""
         return s1 + (" " + s2 if s2 else "")
 
-    def _interp_iimp(self, t, t_end_c, done, cbuy, csell, px0, px1, pxh, pxl):
-        """The I x I pane's reading of every cycle, for the Interpretation CARDS (user 2026-09-24: "add the summary
-        that i see on top (interest, impact, wall and kept) in the interpretation, and just below it ... the why"):
-        column arrays aligned with `t`, lead 0 where the pane cannot rate the cycle."""
-        n_lb = self._lb_n(); n_mn = self._lb_min_n()
-        R = self._iimp_rate(t, t_end_c, done, cbuy, csell, px0, px1, pxh, pxl, n_lb, n_mn)
+    @staticmethod
+    def _iimp_core(R, px0, px1) -> dict:
+        """The I x I reading every reader quotes, from _iimp_rate's R: the leader, its impact, conversion and kept,
+        whether price went against it, its wall -- ONE arithmetic for the cards (_interp_iimp) and the candles'
+        breakout gate (_px_state_cols, user 2026-09-25), so a candle can never be judged on a number no card shows."""
         lb = R["lead_buy"]; score = R["score"]; reach = R["reach"]
         rated = np.isfinite(R["imb"]) & np.isfinite(score)
         short = R["short"]
@@ -22922,9 +22947,24 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
             kept = np.where(np.isfinite(reach) & np.isfinite(lmv) & (reach >= float(config.IIMP_KEEP_MIN_TICKS)),
                             lmv / np.maximum(reach, 1e-9), np.nan)
-            imp = np.exp(score); pb = np.exp(R["score_pb"]); mult = 2.0 ** np.abs(R["imb"])
+            imp = np.exp(score)
         contra = rated & np.isfinite(mvt) & ((lb & (mvt < 0)) | (~lb & (mvt > 0)))
         good = rated & (score >= 0.0) & ~short
+        return {"lb": lb, "rated": rated, "lmv": lmv, "kept": kept, "imp": imp, "contra": contra, "good": good,
+                "lead": np.where(rated, np.where(lb, 1, -1), 0), "wall": np.where(rated, R["wall"], np.nan),
+                "short": rated & short}
+
+    def _interp_iimp(self, t, t_end_c, done, cbuy, csell, px0, px1, pxh, pxl):
+        """The I x I pane's reading of every cycle, for the Interpretation CARDS (user 2026-09-24: "add the summary
+        that i see on top (interest, impact, wall and kept) in the interpretation, and just below it ... the why"):
+        column arrays aligned with `t`, lead 0 where the pane cannot rate the cycle."""
+        n_lb = self._lb_n(); n_mn = self._lb_min_n()
+        R = self._iimp_rate(t, t_end_c, done, cbuy, csell, px0, px1, pxh, pxl, n_lb, n_mn)
+        C_ = self._iimp_core(R, px0, px1)
+        lb = C_["lb"]; score = R["score"]; reach = R["reach"]; rated = C_["rated"]; short = R["short"]
+        lmv = C_["lmv"]; kept = C_["kept"]; imp = C_["imp"]; contra = C_["contra"]; good = C_["good"]
+        with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+            pb = np.exp(R["score_pb"]); mult = 2.0 ** np.abs(R["imb"])
         nan = np.nan
         why = np.array([self._iimp_why_short(bool(lb[i]), bool(contra[i]), bool(good[i]), float(imp[i]),
                                              float(R["wall"][i]), float(kept[i]), float(lmv[i]),

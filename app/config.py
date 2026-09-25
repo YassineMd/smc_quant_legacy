@@ -638,6 +638,11 @@ IIMP_WALL_RADIUS = 25           # the wall is read within +-this many ticks of m
 # fetched it. ⚠ Before this, the same cycle read differently depending on where the user had panned (measured:
 # 31/97 I x I and 40/91 LINES IMPACT cycles changed between a cold and a warm read of the same view).
 IIMP_WALL_COL_SECS = 15         # the snapshots come every ~30 s; 15 s columns never skip one
+# THE BREAKOUT GATE (user 2026-09-25: "the wall should be > 1x, the impact >= 1.5x and the kept >= 70%"), ADDED to heavy
+# flow + fast price, read on the I x I pane's numbers for the cycle's leader (flow_interp.breakout_class)
+BREAK_WALL_MIN = 1.0            # the wall in the leader's way, x its normal: strictly above
+BREAK_IMPACT_MIN = 1.5          # the leader's impact (reach x its usual): at least; a SHORT push quotes none
+BREAK_KEPT_MIN = 0.70           # the share of that reach kept at the close: at least
 IIMP_WALL_CHUNK = 900           # columns per request (3.75 h; ~50 KB, the Limit Orders pane's own budget)
 # THE LIVE EDGE (2026-09-23). A new cycle is only known ~20 s after it opened (FLOW_CROSS_MIN_HOLD_SECS), and its
 # wall is the column that ENDS at or before its open -- so that column has been over for 20 s or more by then.
