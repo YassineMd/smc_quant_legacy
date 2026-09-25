@@ -34,8 +34,9 @@ Left, top to bottom (panes can be hidden, so check which ones are there):
   - orange = BUYERS ABSORBED, blue = SELLERS ABSORBED: heavy flow without the speed, or a heavy, fast cycle that
     closed AGAINST its leader after that leader's push converted (named by the leader: the side that held the
     interest was absorbed);
-  - faint green / faint red = VACUUM up / down: light flow and fast price, AND the leader's wall and the other
-    side's tape both under 1x (nothing stood in the leader's way);
+  - faint green / faint red = VACUUM up / down: fast price (whatever the total flow) AND the leader's wall and the
+    other side's tape both under 1x (nothing stood in the leader's way); a heavy, fast cycle is a breakout or the
+    absorbed case first;
   - every other cycle is NORMAL (called QUIET before 2026-09-25): plain black (down) / white (up).
   On top of the candles:
   - **HLH lines**: each bloc's VAH / VAL, with dashes for its POC;

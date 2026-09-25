@@ -648,7 +648,9 @@ BREAK_KEPT_MIN = 0.70           # the share of that reach kept at the close: at 
 # THE VACUUM GATE (user 2026-09-25: "if its buy interest the sell tape and wall should be <1x, if its sell interest the
 # buy tape and wall should be < 1x"), ADDED to light flow + fast price, read on the I x I pane's numbers for the cycle's
 # INTEREST LEADER (flow_interp.vacuum_ok): nothing stood in its way -- no wall, no aggression from the other side. The
-# mirror of the breakout gate (wall >= 1x OR opposite tape >= 1x). A light, fast cycle that fails it is QUIET.
+# mirror of the breakout gate (wall >= 1x OR opposite tape >= 1x). The same day: "remove the overall flow filter from
+# the vaccum because we already have the opposite tape and wall filter" -- ANY fast cycle, heavy or light (a heavy one
+# is tried as a breakout, then as the absorbed case, first). A fast cycle that fails every gate is NORMAL.
 VAC_WALL_MAX = 1.0              # the wall in the leader's way, x its normal: under ...
 VAC_OPP_TAPE_MAX = 1.0          # ... AND the OTHER side's tape (its aggressive $/s x its own normal): under
 # Its CANDLE: the breakout candle's own green / red ("use the same green and red on the breakout candle"), outline and

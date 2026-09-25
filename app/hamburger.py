@@ -1883,8 +1883,8 @@ class FloatingOverlayMenu(QtWidgets.QFrame):
             "fast price moved, places it on the state-space map; the I x I reading then decides -- BREAKOUT "
             "(heavy flow, fast price, the leader's wall or the other side's tape at least 1x, impact at least "
             "1.5x, at least 70% kept), ABSORPTION (heavy flow, price holds -- or a heavy, fast cycle that "
-            "closed against a leader whose push converted), VACUUM (little flow, fast price, the leader's wall "
-            "and the other side's tape under 1x) and NORMAL for everything else -- plus the side. A named "
+            "closed against a leader whose push converted), VACUUM (fast price, whatever the flow, with the "
+            "leader's wall and the other side's tape under 1x) and NORMAL for everything else -- plus the side. A named "
             "state sitting near its own baseline on either axis is drawn DIM and marked weak. The bid/ask book "
             "figures beside each state are EVIDENCE, not part of the classification. Click a row to centre "
             "the chart on that cycle.")

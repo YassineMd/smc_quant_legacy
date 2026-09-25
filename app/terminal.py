@@ -19451,9 +19451,9 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         # (price closed against a leader whose push converted) is ABSORBED, named by the leader; the rest of heavy +
         # fast is a plain candle (QUIET). Read on the I x I pane's own rating of THIS read (_iimp_rate + _iimp_core),
         # the same lookback, so the candle and the card cannot disagree. No prices -> no reading -> no breakout.
-        # THE VACUUM GATE (user 2026-09-25, flow_interp.vacuum_ok) on the same reading: light AND fast is a VACUUM only
-        # when the interest leader's wall AND the other side's tape are under 1x; the rest of light + fast is a plain
-        # candle (QUIET).
+        # THE VACUUM GATE (user 2026-09-25, flow_interp.vacuum_ok) on the same reading: a FAST cycle -- whatever its
+        # flow, the user dropped the flow filter -- that is not a breakout or the absorbed case is a VACUUM when the
+        # interest leader's wall AND the other side's tape are under 1x; the rest is a plain candle (NORMAL).
         te = np.array(t_end, dtype=np.float64, copy=True)
         if n and not bool(done[-1]):
             te[-1] = max(float(t[-1]), min(time.time(), float(te[-1])))
@@ -19475,7 +19475,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         col = np.where(brk & (cls == _BREAK_OK), np.where(up, _C_BRK_BUY, _C_BRK_SELL),
               np.where(brk & (cls == _BREAK_ABSORBED), np.where(lead > 0, _C_AB_BUY, _C_AB_SELL),
               np.where(heavy & ~big, np.where(side, _C_AB_BUY, _C_AB_SELL),
-              np.where(~heavy & big & vok, np.where(up, _C_VAC_UP, _C_VAC_DN), -1))))
+              np.where(big & vok, np.where(up, _C_VAC_UP, _C_VAC_DN), -1))))
         return np.where(ok, col, -1).astype(np.int64)
 
     def _px_gate_pending(self, t0: float) -> bool:

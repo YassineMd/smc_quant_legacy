@@ -494,13 +494,15 @@ def breakout_class(lead, wall, imp, kept, short, good, contra, opp, wall_min=1.0
 
 
 # THE VACUUM GATE (user 2026-09-25: "if its buy interest the sell tape and wall should be <1x, if its sell interest the
-# buy tape and wall should be < 1x"). Light flow + fast price is no longer enough: for the cycle's INTEREST LEADER, the
-# wall in its way AND the other side's tape (its aggressive $/s against its own last N -- the card's other tape bar) must
-# both be under 1x: nothing stood in the way. The exact mirror of the breakout gate's "wall >= 1x OR opposite tape >= 1x".
-# A light, fast cycle that fails it is QUIET; an unrated one (no leader, no wall) fails: the gate is not passed on nothing.
+# buy tape and wall should be < 1x"): for the cycle's INTEREST LEADER, the wall in its way AND the other side's tape (its
+# aggressive $/s against its own last N -- the card's other tape bar) must both be under 1x: nothing stood in the way.
+# The exact mirror of the breakout gate's "wall >= 1x OR opposite tape >= 1x", so no cycle can pass both. Then, the same
+# day: "remove the overall flow filter from the vaccum because we already have the opposite tape and wall filter" -- a
+# vacuum is FAST price whatever the total flow; a heavy, fast cycle is tried as a breakout first, then as the absorbed
+# case, then as a vacuum. An unrated cycle (no leader, no wall) fails: the gate is not passed on nothing.
 def vacuum_ok(lead, wall, opp, wall_max=1.0, opp_max=1.0):
-    """Element-wise: does a cycle the quadrant map calls VACUUM (light AND fast) pass the 2026-09-25 gate? `lead` +1
-    buyers / -1 sellers / 0 unrated (the I x I leader), `opp` the tape of the side NOT leading."""
+    """Element-wise: does a FAST cycle (any flow) pass the 2026-09-25 vacuum gate? `lead` +1 buyers / -1 sellers / 0
+    unrated (the I x I leader), `opp` the tape of the side NOT leading."""
     with np.errstate(invalid="ignore"):
         return ((np.asarray(lead) != 0)
                 & (np.asarray(wall, dtype=np.float64) < float(wall_max))
@@ -508,16 +510,17 @@ def vacuum_ok(lead, wall, opp, wall_max=1.0, opp_max=1.0):
 
 
 def gate_why_not(qst, lead, wall, opp, imp, kept, short, contra, brk=(1.0, 1.5, 0.70, 1.0), vac=(1.0, 1.0)):
-    """THE CARD'S WHY-NOT (user 2026-09-25): one line for a cycle the quadrant map put in the BREAKOUT or VACUUM square
-    that ended NORMAL -- which of that state's I x I conditions failed, in the numbers the card's tiles print. `brk` /
+    """THE CARD'S WHY-NOT (user 2026-09-25): the line for a FAST cycle (the quadrant's BREAKOUT or VACUUM square) that
+    ended NORMAL -- which conditions failed, in the numbers the card's tiles print. A heavy, fast cycle could have been
+    a breakout OR a vacuum (the vacuum has no flow filter), so its line names both; a light one only the vacuum. `brk` /
     `vac` are build_rows' thresholds, `opp` the tape of the side NOT leading. "" when nothing failed."""
     fin = lambda v: v is not None and math.isfinite(v)
     fx = lambda v: "–" if not fin(v) else (("%.0f×" % v) if v >= 10 else ("%.2f×" % v))
     thr = lambda v: "%g×" % float(v)
-    name = "breakout" if qst == ST_BREAK else "vacuum"
     if int(lead) == 0:
-        return "Not a %s: the I×I could not rate it" % name
+        return "Not a %s: the I×I could not rate it" % ("breakout or a vacuum" if qst == ST_BREAK else "vacuum")
     other = "sellers'" if int(lead) > 0 else "buyers'"
+    out = []
     parts = []
     if qst == ST_BREAK:
         wall_min, imp_min, kept_min, opp_min = [float(v) for v in brk]
@@ -537,15 +540,19 @@ def gate_why_not(qst, lead, wall, opp, imp, kept, short, contra, brk=(1.0, 1.5, 
             elif not (fin(kept) and kept >= kept_min):
                 parts.append("kept %s (needs %d%%)" % (("%d%%" % int(round(100.0 * kept))) if fin(kept) else "–",
                                                       int(round(100.0 * kept_min))))
-    else:
-        wall_max, opp_max = [float(v) for v in vac]
-        if not fin(wall):
-            parts.append("no wall reading yet")
-        elif not wall < wall_max:
-            parts.append("wall %s (needs under %s)" % (fx(wall), thr(wall_max)))
-        if not (fin(opp) and opp < opp_max):
-            parts.append("%s tape %s (needs under %s)" % (other, fx(opp), thr(opp_max)))
-    return ("Not a %s: %s" % (name, ", ".join(parts))) if parts else ""
+        if parts:
+            out.append("Not a breakout: " + ", ".join(parts))
+    parts = []
+    wall_max, opp_max = [float(v) for v in vac]
+    if not fin(wall):
+        parts.append("no wall reading yet")
+    elif not wall < wall_max:
+        parts.append("wall %s (needs under %s)" % (fx(wall), thr(wall_max)))
+    if not (fin(opp) and opp < opp_max):
+        parts.append("%s tape %s (needs under %s)" % (other, fx(opp), thr(opp_max)))
+    if parts:
+        out.append("Not a vacuum: " + ", ".join(parts))
+    return ". ".join(out)
 
 
 def _quadrant(heavy, big, up, dom_buy):
@@ -675,29 +682,25 @@ def build_rows(t, t_end, done, move, side_dom, vol_ratio, speed_ratio,
         return bool(iimp_contra(_at(buy_ratio, k), _at(sell_ratio, k), mv[k]))
 
     def _gate(st, side, k):
-        """The 2026-09-25 gates on one row. BREAKOUT (breakout_class): stays one, turns ABSORBED by its leader, or
-        NORMAL. VACUUM (vacuum_ok, on the I x I leader's wall and the other side's tape): stays one or turns NORMAL. No
-        I x I reading at all -> NORMAL: neither gate can be passed on nothing."""
-        if st == ST_VACUUM:
-            if iimp is None:
-                return ST_QUIET, ""
-            ld = int(iimp["lead"][k])
-            opp = _at(iimp["is"], k) if ld > 0 else (_at(iimp["ib"], k) if ld < 0 else float("nan"))
-            if bool(vacuum_ok(ld, _at(iimp["wall"], k), opp, *vac)):
-                return st, side
-            return ST_QUIET, ""
-        if st != ST_BREAK:
+        """The 2026-09-25 gates on one FAST row (the quadrant's BREAKOUT or VACUUM square), in order: a heavy one is
+        tried as a BREAKOUT (breakout_class), then as the ABSORBED case (closed against a leader whose push converted);
+        then ANY fast row as a VACUUM (vacuum_ok, whatever the flow: the user dropped the flow filter); else NORMAL.
+        No I x I reading at all -> NORMAL: no gate can be passed on nothing. Slow rows keep the quadrant's state."""
+        if st not in (ST_BREAK, ST_VACUUM):
             return st, side
         if iimp is None:
             return ST_QUIET, ""
         ld = int(iimp["lead"][k])
         opp = _at(iimp["is"], k) if ld > 0 else (_at(iimp["ib"], k) if ld < 0 else float("nan"))   # the OTHER side's tape
-        c = int(breakout_class(ld, _at(iimp["wall"], k), _at(iimp["imp"], k), _at(iimp["kept"], k),
-                               bool(iimp["short"][k]), bool(iimp["good"][k]), bool(iimp["contra"][k]), opp, *brk))
-        if c == BREAK_OK:
-            return st, side
-        if c == BREAK_ABSORBED:
-            return ST_ABSORB, ("buy" if int(iimp["lead"][k]) > 0 else "sell")
+        if st == ST_BREAK:
+            c = int(breakout_class(ld, _at(iimp["wall"], k), _at(iimp["imp"], k), _at(iimp["kept"], k),
+                                   bool(iimp["short"][k]), bool(iimp["good"][k]), bool(iimp["contra"][k]), opp, *brk))
+            if c == BREAK_OK:
+                return st, side
+            if c == BREAK_ABSORBED:
+                return ST_ABSORB, ("buy" if ld > 0 else "sell")
+        if bool(vacuum_ok(ld, _at(iimp["wall"], k), opp, *vac)):
+            return ST_VACUUM, side                   # named by the way PRICE went, as the quadrant names both
         return ST_QUIET, ""
 
     def _why_not(qst, st, k):
@@ -706,7 +709,7 @@ def build_rows(t, t_end, done, move, side_dom, vol_ratio, speed_ratio,
         if st != ST_NORMAL or qst not in (ST_BREAK, ST_VACUUM):
             return ""
         if iimp is None:
-            return "Not a %s: no I×I reading" % ("breakout" if qst == ST_BREAK else "vacuum")
+            return "Not a %s: no I×I reading" % ("breakout or a vacuum" if qst == ST_BREAK else "vacuum")
         ld = int(iimp["lead"][k])
         opp = _at(iimp["is"], k) if ld > 0 else (_at(iimp["ib"], k) if ld < 0 else float("nan"))
         return gate_why_not(qst, ld, _at(iimp["wall"], k), opp, _at(iimp["imp"], k), _at(iimp["kept"], k),
