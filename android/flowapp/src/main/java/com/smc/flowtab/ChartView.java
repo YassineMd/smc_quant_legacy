@@ -893,8 +893,10 @@ public final class ChartView extends View {
     // A FINISHED cycle is marked for a side -- a green ▲ under the buyers', a red ▼ over the sellers' -- when both hold:
     //   1. KEPT TICKS, always ROLLING 3 (whatever the pane shows): that side's >= 0 AND the other side's < 0 -- or, since
     //      2026-09-26 ("sellers >= 0 and buyers < 0 or sellers >= 0 and buyers decreased"), the other side's FELL since the
-    //      previous closed cycle (strictly lower than its rolling 3 there). Each side is tried on its own; the candle
-    //      rule below keeps the two apart on anything but a 0-tick doji;
+    //      previous closed cycle (strictly lower than its rolling 3 there). ON TOP of that (user 2026-09-26: "sellers kept
+    //      ticks should have increase from its previous cycle"): that side's OWN rolling 3 must be strictly higher than
+    //      at the previous closed cycle. Each side is tried on its own; the candle rule below keeps the two apart on
+    //      anything but a 0-tick doji;
     //   2. LINES IMPACT: that side's line has a THICK CLIMB at that cycle (runMark +1: the very segment drawn thick);
     //   3. THE CANDLE: a green badge is never on a BEARISH candle, a red one never on a BULLISH candle (user 2026-09-25)
     //      -- close vs open in whole ticks, like the kept ticks; a doji (0t) is neither, so it blocks nothing.
@@ -918,10 +920,12 @@ public final class ChartView extends View {
         return side > 0 ? mvTicks >= 0 : mvTicks <= 0;
     }
 
-    /** Condition 1 for ONE side: its rolling kept >= 0, and the other side's below 0 OR lower than at the previous
-     *  closed cycle (`otherPrev`, NaN when there is none). */
-    private static boolean keptOk(float own, float other, float otherPrev) {
-        return own >= 0 && (other < 0 || (!Float.isNaN(otherPrev) && other < otherPrev));
+    /** Condition 1 for ONE side: its rolling kept >= 0 AND higher than at the previous closed cycle (`ownPrev`), and the
+     *  other side's below 0 OR lower than at the previous closed cycle (`otherPrev`). NaN = no previous cycle: then the
+     *  side cannot show a rise, so it does not qualify. */
+    private static boolean keptOk(float own, float other, float ownPrev, float otherPrev) {
+        return own >= 0 && !Float.isNaN(ownPrev) && own > ownPrev
+                && (other < 0 || (!Float.isNaN(otherPrev) && other < otherPrev));
     }
 
     private void tkoBuild(Snap s) {
@@ -945,7 +949,7 @@ public final class ChartView extends View {
                 rb[cnt % TKO_KEPT_N] = kv[0]; rs[cnt % TKO_KEPT_N] = kv[1]; cnt++;
                 float sb = 0, ss = 0;
                 for (int q = 0; q < Math.min(cnt, TKO_KEPT_N); q++) { sb += rb[q]; ss += rs[q]; }
-                boolean okB = keptOk(sb, ss, ps), okS = keptOk(ss, sb, pb);
+                boolean okB = keptOk(sb, ss, pb, ps), okS = keptOk(ss, sb, ps, pb);
                 pb = sb; ps = ss;
                 if (!okB && !okS) continue;
                 if (okB) nKeptB++;
@@ -995,7 +999,7 @@ public final class ChartView extends View {
             pb += qb[q]; ps += qs[q];                                // the last closed cycle's own rolling N: "before"
         }
         if (got == 0) { pb = Float.NaN; ps = Float.NaN; }
-        boolean okB = keptOk(sb, ss, ps), okS = keptOk(ss, sb, pb);
+        boolean okB = keptOk(sb, ss, pb, ps), okS = keptOk(ss, sb, ps, pb);
         long mvT = Math.round((s.livePx - s.cO[last]) / Math.max(1e-12, s.tick));   // the live body
         FlowModel.Lines L = s.cimp;
         double[] lx0 = L.x0, lx1 = L.x1; byte[] lf = L.form;
