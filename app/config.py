@@ -643,6 +643,16 @@ IIMP_WALL_COL_SECS = 15         # the snapshots come every ~30 s; 15 s columns n
 # same day: "its either wall >=1x or opposite tape >=1x" -- the leader met a wall OR the other side's aggression.
 BREAK_WALL_MIN = 1.0            # the wall in the leader's way, x its normal: at least ...
 BREAK_OPP_TAPE_MIN = 1.0        # ... OR the OTHER side's tape (its aggressive $/s x its own normal): at least
+# THE VACUUM GATE (user 2026-09-25: "if its buy interest the sell tape and wall should be <1x, if its sell interest the
+# buy tape and wall should be < 1x"), ADDED to light flow + fast price, read on the I x I pane's numbers for the cycle's
+# INTEREST LEADER (flow_interp.vacuum_ok): nothing stood in its way -- no wall, no aggression from the other side. The
+# mirror of the breakout gate (wall >= 1x OR opposite tape >= 1x). A light, fast cycle that fails it is QUIET. Its candle
+# wears the breakout pair's hues, FAINT ("use very low opacity red/green for vaccum"): the tablet mirrors the two alphas
+# (ChartView.VAC_FILL_A / VAC_PEN_A).
+VAC_WALL_MAX = 1.0              # the wall in the leader's way, x its normal: under ...
+VAC_OPP_TAPE_MAX = 1.0          # ... AND the OTHER side's tape (its aggressive $/s x its own normal): under
+VAC_CANDLE_FILL_A = 56          # the vacuum candle's body, alpha out of 255 (~22%) ...
+VAC_CANDLE_PEN_A = 115          # ... its outline and wicks (~45%), so its high and low stay readable
 BREAK_IMPACT_MIN = 1.5          # the leader's impact (reach x its usual): at least; a SHORT push quotes none
 BREAK_KEPT_MIN = 0.70           # the share of that reach kept at the close: at least
 IIMP_WALL_CHUNK = 900           # columns per request (3.75 h; ~50 KB, the Limit Orders pane's own budget)

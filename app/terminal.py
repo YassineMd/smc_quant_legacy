@@ -50,6 +50,8 @@ from .flow_interp import (FlowInterpPanel, build_rows as _interp_build_rows, pre
                           iimp_contra as _iimp_contra,
                           breakout_class as _breakout_class, BREAK_OK as _BREAK_OK,
                           BREAK_ABSORBED as _BREAK_ABSORBED,
+                          vacuum_ok as _vacuum_ok, C_VACUUM_UP as _C_VAC_UP, C_VACUUM_DN as _C_VAC_DN,
+                          VACUUM_PX_COLS as _VAC_PX_COLS,
                           )
 from .region_state import EXH_WINDOW, exhaustion_mults as _exhaustion_mults
 from .alerts import AlertsLedger
@@ -19439,20 +19441,23 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if q is None:
             return out
         ok, heavy, big, up, side = q
-        # ⚠ ONLY the four states the user asked for carry a colour: BREAKOUT buy/sell and BUYER/SELLER
-        # ABSORBED. VACUUM and QUIET deliberately come back as -1 and are drawn on the Chart Style's own
-        # bearish-fill / bullish-hollow pair -- colouring all six (which I did first) makes the two that
-        # matter compete with four that do not, which is the opposite of what a colour code is for.
+        # ⚠ ONLY the states the user asked for carry a colour: BREAKOUT buy/sell, BUYER/SELLER ABSORBED and -- since
+        # 2026-09-25, FAINT ("use very low opacity red/green for vaccum") -- VACUUM up/down. QUIET deliberately comes
+        # back as -1 and is drawn on the Chart Style's own bearish-fill / bullish-hollow pair -- colouring everything
+        # (which I did first) makes the states that matter compete with the ones that do not.
         # THE BREAKOUT GATE (user 2026-09-25, flow_interp.breakout_class): heavy AND fast is a BREAKOUT only when the
         # I x I leader's wall is at least 1x OR the other side's tape at least 1x, its impact at least 1.5x and its kept
         # at least 70%; what used to be BRIGHT
         # (price closed against a leader whose push converted) is ABSORBED, named by the leader; the rest of heavy +
         # fast is a plain candle (QUIET). Read on the I x I pane's own rating of THIS read (_iimp_rate + _iimp_core),
         # the same lookback, so the candle and the card cannot disagree. No prices -> no reading -> no breakout.
+        # THE VACUUM GATE (user 2026-09-25, flow_interp.vacuum_ok) on the same reading: light AND fast is a VACUUM only
+        # when the interest leader's wall AND the other side's tape are under 1x; the rest of light + fast is a plain
+        # candle (QUIET).
         te = np.array(t_end, dtype=np.float64, copy=True)
         if n and not bool(done[-1]):
             te[-1] = max(float(t[-1]), min(time.time(), float(te[-1])))
-        cls = np.zeros(n, dtype=np.int64); lead = np.zeros(n, dtype=np.int64)
+        cls = np.zeros(n, dtype=np.int64); lead = np.zeros(n, dtype=np.int64); vok = np.zeros(n, dtype=bool)
         if px0 is not None and px1 is not None and pxh is not None and pxl is not None:
             try:
                 C_ = self._iimp_core(self._iimp_rate(t, te, done, cbuy, csell, px0, px1, pxh, pxl,
@@ -19462,16 +19467,19 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                                       float(config.BREAK_IMPACT_MIN), float(config.BREAK_KEPT_MIN),
                                       float(config.BREAK_OPP_TAPE_MIN))
                 lead = C_["lead"]
+                vok = _vacuum_ok(C_["lead"], C_["wall"], C_["opp"], float(config.VAC_WALL_MAX),
+                                 float(config.VAC_OPP_TAPE_MAX))
             except Exception as _e:
                 print("PX BREAKOUT GATE: %s" % _e)
         brk = heavy & big
         col = np.where(brk & (cls == _BREAK_OK), np.where(up, _C_BRK_BUY, _C_BRK_SELL),
               np.where(brk & (cls == _BREAK_ABSORBED), np.where(lead > 0, _C_AB_BUY, _C_AB_SELL),
-              np.where(heavy & ~big, np.where(side, _C_AB_BUY, _C_AB_SELL), -1)))
+              np.where(heavy & ~big, np.where(side, _C_AB_BUY, _C_AB_SELL),
+              np.where(~heavy & big & vok, np.where(up, _C_VAC_UP, _C_VAC_DN), -1))))
         return np.where(ok, col, -1).astype(np.int64)
 
     def _px_gate_pending(self, t0: float) -> bool:
-        """True while the breakout gate of the cycle starting at t0 cannot be FINAL: its wall -- the far side's resting
+        """True while the breakout / vacuum gate of the cycle starting at t0 cannot be FINAL: its wall -- the far side's resting
         $ at the OPEN, from the canonical grid column that ends at or before it (_iimp_wall) -- is not in the grid yet,
         or is still PROVISIONAL (fetched before its snapshot landed). The PRICE pane's cache re-rates such a candle once
         that column is final instead of freezing a colour rated without it (2026-09-25)."""
@@ -19601,6 +19609,17 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
             e = _cache.get(ci)
             if e is None:
                 _c = _STATE_BAR_COL[ci]
+                if ci in _VAC_PX_COLS:
+                    # a VACUUM (user 2026-09-25: "very low opacity red/green"): the breakout hue, faint -- the body
+                    # at VAC_CANDLE_FILL_A, the outline and wicks at VAC_CANDLE_PEN_A so its high and low stay legible
+                    _q = QtGui.QColor(_c)
+                    _p = pg.mkPen(QtGui.QColor(_q.red(), _q.green(), _q.blue(), int(config.VAC_CANDLE_PEN_A)),
+                                  width=1.0)
+                    _p.setCosmetic(True)
+                    e = (pg.mkBrush(_q.red(), _q.green(), _q.blue(), int(config.VAC_CANDLE_FILL_A)), _p)
+                    _cache[ci] = e
+                    br.append(e[0]); pn.append(e[1])
+                    continue
                 # the bright pair keeps a DARKER outline: neon green on the white Simple BW ground washes out
                 _p = pg.mkPen(QtGui.QColor(_c).darker(150) if ci in (_C_BRK_BUY_X, _C_BRK_SELL_X) else _c,
                               width=1.0)
@@ -20831,7 +20850,8 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                                   reject_weak=float(config.ABSORB_REJECT_WEAK),
                                   iimp=({_kk: _v[k] for _kk, _v in _ii.items()} if _ii is not None else None),
                                   brk=(float(config.BREAK_WALL_MIN), float(config.BREAK_IMPACT_MIN),
-                                       float(config.BREAK_KEPT_MIN), float(config.BREAK_OPP_TAPE_MIN)))
+                                       float(config.BREAK_KEPT_MIN), float(config.BREAK_OPP_TAPE_MIN)),
+                                  vac=(float(config.VAC_WALL_MAX), float(config.VAC_OPP_TAPE_MAX)))
         rows = self._interp_bright_demote(rows)
         # THE AUCTION READING (2026-09-24): computed with the cards' I x I reading and kept for the snapshot file (the
         # Claude connector, /auction-read) -- NEVER drawn on the cards (the card strip was removed at the user's word:
@@ -23343,6 +23363,9 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 r["card_state"] = str(c[3])
                 r["card_weak"] = (not bool(c[7])) if int(c[6]) != _FI.ST_FORMING else None
                 r["candle_colour"] = COL.get(int(c[9]), str(c[9]))
+                if int(c[9]) == _FI.C_VACUUM:              # the PRICE candle (2026-09-25): faint green / red, not salmon
+                    r["candle_colour"] = ("faint green (vacuum up)" if str(c[3]).endswith("buy")
+                                          else "faint red (vacuum down)")
                 r["card_move"] = " ".join(str(c[10]).split())
                 r["card_move_word"] = str(c[12]) or None
                 r["flow_x"] = rnd(raw.get("vr")); r["speed_x"] = rnd(raw.get("sr"))
@@ -24684,11 +24707,12 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         # could carry a badge at all -- a BREAKOUT in the making. Always in, it re-laid every badge ~5 times a second
         # for nothing (measured on the first live boot: median 25 us per frame against 7 us idle).
         _fl = None
-        if lc and (_fcol in (1, 2, 7, 8) or (_fcol < 0 and _fvac != 0)):    # a BREAKOUT (C_BREAK_* and the bright C_BREAK_*_X), a VACUUM or a QUIET forming
+        _flt = _fcol < 0 or _fcol in _VAC_PX_COLS          # a light-flow candle: neutral, or a faint VACUUM (2026-09-25)
+        if lc and (_fcol in (1, 2, 7, 8) or (_flt and _fvac != 0)):    # a BREAKOUT (C_BREAK_* and the bright C_BREAK_*_X), a VACUUM or a QUIET forming
             try:
                 # ... the close too when it is a light-flow candle: its "kept" moves with every print
                 _fl = (round(float(lc["l"]), 6), round(float(lc["h"]), 6), round(float(lc["x"]), 1),
-                       round(float(lc["c_to"]), 6) if _fcol < 0 else None)
+                       round(float(lc["c_to"]), 6) if _flt else None)
             except (KeyError, TypeError, ValueError):
                 _fl = None
         sig = (round(float(vy0), 6), round(float(vy1), 6), int(vb.height()), _fcol, _fvac, _fl)
@@ -24763,9 +24787,11 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 j = np.where(np.abs(ct[jm] - x0[fin]) < np.abs(ct[j] - x0[fin]), jm, j)      # the NEAREST cached start
                 ok = np.abs(ct[j] - x0[fin]) <= 1.0
                 # the candle's STATE: a breakout by its own cached colour; a vacuum by the dict's read, and only where
-                # the cache left the candle NEUTRAL -- a badge must never contradict the colour it sits on
+                # the cache left the candle NEUTRAL -- a badge must never contradict the colour it sits on. A faint
+                # VACUUM candle (2026-09-25) counts as neutral here: it used to be drawn neutral, and the badge's rule
+                # has not changed
                 _vf = vac[fin]
-                _neutral = ccol[j] < 0
+                _neutral = (ccol[j] < 0) | np.isin(ccol[j], _VAC_PX_COLS)
                 _kb = _kept_ok(co[j], ch[j], cc[j], 1.0); _ks = _kept_ok(co[j], cl[j], cc[j], -1.0)
                 mb = ok & agree_b[fin] & (np.isin(ccol[j], BREAK_BUY_COLS) | (_neutral & (_vf > 0) & _kb))
                 ms = ok & agree_s[fin] & (np.isin(ccol[j], BREAK_SELL_COLS) | (_neutral & (_vf < 0) & _ks))
@@ -24775,7 +24801,8 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         self._px_iib[0].setData(x=bx, y=by); self._px_iib[1].setData(x=sx, y=sy)
         # the FORMING candle: the overlay's own geometry, the live read's state, the dict's forming row
         fdraw = None
-        _fside = 1 if _fcol in BREAK_BUY_COLS else (-1 if _fcol in BREAK_SELL_COLS else (_fvac if _fcol < 0 else 0))
+        _fside = 1 if _fcol in BREAK_BUY_COLS else (-1 if _fcol in BREAK_SELL_COLS else
+                                                    (_fvac if (_fcol < 0 or _fcol in _VAC_PX_COLS) else 0))
         if lc and _fl is not None and form.any() and _fside != 0:
             k = int(np.flatnonzero(form)[-1])
             try:

@@ -520,9 +520,9 @@ def tick_cycles(now, force=False):
             cols0 = S.cols0
         if now - getattr(S, "cols_log_t", 0.0) > 60.0:     # the breakout gate rates every cycle of the read: watch it
             S.cols_log_t = now
-            log("candle colours: %d cycles in %.0f ms, rated %d times in the last minute (breakouts %d, absorbed %d)" % (
+            log("candle colours: %d cycles in %.0f ms, rated %d times in the last minute (breakouts %d, absorbed %d, vacuum %d)" % (
                 int(t.size), getattr(S, "cols_ms", 0.0), getattr(S, "cols_n", 0),
-                int(np.isin(cols0, (1, 2)).sum()), int(np.isin(cols0, (0, 6)).sum())))
+                int(np.isin(cols0, (1, 2)).sum()), int(np.isin(cols0, (0, 6)).sum()), int(np.isin(cols0, (9, 10)).sum())))
             S.cols_n = 0
         pick_b, rate, state = w._cycle_impact(is_buy, strong, move, cbuy, csell)
         # THE LEADER of every cycle (user 2026-09-25, the tablet's KEPT TICKS BY LEADER pane): the I x I pane's own

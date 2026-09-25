@@ -34,7 +34,9 @@ Left, top to bottom (panes can be hidden, so check which ones are there):
   - orange = BUYERS ABSORBED, blue = SELLERS ABSORBED: heavy flow without the speed, or a heavy, fast cycle that
     closed AGAINST its leader after that leader's push converted (named by the leader: the side that held the
     interest was absorbed);
-  - any other heavy, fast cycle is QUIET; vacuum (fast on thin flow) and quiet are plain black (down) / white (up).
+  - faint green / faint red = VACUUM up / down: light flow and fast price, AND the leader's wall and the other
+    side's tape both under 1x (nothing stood in the leader's way);
+  - any other heavy, fast or light, fast cycle is QUIET; quiet candles are plain black (down) / white (up).
   On top of the candles:
   - **HLH lines**: each bloc's VAH / VAL, with dashes for its POC;
   - **$ bubbles**: Big Player prints of $500K+, and diamonds for sweeps and bursts;

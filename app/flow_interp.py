@@ -77,12 +77,20 @@ C_ABSORB_BUY, C_BREAK_BUY, C_BREAK_SELL, C_VACUUM, C_QUIET, C_FORMING, C_ABSORB_
 C_BREAK_BUY_X, C_BREAK_SELL_X = 7, 8
 BREAK_BUY_COLS = (C_BREAK_BUY, C_BREAK_BUY_X)
 BREAK_SELL_COLS = (C_BREAK_SELL, C_BREAK_SELL_X)
+# A VACUUM CANDLE (user 2026-09-25: "use very low opacity red/green for vaccum"): the PRICE pane's candles only -- the
+# cards keep C_VACUUM. Up = the breakout green, down = the breakout red, both drawn FAINT (config.VAC_CANDLE_FILL_A /
+# VAC_CANDLE_PEN_A). APPENDED like the others, so the three tuples below stay parallel.
+C_VACUUM_UP, C_VACUUM_DN = 9, 10
+VACUUM_PX_COLS = (C_VACUUM_UP, C_VACUUM_DN)
 C_ABSORB = C_ABSORB_BUY                     # kept for anything still importing the old name
-BAR_COL = ("#FF9500", "#00C853", "#FF1F1F", "#E2574C", "#6B7A82", "#4E5C64", "#2979FF", "#76FF03", "#D500F9")
+BAR_COL = ("#FF9500", "#00C853", "#FF1F1F", "#E2574C", "#6B7A82", "#4E5C64", "#2979FF", "#76FF03", "#D500F9",
+           "#00C853", "#FF1F1F")
 # ... and TEXT is per THEME. It was not: on the white Simple BW ground every name drew in a pale dark-theme
 # colour and was barely readable.
-TXT_DARK = ("#FFB84D", "#2BE86B", "#FF5A5A", "#F0857C", "#9AAAB2", "#6B7A82", "#7FB2FF", "#9CFF57", "#E57BFF")
-TXT_LIGHT = ("#A85C00", "#00822F", "#C40D0D", "#A8382F", "#5A666D", "#6B7A82", "#0B4FA8", "#3F7F00", "#8E00B0")
+TXT_DARK = ("#FFB84D", "#2BE86B", "#FF5A5A", "#F0857C", "#9AAAB2", "#6B7A82", "#7FB2FF", "#9CFF57", "#E57BFF",
+            "#2BE86B", "#FF5A5A")
+TXT_LIGHT = ("#A85C00", "#00822F", "#C40D0D", "#A8382F", "#5A666D", "#6B7A82", "#0B4FA8", "#3F7F00", "#8E00B0",
+             "#00822F", "#C40D0D")
 
 # the card's I x I strip wears the I x I PANE's own three colours (config.IIMP_BUY_COL / IIMP_SELL_COL /
 # IIMP_CONTRA_COL), so the miniature bar on a card and the bar in the pane are one object; text tints per theme
@@ -481,6 +489,20 @@ def breakout_class(lead, wall, imp, kept, short, good, contra, opp, wall_min=1.0
     return np.where(ok, BREAK_OK, np.where(ab, BREAK_ABSORBED, BREAK_QUIET))
 
 
+# THE VACUUM GATE (user 2026-09-25: "if its buy interest the sell tape and wall should be <1x, if its sell interest the
+# buy tape and wall should be < 1x"). Light flow + fast price is no longer enough: for the cycle's INTEREST LEADER, the
+# wall in its way AND the other side's tape (its aggressive $/s against its own last N -- the card's other tape bar) must
+# both be under 1x: nothing stood in the way. The exact mirror of the breakout gate's "wall >= 1x OR opposite tape >= 1x".
+# A light, fast cycle that fails it is QUIET; an unrated one (no leader, no wall) fails: the gate is not passed on nothing.
+def vacuum_ok(lead, wall, opp, wall_max=1.0, opp_max=1.0):
+    """Element-wise: does a cycle the quadrant map calls VACUUM (light AND fast) pass the 2026-09-25 gate? `lead` +1
+    buyers / -1 sellers / 0 unrated (the I x I leader), `opp` the tape of the side NOT leading."""
+    with np.errstate(invalid="ignore"):
+        return ((np.asarray(lead) != 0)
+                & (np.asarray(wall, dtype=np.float64) < float(wall_max))
+                & (np.asarray(opp, dtype=np.float64) < float(opp_max)))
+
+
 def _quadrant(heavy, big, up, dom_buy):
     """The user's quadrant map. Breakout and vacuum name the direction PRICE went; absorption names the side
     doing the AGGRESSING -- the one being absorbed -- which is the cycle's own dominance flag, i.e. exactly
@@ -551,7 +573,8 @@ def build_rows(t, t_end, done, move, side_dom, vol_ratio, speed_ratio,
                bid_ratio, ask_ratio, buy_ratio, sell_ratio, flat_ticks, weak_below, max_rows,
                now=None, live=True, px_start=None, px_end=None, px_dec=2,
                slow_c=0.65, fast_c=1.50, px_hi=None, px_lo=None,
-               tick=0.01, push_min=2.0, reject_weak=0.68, iimp=None, brk=(1.0, 1.5, 0.70, 1.0)):
+               tick=0.01, push_min=2.0, reject_weak=0.68, iimp=None, brk=(1.0, 1.5, 0.70, 1.0),
+               vac=(1.0, 1.0)):
     """One display row per cycle, NEWEST FIRST. Pure function of arrays -- no Qt, so it is directly testable.
 
     Every string is built here, once per rebuild, so paintEvent only ever draws pre-made text."""
@@ -607,8 +630,17 @@ def build_rows(t, t_end, done, move, side_dom, vol_ratio, speed_ratio,
         return bool(iimp_contra(_at(buy_ratio, k), _at(sell_ratio, k), mv[k]))
 
     def _gate(st, side, k):
-        """The 2026-09-25 breakout gate on one row (breakout_class): a BREAKOUT stays one, turns ABSORBED by its leader,
-        or QUIET. No I x I reading at all -> QUIET: the gate cannot be passed on nothing."""
+        """The 2026-09-25 gates on one row. BREAKOUT (breakout_class): stays one, turns ABSORBED by its leader, or QUIET.
+        VACUUM (vacuum_ok, on the I x I leader's wall and the other side's tape): stays one or turns QUIET. No I x I
+        reading at all -> QUIET: neither gate can be passed on nothing."""
+        if st == ST_VACUUM:
+            if iimp is None:
+                return ST_QUIET, ""
+            ld = int(iimp["lead"][k])
+            opp = _at(iimp["is"], k) if ld > 0 else (_at(iimp["ib"], k) if ld < 0 else float("nan"))
+            if bool(vacuum_ok(ld, _at(iimp["wall"], k), opp, *vac)):
+                return st, side
+            return ST_QUIET, ""
         if st != ST_BREAK:
             return st, side
         if iimp is None:
