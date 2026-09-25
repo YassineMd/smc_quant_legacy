@@ -489,8 +489,6 @@ public final class ChartView extends View {
             s.cMove = M.cMove; s.cO = M.cO; s.cH = M.cH; s.cL = M.cL; s.cC = M.cC; s.cLead = M.cLead;
             s.livePx = M.livePx; s.formCol = M.formCol; s.win = M.win; s.dec = M.dec; s.tick = M.tick;
             s.lqX = M.lqX; s.lqB = M.lqB; s.lqA = M.lqA;
-            s.cBias = M.cBias;
-            s.hvpOn = M.hvpOn; s.hvpLo = M.hvpLo; s.hvpHi = M.hvpHi; s.hvpPoc = M.hvpPoc; s.hvpDir = M.hvpDir;
             s.mode = M.iimpMode; s.iN = M.iN; s.iX0 = M.iX0; s.iX1 = M.iX1; s.iV = M.iV; s.iMult = M.iMult; s.iScore = M.iScore; s.iWall = M.iWall; s.iKept = M.iKept;
             s.iSbuy = M.iSbuy; s.iSsell = M.iSsell; s.iLiib = M.iLiib; s.iLiis = M.iLiis; s.iUp = M.iUp; s.iContra = M.iContra; s.iGood = M.iGood; s.iForm = M.iForm;
             s.iLyb = M.iLyb; s.iLys = M.iLys; s.iSmn = M.iSmn; s.iPback = M.iPback; s.iReach = M.iReach; s.iMv = M.iMv;
@@ -539,8 +537,6 @@ public final class ChartView extends View {
         int n; double[] cT, cTe; byte[] cSide, cStrong, cDone, cCol, cSt, cLead; float[] cMove, cO, cH, cL, cC;
         double livePx, win, tick; int formCol, dec;
         double[] lqX; float[] lqB, lqA;
-        byte[] cBias;
-        boolean hvpOn; double hvpLo, hvpHi, hvpPoc; int hvpDir;
         String mode; int iN, iSmn; double[] iX0, iX1; float[] iV, iMult, iScore, iWall, iKept, iSbuy, iSsell, iLiib, iLiis, iLyb, iLys, iPback, iReach, iMv; byte[] iUp, iContra, iGood, iForm;
         boolean connected;
         FlowModel.Lines cint, cimp;
@@ -829,13 +825,13 @@ public final class ChartView extends View {
     }
 
     // ------------------------------------------------------------------ THE TAKEOVER (user 2026-09-25: REPLACES the I x I rule)
-    // A FINISHED cycle is marked for its BIAS side -- a green ▲ under a BUY, a red ▼ over a SELL -- when all three hold:
-    //   1. the BIAS: the Market Position filter AS IT STOOD at the cycle's close (the engine's "bias": the HLH bloc
-    //      rebuilt as it was then, the bloc rule + the POC filter, at the close price) -- +1 BUY active, -1 SELL active;
-    //   2. LINES IMPACT: the bias side's line has a THICK CLIMB at that cycle (runMark +1: the very segment drawn thick);
-    //   3. KEPT TICKS, always ROLLING 3 (whatever the pane shows): the bias side's >= 0 and the other side's < 0.
-    // The FORMING cycle gets a lighter mark from the live fade, its forming Lines Impact step and the kept it would give
-    // if it closed now. HLH off -> no bias -> no marks.
+    // A FINISHED cycle is marked for a side -- a green ▲ under the buyers', a red ▼ over the sellers' -- when both hold:
+    //   1. KEPT TICKS, always ROLLING 3 (whatever the pane shows): that side's >= 0 and the other side's < 0. This also
+    //      NAMES the side: the two can never hold at once;
+    //   2. LINES IMPACT: that side's line has a THICK CLIMB at that cycle (runMark +1: the very segment drawn thick).
+    // The Market Position BIAS was a third condition (97687ad: the HLH bloc rebuilt per past cycle by the engine) until
+    // the user removed it the same day: "remove the bias from the takeover indicator". The FORMING cycle gets a lighter
+    // mark from the kept it would give if it closed now and its forming Lines Impact step.
     private static final int TKO_KEPT_N = 3;
     private Object[] tkoKey = null; private long tkoLogAt = 0;
     private double[] tkoBuy = new double[0], tkoSell = new double[0];
@@ -848,11 +844,16 @@ public final class ChartView extends View {
         return new float[]{ld > 0 ? t : 0, ld < 0 ? -t : 0};
     }
 
+    /** +1 buyers, -1 sellers, 0 neither: the side whose rolling kept is >= 0 while the other's is < 0. */
+    private static int keptSide(float sb, float ss) {
+        return (sb >= 0 && ss < 0) ? 1 : ((ss >= 0 && sb < 0) ? -1 : 0);
+    }
+
     private void tkoBuild(Snap s) {
         FlowModel.Lines L = s.cimp;
         double[] lx0 = L != null ? L.x0 : null, lx1 = L != null ? L.x1 : null;
         float[] lb = L != null ? L.b : null, ls = L != null ? L.s : null; byte[] lf = L != null ? L.form : null;
-        Object[] key = {s.cT, s.cDone, s.cC, s.cO, s.cLead, s.cBias, s.n, s.tick, lx0, lb, ls, lf};
+        Object[] key = {s.cT, s.cDone, s.cC, s.cO, s.cLead, s.n, s.tick, lx0, lb, ls, lf};
         if (tkoKey != null && java.util.Arrays.equals(tkoKey, key)) return;
         tkoKey = key;
         int n = s.n;
@@ -861,29 +862,31 @@ public final class ChartView extends View {
         if (ln > 0 && n > 0) {
             byte[] mkB = runMark(lb, lx0, lx1, ln, lf, L.step), mkS = runMark(ls, lx0, lx1, ln, lf, L.step);
             float[] rb = new float[TKO_KEPT_N], rs = new float[TKO_KEPT_N];
-            int cnt = 0, nBias = 0, nKept = 0, nClimb = 0, nUnknown = 0;
+            int cnt = 0, nKeptB = 0, nKeptS = 0, nLines = 0, nMark = 0;
             for (int i = 0; i < n; i++) {
                 if (s.cDone == null || i >= s.cDone.length || s.cDone[i] == 0) continue;
                 float[] kv = keptOf(s, i, s.cC[i]);
                 rb[cnt % TKO_KEPT_N] = kv[0]; rs[cnt % TKO_KEPT_N] = kv[1]; cnt++;
-                int b = s.cBias != null && i < s.cBias.length ? s.cBias[i] : -2;
-                if (b == -2) nUnknown++;
-                if (b != 1 && b != -1) continue;
-                nBias++;
                 float sb = 0, ss = 0;
                 for (int q = 0; q < Math.min(cnt, TKO_KEPT_N); q++) { sb += rb[q]; ss += rs[q]; }
-                boolean kept = b > 0 ? (sb >= 0 && ss < 0) : (ss >= 0 && sb < 0);
-                if (!kept) continue;
-                nKept++;
+                int b = keptSide(sb, ss);
+                if (b == 0) continue;
+                if (b > 0) nKeptB++; else nKeptS++;
                 int j = nearest(lx0, s.cT[i]);
                 if (j < 0 || j >= ln || Math.abs(lx0[j] - s.cT[i]) > 1.0) continue;
-                if ((b > 0 ? mkB[j] : mkS[j]) > 0) { nClimb++; (b > 0 ? buy : sell).add(s.cT[i]); }
+                nLines++;
+                if ((b > 0 ? mkB[j] : mkS[j]) > 0) { nMark++; (b > 0 ? buy : sell).add(s.cT[i]); }
             }
             long nowMs = System.currentTimeMillis();
             if (nowMs - tkoLogAt > 10000) {                        // what each condition keeps (logcat FLOW)
                 tkoLogAt = nowMs;
-                android.util.Log.i("FLOW", String.format(Locale.US, "TKO: %d finished, bias known %d (unknown %d), with a bias %d, + kept %d, + thick climb %d; lines %d rows %.0f..%.0f",
-                        cnt, cnt - nUnknown, nUnknown, nBias, nKept, nClimb, ln, ln > 0 ? lx0[0] : 0.0, ln > 0 ? lx0[ln - 1] : 0.0));
+                StringBuilder mk = new StringBuilder();           // the marks themselves, UTC start times
+                java.text.SimpleDateFormat hf = new java.text.SimpleDateFormat("HH:mm:ss", Locale.US);
+                hf.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
+                for (double t : buy) mk.append(" B").append(hf.format(new java.util.Date((long) (t * 1000))));
+                for (double t : sell) mk.append(" S").append(hf.format(new java.util.Date((long) (t * 1000))));
+                android.util.Log.i("FLOW", String.format(Locale.US, "TKO: %d finished, kept names a side %d (buyers %d / sellers %d), with Lines Impact held %d, + thick climb %d = marks (buy %d / sell %d); lines %d rows %.0f..%.0f;%s",
+                        cnt, nKeptB + nKeptS, nKeptB, nKeptS, nLines, nMark, buy.size(), sell.size(), ln, ln > 0 ? lx0[0] : 0.0, ln > 0 ? lx0[ln - 1] : 0.0, mk));
             }
         }
         tkoBuy = new double[buy.size()]; for (int i = 0; i < tkoBuy.length; i++) tkoBuy[i] = buy.get(i);
@@ -893,9 +896,15 @@ public final class ChartView extends View {
     /** The FORMING cycle's mark, {start, price to hang it from, 1 buy / 0 sell}, or null. */
     private double[] tkoForming(Snap s) {
         int n = s.n, last = n - 1;
-        if (n == 0 || s.cDone == null || last >= s.cDone.length || s.cDone[last] != 0 || Double.isNaN(s.livePx) || !s.hvpOn) return null;
-        int mask = PriceTools.fadeMask(s.livePx, s.hvpLo, s.hvpHi, s.hvpDir, s.hvpPoc);
-        int b = (mask & 1) == 0 ? 1 : ((mask & 2) == 0 ? -1 : 0);
+        if (n == 0 || s.cDone == null || last >= s.cDone.length || s.cDone[last] != 0 || Double.isNaN(s.livePx)) return null;
+        float[] kv = keptOf(s, last, s.livePx);                  // the kept rolling 3 if it closed now: names the side
+        float sb = kv[0], ss = kv[1];
+        int got = 1;
+        for (int i = last - 1; i >= 0 && got < TKO_KEPT_N; i--) {
+            if (s.cDone[i] == 0) continue;
+            float[] q = keptOf(s, i, s.cC[i]); sb += q[0]; ss += q[1]; got++;
+        }
+        int b = keptSide(sb, ss);
         if (b == 0) return null;
         FlowModel.Lines L = s.cimp;
         double[] lx0 = L.x0, lx1 = L.x1; float[] y = b > 0 ? L.b : L.s; byte[] lf = L.form;
@@ -903,14 +912,6 @@ public final class ChartView extends View {
         if (k < 1 || k >= y.length || k >= lx1.length || Math.abs(lx0[k] - s.cT[last]) > 1.0) return null;
         if (lf == null || k >= lf.length || lf[k] == 0 || y[k] < -900f || y[k - 1] < -900f || lx0[k] - lx1[k - 1] > 0.5) return null;
         if (!(Math.pow(2.0, y[k]) - Math.pow(2.0, y[k - 1]) >= L.step - 1e-9)) return null;   // its climb, runMark's rule
-        float[] kv = keptOf(s, last, s.livePx);
-        float sb = kv[0], ss = kv[1];
-        int got = 1;
-        for (int i = last - 1; i >= 0 && got < TKO_KEPT_N; i--) {
-            if (s.cDone[i] == 0) continue;
-            float[] q = keptOf(s, i, s.cC[i]); sb += q[0]; ss += q[1]; got++;
-        }
-        if (!(b > 0 ? (sb >= 0 && ss < 0) : (ss >= 0 && sb < 0))) return null;
         return new double[]{s.cT[last], b > 0 ? Math.min(s.cL[last], s.livePx) : Math.max(s.cH[last], s.livePx), b > 0 ? 1 : 0};
     }
 
