@@ -637,22 +637,37 @@ public final class ChartView extends View {
             drawCandle(c, xm, hw, o, hh, ll, cl, col, top, hgt, yl, yh);
         }
         // THE CONFLICT BARS (user 2026-09-25: "conflict bars are where the tape of both side >=3x" / "the box should be
-        // RED color 2px width from the high to the low of the conflict bar"): the engine flags them (cf), and each gets
-        // a red frame from its high to its low, CONF_PAD wider than its body on each side -- over the candles, so a
-        // neighbour never hides it. The forming candle is boxed on its live high / low while its tapes stand there.
+        // RED color 2px width from the high to the low of the conflict bar" / "if two or more consecutive conflict bars
+        // we merge them"): the engine flags them (cf). Each RUN of consecutive flagged cycles gets ONE red frame, from
+        // the first candle's left to the last one's right (CONF_PAD beyond the bodies) and from the run's highest high
+        // to its lowest low -- over the candles, so a neighbour never hides it. A run the view cuts is still measured
+        // whole. The forming candle counts on its live high / low while its tapes stand there.
         if (s.cConf != null) {
             pl.setColor(Color.RED); pl.setStrokeWidth(2 * d);
-            for (int i = i0; i < i1 && i < s.cConf.length; i++) {
-                if (s.cConf[i] == 0) continue;
-                boolean isForm = i == last && forming;
-                double hh = isForm ? fh : s.cH[i], ll = isForm ? fl : s.cL[i];
-                if (Double.isNaN(hh) || Double.isNaN(ll)) continue;
-                double te = isForm ? fte : s.cTe[i];
-                double dur = Math.max(1e-9, te - s.cT[i]);
-                float xm = xPx(s.cT[i] + dur * 0.5), hw = (float) (dur * 0.72 * 0.5 / (vx1 - vx0) * plotR);
-                hw = Math.max(0.6f * d, hw) + CONF_PAD * d;
-                float yhi = (float) (top + (yh - hh) / (yh - yl) * hgt), ylo = (float) (top + (yh - ll) / (yh - yl) * hgt);
-                c.drawRect(xm - hw, yhi, xm + hw, ylo, pl);
+            int nC = Math.min(s.n, s.cConf.length);
+            int a = Math.max(0, Math.min(i0, nC));
+            while (a > 0 && a < nC && s.cConf[a] != 0 && s.cConf[a - 1] != 0) a--;   // back to the start of a run the view cuts
+            for (int i = a; i < nC && i < i1; ) {
+                if (s.cConf[i] == 0) { i++; continue; }
+                int j = i;
+                while (j + 1 < nC && s.cConf[j + 1] != 0) j++;             // the run [i, j], past the view if need be
+                float xl = Float.MAX_VALUE, xr = -Float.MAX_VALUE;
+                double rHi = -Double.MAX_VALUE, rLo = Double.MAX_VALUE;
+                for (int k = i; k <= j; k++) {
+                    boolean isForm = k == last && forming;
+                    double hh = isForm ? fh : s.cH[k], ll = isForm ? fl : s.cL[k];
+                    if (Double.isNaN(hh) || Double.isNaN(ll)) continue;
+                    double te = isForm ? fte : s.cTe[k];
+                    double dur = Math.max(1e-9, te - s.cT[k]);
+                    float xm = xPx(s.cT[k] + dur * 0.5), hw = Math.max(0.6f * d, (float) (dur * 0.72 * 0.5 / (vx1 - vx0) * plotR));
+                    xl = Math.min(xl, xm - hw); xr = Math.max(xr, xm + hw);
+                    rHi = Math.max(rHi, hh); rLo = Math.min(rLo, ll);
+                }
+                if (xr >= xl) {
+                    float yhi = (float) (top + (yh - rHi) / (yh - yl) * hgt), ylo = (float) (top + (yh - rLo) / (yh - yl) * hgt);
+                    c.drawRect(xl - CONF_PAD * d, yhi, xr + CONF_PAD * d, ylo, pl);
+                }
+                i = j + 1;
             }
         }
         // the marked candle: a tap here or on its feed row
