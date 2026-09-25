@@ -85,16 +85,21 @@ BREAK_SELL_COLS = (C_BREAK_SELL, C_BREAK_SELL_X)
 # cards keep C_VACUUM. Up = the breakout green, down = the breakout red: outline and wicks solid as a breakout's, the body
 # FAINT (config.VAC_CANDLE_FILL_A). APPENDED like the others, so the three tuples below stay parallel.
 C_VACUUM_UP, C_VACUUM_DN = 9, 10
-VACUUM_PX_COLS = (C_VACUUM_UP, C_VACUUM_DN)
+# ... and a vacuum that closed AGAINST its I x I leader (user 2026-09-25: "in case the candle close opposes the leader,
+# we change the color of the borders of the candle ... vaccum sell with buy interest/lead ... orange border, mirror it we
+# do blue border"): UP on a sellers' lead -> a BLUE border, DOWN on a buyers' lead -> an ORANGE border (the absorbed
+# pair's colours). The faint body and the wicks stay the vacuum's green / red.
+C_VACUUM_UP_X, C_VACUUM_DN_X = 11, 12
+VACUUM_PX_COLS = (C_VACUUM_UP, C_VACUUM_DN, C_VACUUM_UP_X, C_VACUUM_DN_X)
 C_ABSORB = C_ABSORB_BUY                     # kept for anything still importing the old name
 BAR_COL = ("#FF9500", "#00C853", "#FF1F1F", "#E2574C", "#6B7A82", "#4E5C64", "#2979FF", "#76FF03", "#D500F9",
-           "#00C853", "#FF1F1F")
+           "#00C853", "#FF1F1F", "#00C853", "#FF1F1F")
 # ... and TEXT is per THEME. It was not: on the white Simple BW ground every name drew in a pale dark-theme
 # colour and was barely readable.
 TXT_DARK = ("#FFB84D", "#2BE86B", "#FF5A5A", "#F0857C", "#9AAAB2", "#6B7A82", "#7FB2FF", "#9CFF57", "#E57BFF",
-            "#2BE86B", "#FF5A5A")
+            "#2BE86B", "#FF5A5A", "#2BE86B", "#FF5A5A")
 TXT_LIGHT = ("#A85C00", "#00822F", "#C40D0D", "#A8382F", "#5A666D", "#6B7A82", "#0B4FA8", "#3F7F00", "#8E00B0",
-             "#00822F", "#C40D0D")
+             "#00822F", "#C40D0D", "#00822F", "#C40D0D")
 
 # the card's I x I strip wears the I x I PANE's own three colours (config.IIMP_BUY_COL / IIMP_SELL_COL /
 # IIMP_CONTRA_COL), so the miniature bar on a card and the bar in the pane are one object; text tints per theme

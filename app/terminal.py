@@ -51,6 +51,7 @@ from .flow_interp import (FlowInterpPanel, build_rows as _interp_build_rows, pre
                           breakout_class as _breakout_class, BREAK_OK as _BREAK_OK,
                           BREAK_ABSORBED as _BREAK_ABSORBED,
                           vacuum_ok as _vacuum_ok, C_VACUUM_UP as _C_VAC_UP, C_VACUUM_DN as _C_VAC_DN,
+                          C_VACUUM_UP_X as _C_VAC_UP_X, C_VACUUM_DN_X as _C_VAC_DN_X,
                           VACUUM_PX_COLS as _VAC_PX_COLS,
                           )
 from .region_state import EXH_WINDOW, exhaustion_mults as _exhaustion_mults
@@ -19458,6 +19459,7 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         if n and not bool(done[-1]):
             te[-1] = max(float(t[-1]), min(time.time(), float(te[-1])))
         cls = np.zeros(n, dtype=np.int64); lead = np.zeros(n, dtype=np.int64); vok = np.zeros(n, dtype=bool)
+        contra = np.zeros(n, dtype=bool)
         if px0 is not None and px1 is not None and pxh is not None and pxl is not None:
             try:
                 C_ = self._iimp_core(self._iimp_rate(t, te, done, cbuy, csell, px0, px1, pxh, pxl,
@@ -19469,13 +19471,15 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                 lead = C_["lead"]
                 vok = _vacuum_ok(C_["lead"], C_["wall"], C_["opp"], float(config.VAC_WALL_MAX),
                                  float(config.VAC_OPP_TAPE_MAX))
+                contra = np.asarray(C_["contra"], dtype=bool)       # closed against the I x I leader: the vacuum border
             except Exception as _e:
                 print("PX BREAKOUT GATE: %s" % _e)
         brk = heavy & big
         col = np.where(brk & (cls == _BREAK_OK), np.where(up, _C_BRK_BUY, _C_BRK_SELL),
               np.where(brk & (cls == _BREAK_ABSORBED), np.where(lead > 0, _C_AB_BUY, _C_AB_SELL),
               np.where(heavy & ~big, np.where(side, _C_AB_BUY, _C_AB_SELL),
-              np.where(big & vok, np.where(up, _C_VAC_UP, _C_VAC_DN), -1))))
+              np.where(big & vok, np.where(up, np.where(contra, _C_VAC_UP_X, _C_VAC_UP),
+                                            np.where(contra, _C_VAC_DN_X, _C_VAC_DN)), -1))))
         return np.where(ok, col, -1).astype(np.int64)
 
     def _px_gate_pending(self, t0: float) -> bool:
@@ -19596,6 +19600,14 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     _lo_pen = pg.mkPen(_STATE_BAR_COL[_C_AB_SELL], width=_hw)
                     _lo_pen.setCosmetic(True); _lo_pen.setCapStyle(QtCore.Qt.FlatCap)
                     _wcache[_C_AB_SELL] = _lo_pen
+            elif ci in (_C_VAC_UP_X, _C_VAC_DN_X):
+                # a VACUUM AGAINST ITS LEADER (user 2026-09-25): only the BORDER takes the absorbed colour (the candle's
+                # own pen below); both wicks keep the vacuum's solid green / red
+                _hi_pen = _wcache.get(("vw", ci))
+                if _hi_pen is None:
+                    _hi_pen = pg.mkPen(_STATE_BAR_COL[ci], width=1.0); _hi_pen.setCosmetic(True)
+                    _wcache[("vw", ci)] = _hi_pen
+                _lo_pen = _hi_pen
             hp.append(_hi_pen)
             lp.append(_lo_pen)
             if ci < 0:
@@ -19613,7 +19625,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
                     # a VACUUM (user 2026-09-25): the breakout candle's own green / red -- outline and wicks SOLID,
                     # as a breakout's -- with the body at the low VAC_CANDLE_FILL_A
                     _q = QtGui.QColor(_c)
-                    _p = pg.mkPen(_c, width=1.0)
+                    # ... against its leader: a BLUE border going up on a sellers' lead, ORANGE going down on a buyers'
+                    _bc = (_STATE_BAR_COL[_C_AB_SELL] if ci == _C_VAC_UP_X else
+                           _STATE_BAR_COL[_C_AB_BUY] if ci == _C_VAC_DN_X else _c)
+                    _p = pg.mkPen(_bc, width=1.0)
                     _p.setCosmetic(True)
                     e = (pg.mkBrush(_q.red(), _q.green(), _q.blue(), int(config.VAC_CANDLE_FILL_A)), _p)
                     _cache[ci] = e
@@ -23480,8 +23495,11 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                 r["card_weak"] = (not bool(c[7])) if int(c[6]) != _FI.ST_FORMING else None
                 r["candle_colour"] = COL.get(int(c[9]), str(c[9]))
                 if int(c[9]) == _FI.C_VACUUM:              # the PRICE candle (2026-09-25): faint green / red, not salmon
-                    r["candle_colour"] = ("faint green (vacuum up)" if str(c[3]).endswith("buy")
-                                          else "faint red (vacuum down)")
+                    _upv = str(c[3]).endswith("buy")
+                    r["candle_colour"] = "faint green (vacuum up)" if _upv else "faint red (vacuum down)"
+                    if raw.get("i_contra"):                 # ... with the absorbed colour's border against its leader
+                        r["candle_colour"] += (", blue border (sellers led, it closed up)" if _upv
+                                               else ", orange border (buyers led, it closed down)")
                 r["card_move"] = " ".join(str(c[10]).split())
                 r["card_move_word"] = str(c[12]) or None
                 r["flow_x"] = rnd(raw.get("vr")); r["speed_x"] = rnd(raw.get("sr"))

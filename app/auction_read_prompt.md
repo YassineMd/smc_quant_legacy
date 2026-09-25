@@ -36,7 +36,8 @@ Left, top to bottom (panes can be hidden, so check which ones are there):
     interest was absorbed);
   - faint green / faint red = VACUUM up / down: fast price (whatever the total flow) AND the leader's wall and the
     other side's tape both under 1x (nothing stood in the leader's way); a heavy, fast cycle is a breakout or the
-    absorbed case first;
+    absorbed case first. A vacuum that closed AGAINST its leader has an ORANGE border (buyers led, it closed down) or
+    a BLUE border (sellers led, it closed up);
   - every other cycle is NORMAL (called QUIET before 2026-09-25): plain black (down) / white (up).
   On top of the candles:
   - **HLH lines**: each bloc's VAH / VAL, with dashes for its POC;

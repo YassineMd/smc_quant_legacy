@@ -274,6 +274,9 @@ public final class ChartView extends View {
     // with the outline and wicks SOLID like a breakout's and the body FAINT -- flow_interp.C_VACUUM_UP / C_VACUUM_DN;
     // the body's alpha mirrors config.VAC_CANDLE_FILL_A
     private static final int C_VAC_UP = 9, C_VAC_DN = 10, VAC_FILL_A = 56;
+    // 11 / 12 = a vacuum that closed AGAINST its I x I leader (user 2026-09-25): up on a sellers' lead -> a BLUE border,
+    // down on a buyers' lead -> an ORANGE border; body and wicks stay the vacuum's (flow_interp.C_VACUUM_UP_X / _DN_X)
+    private static final int C_VAC_UP_X = 11, C_VAC_DN_X = 12;
     private static final float CONF_PAD = 3f;        // dp: how far a CONFLICT bar's red box stands off its body, each side
     private static final double LN2 = Math.log(2.0);
 
@@ -854,17 +857,20 @@ public final class ChartView extends View {
         float yo = (float) (top + (yh - o) / (yh - yl) * hgt), yc = (float) (top + (yh - cl) / (yh - yl) * hgt);
         float yhh = (float) (top + (yh - hh) / (yh - yl) * hgt), yll = (float) (top + (yh - ll) / (yh - yl) * hgt);
         boolean down = cl < o;
-        int fill, pen; boolean hollow = false; int hiWick = 0, loWick = 0;
+        int fill, pen; boolean hollow = false; int hiWick = 0, loWick = 0, border = 0;
         if (col == C_AB_BUY && !down) { col = -1; hiWick = BAR_COL[C_AB_BUY]; }
         else if (col == C_AB_SELL && !(cl > o)) { col = -1; loWick = BAR_COL[C_AB_SELL]; }
         if (col == C_BRK_BUY || col == C_BRK_SELL || col == C_AB_BUY || col == C_AB_SELL) { fill = BAR_COL[col]; pen = fill; }
         else if (col == C_BRK_BUY_X || col == C_BRK_SELL_X) {       // the bright pair keeps a darker outline: neon on white washes out
             fill = BAR_COL[col]; pen = Color.rgb(Color.red(fill) * 2 / 3, Color.green(fill) * 2 / 3, Color.blue(fill) * 2 / 3);
         }
-        else if (col == C_VAC_UP || col == C_VAC_DN) {              // a vacuum: the breakout's green / red, solid outline, faint body
-            int h = BAR_COL[col == C_VAC_UP ? C_BRK_BUY : C_BRK_SELL];
+        else if (col == C_VAC_UP || col == C_VAC_DN || col == C_VAC_UP_X || col == C_VAC_DN_X) {   // a vacuum: the breakout's green / red, solid outline, faint body
+            boolean upv = col == C_VAC_UP || col == C_VAC_UP_X;
+            int h = BAR_COL[upv ? C_BRK_BUY : C_BRK_SELL];
             fill = Color.argb(VAC_FILL_A, Color.red(h), Color.green(h), Color.blue(h));
             pen = h;
+            if (col == C_VAC_UP_X) border = BAR_COL[C_AB_SELL];        // up on a sellers' lead: a BLUE border
+            else if (col == C_VAC_DN_X) border = BAR_COL[C_AB_BUY];    // down on a buyers' lead: an ORANGE border
         }
         else if (bw) { fill = down ? Color.BLACK : Color.WHITE; pen = Color.BLACK; }
         else { fill = down ? RED : TEAL; pen = Color.parseColor("#9aa4ae"); }
@@ -874,7 +880,7 @@ public final class ChartView extends View {
         if (loWick != 0) { pl.setColor(loWick); pl.setStrokeWidth(2.8f * d); c.drawLine(xm, Math.max(yo, yc), xm, yll, pl); }
         float y0 = Math.min(yo, yc), y1 = Math.max(yo, yc); if (y1 - y0 < 1) y1 = y0 + 1;
         pf.setColor(fill); c.drawRect(xm - hw, y0, xm + hw, y1, pf);
-        pl.setColor(pen); pl.setStrokeWidth(1 * d); c.drawRect(xm - hw, y0, xm + hw, y1, pl);
+        pl.setColor(border != 0 ? border : pen); pl.setStrokeWidth(1 * d); c.drawRect(xm - hw, y0, xm + hw, y1, pl);
     }
 
     // ------------------------------------------------------------------ THE TAKEOVER (user 2026-09-25: REPLACES the I x I rule)

@@ -543,7 +543,7 @@ def tick_cycles(now, force=False):
             S.cols_log_t = now
             log("candle colours: %d cycles in %.0f ms, rated %d times in the last minute (breakouts %d, absorbed %d, vacuum %d)" % (
                 int(t.size), getattr(S, "cols_ms", 0.0), getattr(S, "cols_n", 0),
-                int(np.isin(cols0, (1, 2)).sum()), int(np.isin(cols0, (0, 6)).sum()), int(np.isin(cols0, (9, 10)).sum())))
+                int(np.isin(cols0, (1, 2)).sum()), int(np.isin(cols0, (0, 6)).sum()), int(np.isin(cols0, (9, 10, 11, 12)).sum())))
             S.cols_n = 0
         pick_b, rate, state = w._cycle_impact(is_buy, strong, move, cbuy, csell)
         # THE LEADER of every cycle (user 2026-09-25, the tablet's KEPT TICKS BY LEADER pane): the I x I pane's own
