@@ -828,7 +828,9 @@ public final class ChartView extends View {
     // A FINISHED cycle is marked for a side -- a green ▲ under the buyers', a red ▼ over the sellers' -- when both hold:
     //   1. KEPT TICKS, always ROLLING 3 (whatever the pane shows): that side's >= 0 and the other side's < 0. This also
     //      NAMES the side: the two can never hold at once;
-    //   2. LINES IMPACT: that side's line has a THICK CLIMB at that cycle (runMark +1: the very segment drawn thick).
+    //   2. LINES IMPACT: that side's line has a THICK CLIMB at that cycle (runMark +1: the very segment drawn thick);
+    //   3. THE CANDLE: a green badge is never on a BEARISH candle, a red one never on a BULLISH candle (user 2026-09-25)
+    //      -- close vs open in whole ticks, like the kept ticks; a doji (0t) is neither, so it blocks nothing.
     // The Market Position BIAS was a third condition (97687ad: the HLH bloc rebuilt per past cycle by the engine) until
     // the user removed it the same day: "remove the bias from the takeover indicator". The FORMING cycle gets a lighter
     // mark from the kept it would give if it closed now and its forming Lines Impact step.
@@ -842,6 +844,11 @@ public final class ChartView extends View {
         double mv = (cl - s.cO[i]) / Math.max(1e-12, s.tick);
         long t = Double.isNaN(mv) ? 0 : Math.round(mv);
         return new float[]{ld > 0 ? t : 0, ld < 0 ? -t : 0};
+    }
+
+    /** Condition 3: may a badge of `side` (+1 green, -1 red) sit on a candle that moved `mvTicks` (close - open)? */
+    private static boolean candleAllows(int side, long mvTicks) {
+        return side > 0 ? mvTicks >= 0 : mvTicks <= 0;
     }
 
     /** +1 buyers, -1 sellers, 0 neither: the side whose rolling kept is >= 0 while the other's is < 0. */
@@ -862,7 +869,7 @@ public final class ChartView extends View {
         if (ln > 0 && n > 0) {
             byte[] mkB = runMark(lb, lx0, lx1, ln, lf, L.step), mkS = runMark(ls, lx0, lx1, ln, lf, L.step);
             float[] rb = new float[TKO_KEPT_N], rs = new float[TKO_KEPT_N];
-            int cnt = 0, nKeptB = 0, nKeptS = 0, nLines = 0, nMark = 0;
+            int cnt = 0, nKeptB = 0, nKeptS = 0, nLines = 0, nClimb = 0, nMark = 0;
             for (int i = 0; i < n; i++) {
                 if (s.cDone == null || i >= s.cDone.length || s.cDone[i] == 0) continue;
                 float[] kv = keptOf(s, i, s.cC[i]);
@@ -875,7 +882,10 @@ public final class ChartView extends View {
                 int j = nearest(lx0, s.cT[i]);
                 if (j < 0 || j >= ln || Math.abs(lx0[j] - s.cT[i]) > 1.0) continue;
                 nLines++;
-                if ((b > 0 ? mkB[j] : mkS[j]) > 0) { nMark++; (b > 0 ? buy : sell).add(s.cT[i]); }
+                if ((b > 0 ? mkB[j] : mkS[j]) <= 0) continue;
+                nClimb++;
+                if (!candleAllows(b, Math.round((s.cC[i] - s.cO[i]) / Math.max(1e-12, s.tick)))) continue;
+                nMark++; (b > 0 ? buy : sell).add(s.cT[i]);
             }
             long nowMs = System.currentTimeMillis();
             if (nowMs - tkoLogAt > 10000) {                        // what each condition keeps (logcat FLOW)
@@ -885,8 +895,8 @@ public final class ChartView extends View {
                 hf.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
                 for (double t : buy) mk.append(" B").append(hf.format(new java.util.Date((long) (t * 1000))));
                 for (double t : sell) mk.append(" S").append(hf.format(new java.util.Date((long) (t * 1000))));
-                android.util.Log.i("FLOW", String.format(Locale.US, "TKO: %d finished, kept names a side %d (buyers %d / sellers %d), with Lines Impact held %d, + thick climb %d = marks (buy %d / sell %d); lines %d rows %.0f..%.0f;%s",
-                        cnt, nKeptB + nKeptS, nKeptB, nKeptS, nLines, nMark, buy.size(), sell.size(), ln, ln > 0 ? lx0[0] : 0.0, ln > 0 ? lx0[ln - 1] : 0.0, mk));
+                android.util.Log.i("FLOW", String.format(Locale.US, "TKO: %d finished, kept names a side %d (buyers %d / sellers %d), with Lines Impact held %d, + thick climb %d, + candle agrees %d = marks (buy %d / sell %d); lines %d rows %.0f..%.0f;%s",
+                        cnt, nKeptB + nKeptS, nKeptB, nKeptS, nLines, nClimb, nMark, buy.size(), sell.size(), ln, ln > 0 ? lx0[0] : 0.0, ln > 0 ? lx0[ln - 1] : 0.0, mk));
             }
         }
         tkoBuy = new double[buy.size()]; for (int i = 0; i < tkoBuy.length; i++) tkoBuy[i] = buy.get(i);
@@ -906,6 +916,7 @@ public final class ChartView extends View {
         }
         int b = keptSide(sb, ss);
         if (b == 0) return null;
+        if (!candleAllows(b, Math.round((s.livePx - s.cO[last]) / Math.max(1e-12, s.tick)))) return null;   // the live body
         FlowModel.Lines L = s.cimp;
         double[] lx0 = L.x0, lx1 = L.x1; float[] y = b > 0 ? L.b : L.s; byte[] lf = L.form;
         int k = nearest(lx0, s.cT[last]);
