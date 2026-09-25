@@ -891,8 +891,10 @@ public final class ChartView extends View {
 
     // ------------------------------------------------------------------ THE TAKEOVER (user 2026-09-25: REPLACES the I x I rule)
     // A FINISHED cycle is marked for a side -- a green ▲ under the buyers', a red ▼ over the sellers' -- when both hold:
-    //   1. KEPT TICKS, always ROLLING 3 (whatever the pane shows): that side's >= 0 and the other side's < 0. This also
-    //      NAMES the side: the two can never hold at once;
+    //   1. KEPT TICKS, always ROLLING 3 (whatever the pane shows): that side's >= 0 AND the other side's < 0 -- or, since
+    //      2026-09-26 ("sellers >= 0 and buyers < 0 or sellers >= 0 and buyers decreased"), the other side's FELL since the
+    //      previous closed cycle (strictly lower than its rolling 3 there). Each side is tried on its own; the candle
+    //      rule below keeps the two apart on anything but a 0-tick doji;
     //   2. LINES IMPACT: that side's line has a THICK CLIMB at that cycle (runMark +1: the very segment drawn thick);
     //   3. THE CANDLE: a green badge is never on a BEARISH candle, a red one never on a BULLISH candle (user 2026-09-25)
     //      -- close vs open in whole ticks, like the kept ticks; a doji (0t) is neither, so it blocks nothing.
@@ -916,9 +918,10 @@ public final class ChartView extends View {
         return side > 0 ? mvTicks >= 0 : mvTicks <= 0;
     }
 
-    /** +1 buyers, -1 sellers, 0 neither: the side whose rolling kept is >= 0 while the other's is < 0. */
-    private static int keptSide(float sb, float ss) {
-        return (sb >= 0 && ss < 0) ? 1 : ((ss >= 0 && sb < 0) ? -1 : 0);
+    /** Condition 1 for ONE side: its rolling kept >= 0, and the other side's below 0 OR lower than at the previous
+     *  closed cycle (`otherPrev`, NaN when there is none). */
+    private static boolean keptOk(float own, float other, float otherPrev) {
+        return own >= 0 && (other < 0 || (!Float.isNaN(otherPrev) && other < otherPrev));
     }
 
     private void tkoBuild(Snap s) {
@@ -935,22 +938,29 @@ public final class ChartView extends View {
             byte[] mkB = runMark(lb, lx0, lx1, ln, lf, L.step), mkS = runMark(ls, lx0, lx1, ln, lf, L.step);
             float[] rb = new float[TKO_KEPT_N], rs = new float[TKO_KEPT_N];
             int cnt = 0, nKeptB = 0, nKeptS = 0, nLines = 0, nClimb = 0, nMark = 0;
+            float pb = Float.NaN, ps = Float.NaN;                 // the previous closed cycle's rolling sums
             for (int i = 0; i < n; i++) {
                 if (s.cDone == null || i >= s.cDone.length || s.cDone[i] == 0) continue;
                 float[] kv = keptOf(s, i, s.cC[i]);
                 rb[cnt % TKO_KEPT_N] = kv[0]; rs[cnt % TKO_KEPT_N] = kv[1]; cnt++;
                 float sb = 0, ss = 0;
                 for (int q = 0; q < Math.min(cnt, TKO_KEPT_N); q++) { sb += rb[q]; ss += rs[q]; }
-                int b = keptSide(sb, ss);
-                if (b == 0) continue;
-                if (b > 0) nKeptB++; else nKeptS++;
+                boolean okB = keptOk(sb, ss, ps), okS = keptOk(ss, sb, pb);
+                pb = sb; ps = ss;
+                if (!okB && !okS) continue;
+                if (okB) nKeptB++;
+                if (okS) nKeptS++;
                 int j = nearest(lx0, s.cT[i]);
                 if (j < 0 || j >= ln || Math.abs(lx0[j] - s.cT[i]) > 1.0) continue;
                 nLines++;
-                if ((b > 0 ? mkB[j] : mkS[j]) <= 0) continue;
-                nClimb++;
-                if (!candleAllows(b, Math.round((s.cC[i] - s.cO[i]) / Math.max(1e-12, s.tick)))) continue;
-                nMark++; (b > 0 ? buy : sell).add(s.cT[i]);
+                long mvT = Math.round((s.cC[i] - s.cO[i]) / Math.max(1e-12, s.tick));
+                for (int b = 1; b >= -1; b -= 2) {                  // each side on its own
+                    if (b > 0 ? !okB : !okS) continue;
+                    if ((b > 0 ? mkB[j] : mkS[j]) <= 0) continue;
+                    nClimb++;
+                    if (!candleAllows(b, mvT)) continue;
+                    nMark++; (b > 0 ? buy : sell).add(s.cT[i]);
+                }
             }
             long nowMs = System.currentTimeMillis();
             if (nowMs - tkoLogAt > 10000) {                        // what each condition keeps (logcat FLOW)
@@ -960,7 +970,7 @@ public final class ChartView extends View {
                 hf.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
                 for (double t : buy) mk.append(" B").append(hf.format(new java.util.Date((long) (t * 1000))));
                 for (double t : sell) mk.append(" S").append(hf.format(new java.util.Date((long) (t * 1000))));
-                android.util.Log.i("FLOW", String.format(Locale.US, "TKO: %d finished, kept names a side %d (buyers %d / sellers %d), with Lines Impact held %d, + thick climb %d, + candle agrees %d = marks (buy %d / sell %d); lines %d rows %.0f..%.0f;%s",
+                android.util.Log.i("FLOW", String.format(Locale.US, "TKO: %d finished, kept agrees %d (buyers %d / sellers %d), with Lines Impact held %d, + thick climb %d, + candle agrees %d = marks (buy %d / sell %d); lines %d rows %.0f..%.0f;%s",
                         cnt, nKeptB + nKeptS, nKeptB, nKeptS, nLines, nClimb, nMark, buy.size(), sell.size(), ln, ln > 0 ? lx0[0] : 0.0, ln > 0 ? lx0[ln - 1] : 0.0, mk));
             }
         }
@@ -972,23 +982,34 @@ public final class ChartView extends View {
     private double[] tkoForming(Snap s) {
         int n = s.n, last = n - 1;
         if (n == 0 || s.cDone == null || last >= s.cDone.length || s.cDone[last] != 0 || Double.isNaN(s.livePx)) return null;
-        float[] kv = keptOf(s, last, s.livePx);                  // the kept rolling 3 if it closed now: names the side
-        float sb = kv[0], ss = kv[1];
-        int got = 1;
+        float[] kv = keptOf(s, last, s.livePx);                  // the kept rolling 3 if it closed now
+        float[] qb = new float[TKO_KEPT_N], qs = new float[TKO_KEPT_N];   // the last closed cycles' kept, newest first
+        int got = 0;
         for (int i = last - 1; i >= 0 && got < TKO_KEPT_N; i--) {
             if (s.cDone[i] == 0) continue;
-            float[] q = keptOf(s, i, s.cC[i]); sb += q[0]; ss += q[1]; got++;
+            float[] q = keptOf(s, i, s.cC[i]); qb[got] = q[0]; qs[got] = q[1]; got++;
         }
-        int b = keptSide(sb, ss);
-        if (b == 0) return null;
-        if (!candleAllows(b, Math.round((s.livePx - s.cO[last]) / Math.max(1e-12, s.tick)))) return null;   // the live body
+        float sb = kv[0], ss = kv[1], pb = 0, ps = 0;
+        for (int q = 0; q < got; q++) {
+            if (q < TKO_KEPT_N - 1) { sb += qb[q]; ss += qs[q]; }    // the forming sum: itself + the last N-1 closed
+            pb += qb[q]; ps += qs[q];                                // the last closed cycle's own rolling N: "before"
+        }
+        if (got == 0) { pb = Float.NaN; ps = Float.NaN; }
+        boolean okB = keptOk(sb, ss, ps), okS = keptOk(ss, sb, pb);
+        long mvT = Math.round((s.livePx - s.cO[last]) / Math.max(1e-12, s.tick));   // the live body
         FlowModel.Lines L = s.cimp;
-        double[] lx0 = L.x0, lx1 = L.x1; float[] y = b > 0 ? L.b : L.s; byte[] lf = L.form;
+        double[] lx0 = L.x0, lx1 = L.x1; byte[] lf = L.form;
         int k = nearest(lx0, s.cT[last]);
-        if (k < 1 || k >= y.length || k >= lx1.length || Math.abs(lx0[k] - s.cT[last]) > 1.0) return null;
-        if (lf == null || k >= lf.length || lf[k] == 0 || y[k] < -900f || y[k - 1] < -900f || lx0[k] - lx1[k - 1] > 0.5) return null;
-        if (!(Math.pow(2.0, y[k]) - Math.pow(2.0, y[k - 1]) >= L.step - 1e-9)) return null;   // its climb, runMark's rule
-        return new double[]{s.cT[last], b > 0 ? Math.min(s.cL[last], s.livePx) : Math.max(s.cH[last], s.livePx), b > 0 ? 1 : 0};
+        for (int b = 1; b >= -1; b -= 2) {                        // each side on its own; the first that passes marks
+            if (b > 0 ? !okB : !okS) continue;
+            if (!candleAllows(b, mvT)) continue;
+            float[] y = b > 0 ? L.b : L.s;
+            if (k < 1 || k >= y.length || k >= lx1.length || Math.abs(lx0[k] - s.cT[last]) > 1.0) continue;
+            if (lf == null || k >= lf.length || lf[k] == 0 || y[k] < -900f || y[k - 1] < -900f || lx0[k] - lx1[k - 1] > 0.5) continue;
+            if (!(Math.pow(2.0, y[k]) - Math.pow(2.0, y[k - 1]) >= L.step - 1e-9)) continue;   // its climb, runMark's rule
+            return new double[]{s.cT[last], b > 0 ? Math.min(s.cL[last], s.livePx) : Math.max(s.cH[last], s.livePx), b > 0 ? 1 : 0};
+        }
+        return null;
     }
 
     private void drawTriangles(Canvas c, Snap s, double[] keys, boolean buy, float top, float hgt, double yl, double yh) {
