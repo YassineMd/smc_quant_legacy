@@ -40,8 +40,8 @@ public final class ChartView extends View {
     }
 
     public static final int PANE_PRICE = 0, PANE_FLOW = 1, PANE_LIQ = 2, PANE_IIMP = 3,
-            PANE_CINT = 4, PANE_CIMP = 5;
-    public static final int PANE_N = 6;
+            PANE_CINT = 4, PANE_CIMP = 5, PANE_KEPT = 6;
+    public static final int PANE_N = 7;
     private final FlowModel M;
     private Host host;
     private final float d;
@@ -67,15 +67,15 @@ public final class ChartView extends View {
     private long lastViewSent = 0;
     // y fits with dead-bands, per pane
     private double pxLo = Double.NaN, pxHi = Double.NaN, flowTop = 0, liqTop = 0, iimpTop = 0;
-    private final RectF[] pane = {new RectF(), new RectF(), new RectF(), new RectF(), new RectF(), new RectF()};
+    private final RectF[] pane = {new RectF(), new RectF(), new RectF(), new RectF(), new RectF(), new RectF(), new RectF()};
     private final boolean[] paneOn = new boolean[PANE_N];
     // the panes' shares of the height (the splitter). The two LINES panes start small: they are off by
     // default, so these only matter once the user turns one on.
-    private final float[] paneWt = {0.28f, 0.30f, 0.12f, 0.18f, 0.06f, 0.06f};
+    private final float[] paneWt = {0.28f, 0.30f, 0.12f, 0.18f, 0.06f, 0.06f, 0.14f};
     private int rsUpper = -1, rsLower = -1; private float rsY0; private float rsW0, rsW1, rsTot, rsAvail;
     // each pane fits its own y until the user pans or zooms it (then it is theirs, like the terminal's
     // _px_yauto); a double tap on an axis hands every pane back to its fit
-    private final boolean[] yAuto = {true, true, true, true, true, true};
+    private final boolean[] yAuto = {true, true, true, true, true, true, true};
     private final double[] yLo = new double[PANE_N], yHi = new double[PANE_N],
             lastLo = new double[PANE_N], lastHi = new double[PANE_N];
     private final double[] lineTop = new double[PANE_N];       // each line pane's HELD y scale (0 = not yet fitted)
@@ -322,6 +322,9 @@ public final class ChartView extends View {
     /** The tools live on the PRICE pane: they map through its current axes. */
     public void initTools(android.content.SharedPreferences prefs, PriceTools.Events events) {
         this.prefs = prefs; loadWeights();
+        keptCum = prefs.getBoolean("kept_cum", false);
+        keptN = Math.max(1, Math.min(KEPT_N_MAX, prefs.getInt("kept_n", 5)));
+        keptNet = prefs.getBoolean("kept_net", false);
         tools = new PriceTools(d, prefs, new PriceTools.Map() {
             @Override public float xPx(double t) { return ChartView.this.xPx(t); }
             @Override public float yPx(double p) { return (float) (pxTop + (pxYh - p) / Math.max(1e-12, pxYh - pxYl) * pxHgt); }
@@ -381,6 +384,7 @@ public final class ChartView extends View {
         // straight through to the same pan / pinch / tap path. A pen that cannot hover simply has no crosshair.
         if (ev.getActionMasked() == MotionEvent.ACTION_DOWN) clearCross();   // touching is not hovering
         if (smoothTouch(ev)) return true;      // a slider owns its own drag, before pan / pinch see it
+        if (keptTouch(ev)) return true;        // the KEPT pane's toggle and Net: they sit in the splitter's grab band
         if (axisTouch(ev)) { gest.onTouchEvent(ev); return true; }   // the axes: zoom drags, and the double tap
         if (resizeTouch(ev)) return true;                         // a pane boundary under the finger: the splitter
         if (tools != null && paneOn[PANE_PRICE] && tools.onTouch(ev)) { invalidate(); return true; }
@@ -441,7 +445,7 @@ public final class ChartView extends View {
     private void layoutPanes() {
         int W = getWidth(), H = getHeight();
         plotR = W - AXIS_W; timeY = H - TAXIS_H;
-        boolean[] on = {showPrice, showFlow, showLiq, showIimp, showCint, showCimp};
+        boolean[] on = {showPrice, showFlow, showLiq, showIimp, showCint, showCimp, showKept};
         float[] wt = paneWt;
         if (fullscreen >= 0 && on[fullscreen]) { for (int p = 0; p < PANE_N; p++) on[p] = p == fullscreen; }
         float tot = 0; for (int p = 0; p < PANE_N; p++) if (on[p]) tot += wt[p];
@@ -482,7 +486,7 @@ public final class ChartView extends View {
         synchronized (M.lock) {
             s.binBase = M.binBase; s.buy = M.buy; s.sell = M.sell;
             s.n = M.nCyc; s.cT = M.cT; s.cTe = M.cTe; s.cSide = M.cSide; s.cStrong = M.cStrong; s.cDone = M.cDone; s.cCol = M.cCol; s.cSt = M.cSt;
-            s.cMove = M.cMove; s.cO = M.cO; s.cH = M.cH; s.cL = M.cL; s.cC = M.cC;
+            s.cMove = M.cMove; s.cO = M.cO; s.cH = M.cH; s.cL = M.cL; s.cC = M.cC; s.cLead = M.cLead;
             s.livePx = M.livePx; s.formCol = M.formCol; s.win = M.win; s.dec = M.dec; s.tick = M.tick;
             s.lqX = M.lqX; s.lqB = M.lqB; s.lqA = M.lqA;
             s.tkBuy = M.tkBuy; s.tkSell = M.tkSell; s.tkForm = M.tkForm;
@@ -516,6 +520,7 @@ public final class ChartView extends View {
         if (paneOn[PANE_IIMP]) drawIimp(c, s, now);
         if (paneOn[PANE_CINT]) drawLinesPane(c, s, PANE_CINT);
         if (paneOn[PANE_CIMP]) drawLinesPane(c, s, PANE_CIMP);
+        if (paneOn[PANE_KEPT]) drawKept(c, s, now);
         if (showLines) drawCycleLines(c, s);
         drawSelection(c, s, now);
         drawCrosshair(c, s);
@@ -530,7 +535,7 @@ public final class ChartView extends View {
 
     private static final class Snap {
         long binBase; float[] buy, sell; float[][] series;
-        int n; double[] cT, cTe; byte[] cSide, cStrong, cDone, cCol, cSt; float[] cMove, cO, cH, cL, cC;
+        int n; double[] cT, cTe; byte[] cSide, cStrong, cDone, cCol, cSt, cLead; float[] cMove, cO, cH, cL, cC;
         double livePx, win, tick; int formCol, dec;
         double[] lqX; float[] lqB, lqA;
         double[] tkBuy, tkSell, tkForm;
@@ -1266,6 +1271,8 @@ public final class ChartView extends View {
             // through to the dollar branch below and the badge read "$1.2M" over a 1.2x line (user 2026-09-23).
             // Any pane added here has to declare its units or it silently inherits dollars.
             vt = fmtMult(Math.pow(2, v));
+        } else if (crossPane == PANE_KEPT) {
+            vt = String.format(Locale.US, "%+dt", Math.round(v));      // KEPT TICKS BY LEADER: ticks, signed
         } else vt = (v < 0 ? "-" : "") + usdShort(Math.abs(v));
         tagBadge(c, plotR, crossY, vt, 1.0f, 0.5f);
     }
@@ -1529,6 +1536,10 @@ public final class ChartView extends View {
     }
 
     private void drawSmoothSlider(Canvas c, int p, RectF r, int val, float xRight) {
+        drawSmoothSlider(c, p, r, val, xRight, Math.max(1, M.smoothMin), Math.max(Math.max(1, M.smoothMin) + 1, M.smoothMax));
+    }
+
+    private void drawSmoothSlider(Canvas c, int p, RectF r, int val, float xRight, int lo, int hi) {
         float w = 78 * d, h = 14 * d;
         float x1 = xRight, x0 = x1 - w;
         float y0 = r.top + 4 * d, y1 = y0 + h;
@@ -1536,13 +1547,290 @@ public final class ChartView extends View {
         float cy = (y0 + y1) / 2;
         pl.setColor(Color.parseColor("#3a4150")); pl.setStrokeWidth(3 * d);
         c.drawLine(x0, cy, x1, cy, pl);
-        int lo = Math.max(1, M.smoothMin), hi = Math.max(lo + 1, M.smoothMax);
-        float fr = (Math.max(lo, Math.min(hi, val)) - lo) / (float) (hi - lo);
+        float fr = (Math.max(lo, Math.min(hi, val)) - lo) / (float) Math.max(1, hi - lo);
         pl.setColor(Color.parseColor("#7a828e")); c.drawLine(x0, cy, x0 + fr * w, cy, pl);
         pf.setColor(FG); c.drawCircle(x0 + fr * w, cy, 4.5f * d, pf);
         pt.setTypeface(Typeface.MONOSPACE); pt.setTextSize(10 * d); pt.setColor(FG); pt.setFakeBoldText(true);
         c.drawText(String.valueOf(val), x1 + 6 * d, cy + 4 * d, pt);
         pt.setFakeBoldText(false);
+    }
+
+    // ------------------------------------------------------------------ KEPT TICKS BY LEADER (user 2026-09-25)
+    // Per FINISHED cycle, the ticks its LEADER kept: move_ticks (close - open) for a buyer-led cycle, -move_ticks for
+    // a seller-led one -- flipped so a side's number is POSITIVE when it wins, and a cycle that closes against its
+    // leader subtracts from that leader. The leader is the engine's ("lead" in the cycle rows: the I x I pane's own
+    // rule, the side whose aggressive $/s runs further above its last N); an unrated cycle gives both sides 0.
+    // ROLLING = each point the sum over the last N closed cycles; CUMULATIVE = the running total since 00:00 UTC,
+    // back to 0 at every midnight. STEPPED: a value moves only when a cycle CLOSES. The FORMING cycle ("but i still
+    // wanna see the live one forming") is a thin dotted tail to the value it would give if it closed now, at the live
+    // price and its current leader -- never in the totals or the end labels.
+    private static final int KEPT_BUY = Color.parseColor("#1D9E75"), KEPT_SELL = Color.parseColor("#E24B4A"),
+            KEPT_NET = Color.parseColor("#8a8a8a");
+    private static final int KEPT_N_MAX = 60;
+    public boolean showKept = true;
+    private boolean keptCum = false, keptNet = false;
+    private int keptN = 5;
+    private final RectF kmRoll = new RectF(), kmCum = new RectF(), kmNet = new RectF();
+    // the CLOSED series, rebuilt only when the cycles, the mode or N change (not every frame)
+    private Object[] keptKey = null;
+    private double[] kTe = new double[0]; private float[] kVb = new float[0], kVs = new float[0];
+    private int kM = 0;
+
+    private static double keptDay(double t) { return Math.floor(t / 86400.0); }
+
+    private void keptBuild(Snap s) {
+        Object[] key = {s.cT, s.cDone, s.cC, s.cO, s.cLead, s.n, keptCum, keptN, s.tick};
+        if (keptKey != null && java.util.Arrays.equals(keptKey, key)) return;
+        keptKey = key;
+        int n = s.n;
+        double[] te = new double[n]; float[] kb = new float[n], ks = new float[n];
+        int m = 0;
+        for (int i = 0; i < n; i++) {
+            boolean dn = s.cDone != null && i < s.cDone.length && s.cDone[i] != 0;
+            if (!dn) continue;                                      // only FINISHED cycles count
+            int ld = s.cLead != null && i < s.cLead.length ? s.cLead[i] : 0;
+            double mv = (s.cC[i] - s.cO[i]) / Math.max(1e-12, s.tick);
+            long t = Double.isNaN(mv) ? 0 : Math.round(mv);
+            te[m] = s.cTe[i];
+            kb[m] = ld > 0 ? t : 0;
+            ks[m] = ld < 0 ? -t : 0;
+            m++;
+        }
+        float[] vb = new float[m], vs = new float[m];
+        if (keptCum) {
+            for (int j = 0; j < m; j++) {
+                boolean same = j > 0 && keptDay(te[j]) == keptDay(te[j - 1]);
+                vb[j] = (same ? vb[j - 1] : 0) + kb[j];
+                vs[j] = (same ? vs[j - 1] : 0) + ks[j];
+            }
+        } else {
+            double[] pb = new double[m + 1], ps = new double[m + 1];
+            for (int j = 0; j < m; j++) { pb[j + 1] = pb[j] + kb[j]; ps[j + 1] = ps[j] + ks[j]; }
+            for (int j = 0; j < m; j++) {
+                int a = Math.max(0, j + 1 - keptN);
+                vb[j] = (float) (pb[j + 1] - pb[a]);
+                vs[j] = (float) (ps[j + 1] - ps[a]);
+            }
+        }
+        kTe = te; kVb = vb; kVs = vs; kM = m;
+        // what the forming tail adds to: kept per closed cycle, for the rolling window's last N - 1
+        kKb = kb; kKs = ks;
+    }
+    private float[] kKb = new float[0], kKs = new float[0];
+
+    /** {buyers, sellers} if the forming cycle closed NOW, or null when there is none. */
+    private double[] keptForming(Snap s, double now) {
+        int n = s.n;
+        if (n == 0 || s.cDone == null || n - 1 >= s.cDone.length || s.cDone[n - 1] != 0 || Double.isNaN(s.livePx)) return null;
+        int ld = s.cLead != null && n - 1 < s.cLead.length ? s.cLead[n - 1] : 0;
+        long t = Math.round((s.livePx - s.cO[n - 1]) / Math.max(1e-12, s.tick));
+        double fb = ld > 0 ? t : 0, fs = ld < 0 ? -t : 0;
+        int m = kM;
+        if (keptCum) {
+            boolean same = m > 0 && keptDay(kTe[m - 1]) == keptDay(now);
+            return new double[]{(same ? kVb[m - 1] : 0) + fb, (same ? kVs[m - 1] : 0) + fs};
+        }
+        double sb = 0, ss = 0;
+        for (int j = Math.max(0, m - (keptN - 1)); j < m; j++) { sb += kKb[j]; ss += kKs[j]; }
+        return new double[]{sb + fb, ss + fs};
+    }
+
+    private void drawKept(Canvas c, Snap s, double now) {
+        RectF r = pane[PANE_KEPT];
+        title(c, r, keptCum ? "KEPT TICKS BY LEADER  ·  cumulative since 00:00 UTC"
+                            : "KEPT TICKS BY LEADER  ·  sum of the last " + keptN + " closed cycles");
+        float top = r.top + TITLE_H, hgt = r.bottom - top;
+        keptBuild(s);
+        int m = kM;
+        double[] te = kTe; float[] vb = kVb, vs = kVs;
+        double[] fm = keptForming(s, now);
+        // the closed cycles on screen, plus one either side so a step enters and leaves the pane
+        int j0 = 0; while (j0 < m && te[j0] < vx0) j0++;
+        j0 = Math.max(0, j0 - 1);
+        int j1 = m - 1; while (j1 >= 0 && te[j1] > vx1) j1--;
+        j1 = Math.min(m - 1, j1 + 1);
+        // the fit: what is on screen, the tail, and zero
+        double lo = 0, hi = 0;
+        for (int j = j0; j <= j1 && j >= 0; j++) {
+            lo = Math.min(lo, Math.min(vb[j], vs[j])); hi = Math.max(hi, Math.max(vb[j], vs[j]));
+            if (keptNet) { double nv = vb[j] - vs[j]; lo = Math.min(lo, nv); hi = Math.max(hi, nv); }
+        }
+        if (fm != null) {
+            lo = Math.min(lo, Math.min(fm[0], fm[1])); hi = Math.max(hi, Math.max(fm[0], fm[1]));
+            if (keptNet) { lo = Math.min(lo, fm[0] - fm[1]); hi = Math.max(hi, fm[0] - fm[1]); }
+        }
+        double pad = Math.max(2.0, 0.12 * (hi - lo));
+        double[] rg = yRange(PANE_KEPT, lo - pad, hi + pad);
+        double ylo = rg[0], yhi = rg[1], range = Math.max(1e-9, yhi - ylo);
+        notePane(PANE_KEPT, top, hgt, ylo, yhi);
+        c.save(); c.clipRect(r.left, top, r.right, r.bottom);
+        float yZero = (float) (top + (yhi - 0) / range * hgt);
+        pl.setPathEffect(null); pl.setColor(cMid); pl.setStrokeWidth(1 * d);
+        c.drawLine(r.left, yZero, plotR, yZero, pl);
+        // CUMULATIVE: a faint mark at each midnight, where it goes back to 0
+        if (keptCum) {
+            pl.setColor(cSep);
+            for (double dd = Math.ceil(vx0 / 86400.0) * 86400.0; dd <= vx1; dd += 86400.0) c.drawLine(xPx(dd), top, xPx(dd), r.bottom, pl);
+        }
+        double xNow = Math.min(now, vx1 + 1);
+        // net first (behind), then sellers, then buyers
+        for (int k = 0; k < 3; k++) {
+            int kind = k == 0 ? 2 : (k == 1 ? 1 : 0);             // 0 buyers, 1 sellers, 2 net
+            if (kind == 2 && !keptNet) continue;
+            int col = kind == 0 ? KEPT_BUY : (kind == 1 ? KEPT_SELL : KEPT_NET);
+            path.reset();
+            boolean started = false; float prevY = 0;
+            float lastX = 0, lastY = 0; boolean any = false;
+            for (int j = j0; j <= j1 && j >= 0; j++) {
+                double v = kind == 0 ? vb[j] : (kind == 1 ? vs[j] : vb[j] - vs[j]);
+                float x = xPx(te[j]), y = (float) (top + (yhi - v) / range * hgt);
+                if (!started) { path.moveTo(x, y); started = true; prevY = y; lastX = x; lastY = y; any = true; continue; }
+                if (keptCum && keptDay(te[j]) != keptDay(te[j - 1])) {   // midnight: back to 0
+                    float xm = xPx(keptDay(te[j]) * 86400.0);
+                    path.lineTo(xm, prevY); path.lineTo(xm, yZero); prevY = yZero;
+                }
+                path.lineTo(x, prevY); path.lineTo(x, y);            // STEPPED: held, then the close moves it
+                prevY = y; lastX = x; lastY = y;
+            }
+            pl.setColor(col);
+            if (kind == 0) { pl.setStrokeWidth(1.8f * d); pl.setPathEffect(null); }
+            else if (kind == 1) { pl.setStrokeWidth(1.8f * d); pl.setPathEffect(new DashPathEffect(new float[]{6 * d, 4 * d}, 0)); }
+            else { pl.setStrokeWidth(1.4f * d); pl.setPathEffect(new DashPathEffect(new float[]{1.5f * d, 3 * d}, 0)); }
+            if (any) c.drawPath(path, pl);
+            // the FORMING tail: thin, dotted, from the last close to what closing now would give
+            if (fm != null && any && j1 == m - 1) {
+                double fv = kind == 0 ? fm[0] : (kind == 1 ? fm[1] : fm[0] - fm[1]);
+                if (keptCum && m > 0 && keptDay(te[m - 1]) != keptDay(now)) {   // the tail starts a new day at 0
+                    float xm = xPx(keptDay(now) * 86400.0);
+                    pl.setPathEffect(new DashPathEffect(new float[]{1.5f * d, 3 * d}, 0)); pl.setStrokeWidth(1.1f * d);
+                    c.drawLine(lastX, lastY, xm, lastY, pl); c.drawLine(xm, lastY, xm, yZero, pl);
+                    lastX = xm; lastY = yZero;
+                }
+                float fx = xPx(xNow), fy = (float) (top + (yhi - fv) / range * hgt);
+                pl.setPathEffect(new DashPathEffect(new float[]{1.5f * d, 3 * d}, 0)); pl.setStrokeWidth(1.1f * d);
+                c.drawLine(lastX, lastY, fx, fy, pl);
+                pl.setPathEffect(null);
+                pf.setColor(Color.argb(170, Color.red(col), Color.green(col), Color.blue(col)));
+                c.drawCircle(fx, fy, 2.4f * d, pf);
+            }
+            pl.setPathEffect(null);
+        }
+        c.restore();
+        keptAxis(c, r, top, hgt, ylo, yhi);
+        // the END LABELS: each line's last CLOSED value, at the right axis, nudged apart
+        if (m > 0) {
+            int nl = keptNet ? 3 : 2;
+            double[] val = {vb[m - 1], vs[m - 1], vb[m - 1] - vs[m - 1]};
+            int[] cols = {KEPT_BUY, KEPT_SELL, KEPT_NET};
+            float[] ys = new float[nl]; Integer[] ord = new Integer[nl];
+            for (int i = 0; i < nl; i++) { ys[i] = (float) (top + (yhi - val[i]) / range * hgt); ord[i] = i; }
+            java.util.Arrays.sort(ord, (a, b) -> Float.compare(ys[a], ys[b]));
+            float gap = 15 * d;
+            for (int q = 1; q < nl; q++) if (ys[ord[q]] - ys[ord[q - 1]] < gap) ys[ord[q]] = ys[ord[q - 1]] + gap;
+            for (int i = 0; i < nl; i++) {
+                float y = Math.max(top + 7 * d, Math.min(r.bottom - 7 * d, ys[i]));
+                String txt = String.format(Locale.US, "%+dt", Math.round(val[i]));
+                pt.setTypeface(Typeface.MONOSPACE); pt.setTextSize(10 * d); pt.setFakeBoldText(true);
+                float w = pt.measureText(txt) + 8 * d, h = 14 * d;
+                pf.setColor(cols[i]);
+                c.drawRect(plotR + 1 * d, y - h / 2, plotR + 1 * d + w, y + h / 2, pf);
+                pt.setColor(Color.WHITE);
+                c.drawText(txt, plotR + 5 * d, y + 3.5f * d, pt);
+                pt.setFakeBoldText(false);
+            }
+        }
+        keptControls(c, r);
+    }
+
+    /** The right axis in ticks, on a round step. */
+    private void keptAxis(Canvas c, RectF r, float top, float hgt, double ylo, double yhi) {
+        pt.setTypeface(Typeface.MONOSPACE); pt.setTextSize(9 * d); pt.setColor(cTitle); pt.setFakeBoldText(false);
+        pl.setColor(cSep); pl.setStrokeWidth(1 * d); pl.setPathEffect(null);
+        c.drawLine(plotR, top, plotR, r.bottom, pl);
+        double range = Math.max(1e-9, yhi - ylo);
+        int want = Math.max(2, Math.min(6, (int) (hgt / (26 * d))));
+        double[] steps = {1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 5000};
+        double st = steps[steps.length - 1];
+        for (double q : steps) if (range / q <= want) { st = q; break; }
+        for (double v = Math.ceil(ylo / st) * st; v <= yhi; v += st) {
+            float y = (float) (top + (yhi - v) / range * hgt);
+            if (y < top + 4 * d || y > r.bottom - 2 * d) continue;
+            c.drawLine(plotR, y, plotR + 4 * d, y, pl);
+            c.drawText(v == 0 ? "0" : String.format(Locale.US, "%+d", Math.round(v)), plotR + 7 * d, y + 3 * d, pt);
+        }
+    }
+
+    /** The controls, top right of the pane: [Rolling | Cumulative], the N slider (Rolling only), Net. */
+    private void keptControls(Canvas c, RectF r) {
+        float h = 14 * d, y0 = r.top + 1.5f * d, y1 = y0 + h, cy = (y0 + y1) / 2;
+        pt.setTypeface(Typeface.MONOSPACE); pt.setTextSize(9.5f * d); pt.setFakeBoldText(false);
+        // Net, rightmost
+        float x = plotR - 8 * d;
+        float nw = pt.measureText("Net");
+        float bx1 = x - nw - 5 * d, bx0 = bx1 - 10 * d;
+        kmNet.set(bx0, y0, x, y1);
+        pl.setColor(cTitle); pl.setStrokeWidth(1.2f * d); pl.setPathEffect(null);
+        RectF box = new RectF(bx0, cy - 5 * d, bx0 + 10 * d, cy + 5 * d);
+        if (keptNet) { pf.setColor(KEPT_NET); c.drawRect(box, pf); pl.setColor(Color.WHITE);
+                       c.drawLine(box.left + 2 * d, cy, box.left + 4.3f * d, cy + 2.5f * d, pl);
+                       c.drawLine(box.left + 4.3f * d, cy + 2.5f * d, box.right - 2 * d, cy - 3 * d, pl); }
+        else c.drawRect(box, pl);
+        pt.setColor(cTitle); c.drawText("Net", bx1 + 5 * d, cy + 3.5f * d, pt);
+        x = bx0 - 14 * d;
+        // the N slider (its number sits just right of the track)
+        if (!keptCum) {
+            float trackRight = x - 18 * d;
+            drawSmoothSlider(c, PANE_KEPT, r, keptN, trackRight, 1, KEPT_N_MAX);
+            x = trackRight - 78 * d - 14 * d;
+        } else {
+            slX0[PANE_KEPT] = slX1[PANE_KEPT] = 0;
+        }
+        // the mode toggle
+        pt.setTypeface(Typeface.MONOSPACE); pt.setTextSize(9.5f * d); pt.setFakeBoldText(false);
+        float wc = pt.measureText("Cumulative") + 12 * d, wr = pt.measureText("Rolling") + 12 * d;
+        kmCum.set(x - wc, y0, x, y1);
+        kmRoll.set(x - wc - wr, y0, x - wc, y1);
+        for (int k = 0; k < 2; k++) {
+            RectF b = k == 0 ? kmRoll : kmCum;
+            boolean on = (k == 1) == keptCum;
+            pf.setColor(on ? Color.parseColor("#2962ff") : (bw ? Color.parseColor("#eceff3") : Color.parseColor("#20242c")));
+            c.drawRect(b, pf);
+            pl.setColor(cSep); pl.setStrokeWidth(1 * d); c.drawRect(b, pl);
+            pt.setColor(on ? Color.WHITE : cTitle);
+            String lab = k == 0 ? "Rolling" : "Cumulative";
+            c.drawText(lab, b.left + (b.width() - pt.measureText(lab)) / 2, cy + 3.5f * d, pt);
+        }
+    }
+
+    /** A touch on the pane's toggle or Net, taken BEFORE the splitter: they sit in the top 16 dp of the pane, inside
+     *  the boundary's 14 dp grab band, so a tap there resized the panes instead (measured on the tablet, 2026-09-25).
+     *  Acts on the finger's release, if it is still on the same control; the hit areas are a finger wider. */
+    private int keptDown = 0;
+    private boolean keptTouch(MotionEvent ev) {
+        int a = ev.getActionMasked();
+        float x = ev.getX(), y = ev.getY(), in = 6 * d;
+        int which = !paneOn[PANE_KEPT] ? 0 : hit(kmRoll, x, y, in) ? 1 : hit(kmCum, x, y, in) ? 2 : hit(kmNet, x, y, in) ? 3 : 0;
+        if (a == MotionEvent.ACTION_DOWN) { keptDown = which; return which != 0; }
+        if (keptDown == 0) return false;
+        if (a == MotionEvent.ACTION_UP) {
+            if (which == keptDown) {
+                if (which == 1 && keptCum) { keptCum = false; keptSave(); }
+                else if (which == 2 && !keptCum) { keptCum = true; keptSave(); }
+                else if (which == 3) { keptNet = !keptNet; keptSave(); }
+            }
+            keptDown = 0;
+        } else if (a == MotionEvent.ACTION_CANCEL) keptDown = 0;
+        return true;
+    }
+
+    private static boolean hit(RectF b, float x, float y, float in) {
+        return b.width() > 0 && x >= b.left - in && x <= b.right + in && y >= b.top - in && y <= b.bottom + in;
+    }
+
+    private void keptSave() {
+        if (prefs != null) prefs.edit().putBoolean("kept_cum", keptCum).putBoolean("kept_net", keptNet).apply();
+        keptKey = null;
+        invalidate();
     }
 
     /** A touch on a pane's smoothing slider: set it, tell the engine, keep the gesture. */
@@ -1554,7 +1842,7 @@ public final class ChartView extends View {
             for (int p = 0; p < PANE_N; p++) {
                 if (!paneOn[p] || slX1[p] <= slX0[p]) continue;
                 if (p == PANE_IIMP && !"Lines Buyer/Seller".equals(M.iimpMode)) continue;
-                if (p != PANE_IIMP && p != PANE_CINT && p != PANE_CIMP) continue;
+                if (p != PANE_IIMP && p != PANE_CINT && p != PANE_CIMP && p != PANE_KEPT) continue;
                 if (x >= slX0[p] && x <= slX1[p] && y >= slY0[p] && y <= slY1[p]) { slDrag = p; break; }
             }
             if (slDrag < 0) return false;
@@ -1562,6 +1850,11 @@ public final class ChartView extends View {
         if (slDrag < 0) return false;
         if (a == MotionEvent.ACTION_MOVE || a == MotionEvent.ACTION_DOWN) {
             float x0 = slX0[slDrag] + 8 * d, x1 = slX1[slDrag] - 8 * d;
+            if (slDrag == PANE_KEPT) {                             // KEPT TICKS BY LEADER: 1-60 cycles, the tablet's own
+                int v = 1 + Math.round((KEPT_N_MAX - 1) * Math.max(0f, Math.min(1f, (x - x0) / Math.max(1f, x1 - x0))));
+                if (v != keptN) { keptN = v; if (prefs != null) prefs.edit().putInt("kept_n", v).apply(); invalidate(); }
+                return true;
+            }
             int lo = Math.max(1, M.smoothMin), hi = Math.max(lo + 1, M.smoothMax);
             int v = lo + Math.round((hi - lo) * Math.max(0f, Math.min(1f, (x - x0) / Math.max(1f, x1 - x0))));
             String k = slDrag == PANE_IIMP ? "iimp" : (slDrag == PANE_CINT ? "cint" : "cimp");

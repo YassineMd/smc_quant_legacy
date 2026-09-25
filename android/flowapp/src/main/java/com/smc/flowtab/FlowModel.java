@@ -41,6 +41,7 @@ public final class FlowModel {
     public int nCyc = 0;
     public double[] cT = new double[0], cTe = new double[0];
     public byte[] cSide = new byte[0], cStrong = new byte[0], cDone = new byte[0], cCol = new byte[0], cSt = new byte[0], cPickB = new byte[0];
+    public byte[] cLead = new byte[0];      // the I x I leader: +1 buyers, -1 sellers, 0 unrated (KEPT TICKS BY LEADER)
     public float[] cMove = new float[0], cBuy = new float[0], cSell = new float[0], cO = new float[0], cH = new float[0], cL = new float[0], cC = new float[0], cRate = new float[0];
 
     // ---- live
@@ -214,11 +215,12 @@ public final class FlowModel {
         double[] t = f64(m.optString("ts")), te = f64(m.optString("te"));
         byte[] side = i8(m.optString("side")), strong = i8(m.optString("strong")), done = i8(m.optString("done")), col = i8(m.optString("col")), st = i8(m.optString("st")), pickb = i8(m.optString("pickb"));
         float[] mv = f32(m.optString("move")), cb = f32(m.optString("cbuy")), cs = f32(m.optString("csell")), o = f32(m.optString("o")), h = f32(m.optString("h")), l = f32(m.optString("l")), c = f32(m.optString("c")), rate = f32(m.optString("rate"));
+        byte[] lead = m.has("lead") ? i8(m.optString("lead")) : new byte[t.length];   // an older engine: all unrated
         synchronized (lock) {
             if (i0 == 0 || i0 > nCyc) {                                   // a full table, or a tail we cannot splice onto
                 if (i0 > nCyc) return;
                 cT = t; cTe = te; cSide = side; cStrong = strong; cDone = done; cCol = col; cSt = st; cPickB = pickb;
-                cMove = mv; cBuy = cb; cSell = cs; cO = o; cH = h; cL = l; cC = c; cRate = rate;
+                cMove = mv; cBuy = cb; cSell = cs; cO = o; cH = h; cL = l; cC = c; cRate = rate; cLead = lead;
             } else {
                 cT = replace(cT, i0, t, total); cTe = replace(cTe, i0, te, total);
                 cSide = replace(cSide, i0, side, total); cStrong = replace(cStrong, i0, strong, total); cDone = replace(cDone, i0, done, total);
@@ -226,6 +228,7 @@ public final class FlowModel {
                 cMove = replace(cMove, i0, mv, total); cBuy = replace(cBuy, i0, cb, total); cSell = replace(cSell, i0, cs, total);
                 cO = replace(cO, i0, o, total); cH = replace(cH, i0, h, total); cL = replace(cL, i0, l, total); cC = replace(cC, i0, c, total);
                 cRate = replace(cRate, i0, rate, total);
+                cLead = replace(cLead, i0, lead, total);
             }
             nCyc = total; version++;
         }

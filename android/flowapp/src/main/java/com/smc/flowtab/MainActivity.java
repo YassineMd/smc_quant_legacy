@@ -67,6 +67,7 @@ public final class MainActivity extends Activity implements EngineClient.Listene
         chart.showIimp = prefs.getBoolean("iimp", true);
         chart.showCint = prefs.getBoolean("cint", false);   // new panes, off until the user asks
         chart.showCimp = prefs.getBoolean("cimp", false);
+        chart.showKept = prefs.getBoolean("kept", true);    // KEPT TICKS BY LEADER (user 2026-09-25)
         chart.showDomPrice = prefs.getBoolean("domprice", true);
         chart.showTakeover = prefs.getBoolean("takeover", true);
         chart.showHlh = prefs.getBoolean("hlh", false);
@@ -290,6 +291,7 @@ public final class MainActivity extends Activity implements EngineClient.Listene
         toggle(col, "Interest × Impact", "iimp", chart.showIimp, v -> chart.showIimp = v);
         toggle(col, "Lines Interest", "cint", chart.showCint, v -> chart.showCint = v);
         toggle(col, "Lines Impact", "cimp", chart.showCimp, v -> chart.showCimp = v);
+        toggle(col, "Kept ticks by leader", "kept", chart.showKept, v -> chart.showKept = v);
         toggle(col, "Interpretation", "interp", interp.getVisibility() == View.VISIBLE, v -> { interp.setVisibility(v && chart.getFullscreen() < 0 ? View.VISIBLE : View.GONE); divider.setVisibility(interp.getVisibility()); });
         section(col, "Sub-widgets");
         toggle(col, "Market Position  (BUY / SELL)", "market", chart.tools.showMarket, v -> { chart.tools.showMarket = v; applyStyle(); });
