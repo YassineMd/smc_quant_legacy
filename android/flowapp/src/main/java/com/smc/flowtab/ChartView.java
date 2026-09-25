@@ -323,7 +323,7 @@ public final class ChartView extends View {
     public void initTools(android.content.SharedPreferences prefs, PriceTools.Events events) {
         this.prefs = prefs; loadWeights();
         keptCum = prefs.getBoolean("kept_cum", false);
-        keptN = Math.max(1, Math.min(KEPT_N_MAX, prefs.getInt("kept_n", 5)));
+        keptN = Math.max(1, Math.min(KEPT_N_MAX, prefs.getInt("kept_n", KEPT_N_DEFAULT)));
         keptNet = prefs.getBoolean("kept_net", false);
         tools = new PriceTools(d, prefs, new PriceTools.Map() {
             @Override public float xPx(double t) { return ChartView.this.xPx(t); }
@@ -340,7 +340,7 @@ public final class ChartView extends View {
             @Override public int tzOff() { synchronized (M.lock) { return M.tzOff; } }
             @Override public boolean bw() { return bw; }
             @Override public int hvpFade() {
-                synchronized (M.lock) { return M.hvpOn ? PriceTools.fadeFor(M.livePx, M.hvpLo, M.hvpHi, M.hvpDir) : 0; }
+                synchronized (M.lock) { return M.hvpOn ? PriceTools.fadeMask(M.livePx, M.hvpLo, M.hvpHi, M.hvpDir, M.hvpPoc) : 0; }
             }
         }, events);
     }
@@ -1403,6 +1403,19 @@ public final class ChartView extends View {
         }
         c.restore();
         axisMult(c, r, top, hgt, ylo, yhi);
+        // LINES IMPACT: each line's CURRENT value (its newest point, the forming one included -- what the readout
+        // prints) as an end label on the axis, the KEPT TICKS pane's style (user 2026-09-25)
+        if (imp && L.n > 0) {
+            int k = L.n - 1;
+            float[] ys = new float[2]; String[] txt = new String[2]; int[] cl = {TEAL, RED}; int nl = 0;
+            for (int side = 0; side < 2; side++) {
+                float[] y = side == 0 ? L.b : L.s;
+                if (k >= y.length || y[k] < -900f) continue;
+                ys[nl] = (float) (top + (yhi - Math.max(-clip, Math.min(clip, y[k]))) / range * hgt);
+                txt[nl] = fmtMult(Math.pow(2, y[k])); cl[nl] = side == 0 ? TEAL : RED; nl++;
+            }
+            endLabels(c, top, r.bottom, java.util.Arrays.copyOf(ys, nl), java.util.Arrays.copyOf(txt, nl), java.util.Arrays.copyOf(cl, nl));
+        }
         drawSmoothSlider(c, p, r, imp ? M.smCimp : M.smCint);
         // the bottom-right readout, the terminal's line
         if (L.n > 0) {
@@ -1566,10 +1579,10 @@ public final class ChartView extends View {
     // price and its current leader -- never in the totals or the end labels.
     private static final int KEPT_BUY = Color.parseColor("#1D9E75"), KEPT_SELL = Color.parseColor("#E24B4A"),
             KEPT_NET = Color.parseColor("#8a8a8a");
-    private static final int KEPT_N_MAX = 60;
+    private static final int KEPT_N_MAX = 60, KEPT_N_DEFAULT = 3;   // default 3 (user 2026-09-25: "smoothing 3 by default")
     public boolean showKept = true;
     private boolean keptCum = false, keptNet = false;
-    private int keptN = 5;
+    private int keptN = KEPT_N_DEFAULT;
     private final RectF kmRoll = new RectF(), kmCum = new RectF(), kmNet = new RectF();
     // the CLOSED series, rebuilt only when the cycles, the mode or N change (not every frame)
     private Object[] keptKey = null;
@@ -1722,24 +1735,42 @@ public final class ChartView extends View {
             int nl = keptNet ? 3 : 2;
             double[] val = {vb[m - 1], vs[m - 1], vb[m - 1] - vs[m - 1]};
             int[] cols = {KEPT_BUY, KEPT_SELL, KEPT_NET};
-            float[] ys = new float[nl]; Integer[] ord = new Integer[nl];
-            for (int i = 0; i < nl; i++) { ys[i] = (float) (top + (yhi - val[i]) / range * hgt); ord[i] = i; }
-            java.util.Arrays.sort(ord, (a, b) -> Float.compare(ys[a], ys[b]));
-            float gap = 15 * d;
-            for (int q = 1; q < nl; q++) if (ys[ord[q]] - ys[ord[q - 1]] < gap) ys[ord[q]] = ys[ord[q - 1]] + gap;
+            float[] ys = new float[nl]; String[] txt = new String[nl]; int[] cl = new int[nl];
             for (int i = 0; i < nl; i++) {
-                float y = Math.max(top + 7 * d, Math.min(r.bottom - 7 * d, ys[i]));
-                String txt = String.format(Locale.US, "%+dt", Math.round(val[i]));
-                pt.setTypeface(Typeface.MONOSPACE); pt.setTextSize(10 * d); pt.setFakeBoldText(true);
-                float w = pt.measureText(txt) + 8 * d, h = 14 * d;
-                pf.setColor(cols[i]);
-                c.drawRect(plotR + 1 * d, y - h / 2, plotR + 1 * d + w, y + h / 2, pf);
-                pt.setColor(Color.WHITE);
-                c.drawText(txt, plotR + 5 * d, y + 3.5f * d, pt);
-                pt.setFakeBoldText(false);
+                ys[i] = (float) (top + (yhi - val[i]) / range * hgt);
+                txt[i] = String.format(Locale.US, "%+dt", Math.round(val[i])); cl[i] = cols[i];
             }
+            endLabels(c, top, r.bottom, ys, txt, cl);
         }
         keptControls(c, r);
+    }
+
+    /** END LABELS at the right axis: one badge per line at its value's y, in the line's colour, white bold text, nudged
+     *  apart so two never overlap and kept inside the pane. The KEPT TICKS pane's, shared with LINES IMPACT (user
+     *  2026-09-25: "add the value of the current lines impacts line, use the same style ... kept ticks"). */
+    private void endLabels(Canvas c, float top, float bottom, float[] ys, String[] txt, int[] cols) {
+        int nl = ys.length;
+        if (nl == 0) return;
+        float[] y2 = ys.clone();
+        Integer[] ord = new Integer[nl];
+        for (int i = 0; i < nl; i++) ord[i] = i;
+        java.util.Arrays.sort(ord, (a, b) -> Float.compare(y2[a], y2[b]));
+        float gap = 15 * d, yMin = top + 7 * d, yMax = bottom - 7 * d;
+        for (int q = 0; q < nl; q++) y2[ord[q]] = Math.max(yMin, Math.min(yMax, y2[ord[q]]));
+        for (int q = 1; q < nl; q++) if (y2[ord[q]] - y2[ord[q - 1]] < gap) y2[ord[q]] = y2[ord[q - 1]] + gap;
+        if (y2[ord[nl - 1]] > yMax) {                              // pushed out at the bottom: stack up from there
+            y2[ord[nl - 1]] = yMax;
+            for (int q = nl - 2; q >= 0; q--) if (y2[ord[q + 1]] - y2[ord[q]] < gap) y2[ord[q]] = y2[ord[q + 1]] - gap;
+        }
+        pt.setTypeface(Typeface.MONOSPACE); pt.setTextSize(10 * d); pt.setFakeBoldText(true);
+        for (int i = 0; i < nl; i++) {
+            float w = pt.measureText(txt[i]) + 8 * d, h = 14 * d, y = y2[i];
+            pf.setColor(cols[i]);
+            c.drawRect(plotR + 1 * d, y - h / 2, plotR + 1 * d + w, y + h / 2, pf);
+            pt.setColor(Color.WHITE);
+            c.drawText(txt[i], plotR + 5 * d, y + 3.5f * d, pt);
+        }
+        pt.setFakeBoldText(false);
     }
 
     /** The right axis in ticks, on a round step. */

@@ -75,7 +75,7 @@ public final class FlowModel {
     }
     public final Lines cint = new Lines(), cimp = new Lines();
     public int smoothMin = 1, smoothMax = 30;
-    public int smIimp = 5, smCint = 5, smCimp = 5;     // the three windows, as the engine last reported them
+    public int smIimp = 5, smCint = 5, smCimp = 3;     // the three windows, as the engine last reported them
                                                        // (these are only what shows before `hello` lands)
 
     // ---- interpretation rows
@@ -473,7 +473,7 @@ public final class FlowModel {
     }
 
     // the MARKET POSITION FADE (user 2026-09-24): the newest HLH day bloc, as the engine's "hvp" sends it (tick_hvp)
-    public boolean hvpOn = false; public double hvpLo = Double.NaN, hvpHi = Double.NaN; public int hvpDir = 0;
+    public boolean hvpOn = false; public double hvpLo = Double.NaN, hvpHi = Double.NaN, hvpPoc = Double.NaN; public int hvpDir = 0;
     public String hvpName = "";
 
     public void onHvp(JSONObject m) {
@@ -482,6 +482,7 @@ public final class FlowModel {
             hvpOn = on;
             hvpLo = on ? m.optDouble("lo", Double.NaN) : Double.NaN; hvpHi = on ? m.optDouble("hi", Double.NaN) : Double.NaN;
             hvpDir = on ? m.optInt("dir", 0) : 0; hvpName = on ? m.optString("name", "") : "";
+            hvpPoc = on && !m.isNull("poc") ? m.optDouble("poc", Double.NaN) : Double.NaN;
             version++;
         }
     }

@@ -524,6 +524,8 @@ LINES_SMOOTH_N = 5              # DEFAULT trailing-mean window, in CYCLES, and i
                                 # two different questions. Averaged in LOG space (a geometric mean), so 0.5x and
                                 # 2x pull on it equally -- an arithmetic mean of ratios is biased upward.
                                 # LIVE value: each pane's own slider, persisted as "cint_smooth"/"cimp_smooth".
+CIMP_SMOOTH_N = 3               # LINES IMPACT's own default (user 2026-09-25: "make Lines impact ... smoothing 3 by
+                                # default"); LINES INTEREST keeps LINES_SMOOTH_N. A saved slider value still wins.
                                 # The two panes carry SEPARATE windows: once they are separate panes there is no
                                 # reason a slow interest read and a fast impact read should not sit side by side.
 LINES_SMOOTH_MIN = 1            # 1 = no smoothing at all, the raw per-cycle reading. ⚠ _lines_smooth() clamps

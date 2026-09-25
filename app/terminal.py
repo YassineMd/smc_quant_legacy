@@ -11150,9 +11150,10 @@ class MinimalTerminalWindow(QtWidgets.QMainWindow):
         for _k, _d in (("cint", config.CINT_PANE_ON), ("cimp", config.CIMP_PANE_ON)):
             setattr(self, "_%s_on" % _k, bool(s.get("%s_on" % _k, _d)))
             _st = self._lp_(_k)
+            _dn = self._lines_smooth_default(_k)
             _st["smn"] = max(int(config.LINES_SMOOTH_MIN),
                              min(int(config.LINES_SMOOTH_MAX),
-                                 int(s.get("%s_smooth" % _k, config.LINES_SMOOTH_N) or config.LINES_SMOOTH_N)))
+                                 int(s.get("%s_smooth" % _k, _dn) or _dn)))
             _sl = _st.get("slider")
             if _sl is not None:
                 try:
@@ -24034,7 +24035,13 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         slow interest read and a fast impact read should not sit one above the other."""
         return max(int(config.LINES_SMOOTH_MIN),
                    min(int(config.LINES_SMOOTH_MAX),
-                       int(self._lp_(kind).get("smn", config.LINES_SMOOTH_N))))
+                       int(self._lp_(kind).get("smn", self._lines_smooth_default(kind)))))
+
+    @staticmethod
+    def _lines_smooth_default(kind) -> int:
+        """Each LINES pane's default window: LINES IMPACT its own (CIMP_SMOOTH_N, user 2026-09-25), LINES INTEREST
+        the shared LINES_SMOOTH_N."""
+        return int(config.CIMP_SMOOTH_N) if kind == "cimp" else int(config.LINES_SMOOTH_N)
 
     def _lines_on(self, kind) -> bool:
         return bool(self.__dict__.get("_%s_on" % kind,
@@ -24207,7 +24214,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
     def _on_lines_smooth_changed(self, kind, v: int) -> None:
         st = self._lp_(kind)
         v = max(int(config.LINES_SMOOTH_MIN), min(int(config.LINES_SMOOTH_MAX), int(v)))
-        if v == int(st.get("smn", config.LINES_SMOOTH_N)):
+        if v == int(st.get("smn", self._lines_smooth_default(kind))):
             return
         st["smn"] = v
         if st.get("smlab") is not None:
