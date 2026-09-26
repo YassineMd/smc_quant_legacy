@@ -478,17 +478,15 @@ public final class FlowModel {
         synchronized (lock) { bpOn = on; bpSw = m.optBoolean("sw", false); bpLmax = m.optInt("lmax", 60); bpBub = bub; bpDia = dia; version++; }
     }
 
-    // the MARKET POSITION FADE (user 2026-09-24): the newest HLH day bloc, as the engine's "hvp" sends it (tick_hvp)
-    public boolean hvpOn = false; public double hvpLo = Double.NaN, hvpHi = Double.NaN, hvpPoc = Double.NaN; public int hvpDir = 0;
-    public String hvpName = "";
+    // THE MARKET POSITION BIAS (user 2026-09-26), as the engine's "mpb" sends it (tick_mpb): +1 bullish / -1 bearish =
+    // the last closed candle that broke the conflict VP closed above its high / below its low (0 = none yet), and the
+    // CURRENT conflict VP's yellow midline. NaN / 0 until the engine has said.
+    public int mpbBias = 0; public double mpbMid = Double.NaN;
 
-    public void onHvp(JSONObject m) {
-        boolean on = m.optBoolean("on", false);
+    public void onMpb(JSONObject m) {
         synchronized (lock) {
-            hvpOn = on;
-            hvpLo = on ? m.optDouble("lo", Double.NaN) : Double.NaN; hvpHi = on ? m.optDouble("hi", Double.NaN) : Double.NaN;
-            hvpDir = on ? m.optInt("dir", 0) : 0; hvpName = on ? m.optString("name", "") : "";
-            hvpPoc = on && !m.isNull("poc") ? m.optDouble("poc", Double.NaN) : Double.NaN;
+            mpbBias = m.optInt("bias", 0);
+            mpbMid = m.isNull("mid") ? Double.NaN : m.optDouble("mid", Double.NaN);
             version++;
         }
     }

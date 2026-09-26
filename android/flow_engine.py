@@ -30,9 +30,10 @@ WIRE (newline-delimited JSON; arrays are base64 of little-endian float32 unless 
   -> hlh     {on, note, pics: [{k, x0, x1, ops?}], labels, dashes}         the HLH Volume Profile geometry (a pic's
              ops are sent once per pic identity; the tablet keeps them by k) -- see RecPainter
   -> bp      {on, sw, bub: [[x, price, usd, side, px]], dia: [[x, lo, hi, usd, buy, px]], lmax}  Big Player marks
-  -> hvp     {on, name, lo, hi, poc, prev, dir}                             the NEWEST HLH day bloc: its low / high, and
-             dir = -1 created LOWER (its POC under the previous bloc's VAL), +1 HIGHER (over its VAH), 0 neither --
-             the tablet fades the Market Position BUY / SELL against it (see tick_hvp)
+  -> mpb     {bias, mid, hi, lo, vp, brk_t, brk_c, brk_vp, brk_lv}           THE MARKET POSITION BIAS: bias +1 / -1 = the last
+             closed candle that broke the conflict VP closed above its high / below its low (0: none); mid = the
+             CURRENT conflict VP's yellow midline, (hi + lo) / 2. The tablet greys its BUY / SELL from it and its own
+             live price (PriceTools.biasMask). See tick_mpb, conflict_vp.Frozen.bias
   -> cvp     {on, vps: [[t0, t1, lo, hi, poc, vah, val, vah2, val2, live, cur, up, dn, c2t0, c2lo], ...]}   the CONFLICT VPs,
              newest first, FROZEN: each drawn from its conflict 2's end (t0) to where the next newer VP begins (t1: its
              conflict 1's end, or further over conflicts it absorbed), low / high of the two boxes, the HLH VP's lines;
@@ -417,7 +418,7 @@ class State:
     dom_areas = None          # LINES IMPACT's bright areas over the whole read: (side, t0, t1, low, high)
     lines_sig = {"cint": None, "cimp": None}   # the two split panes, each keyed on what it last sent
     hlh_out = None; hlh_t = 0.0; hlh_xm = None; hlh_pics = {}
-    hvp_sent = None           # the last "hvp" payload (resent only when it changes)
+    mpb_msg = None; mpb_sent = None            # the MARKET POSITION BIAS built with the cycles, and the one the tablet has
     cvp_sent = None; cvp_pair = None           # the CONFLICT VP payload the tablet last got, and the chain last logged
     dom_ok = False            # dom_areas was built while the wall grid covered the whole read it needs (cvp_ready)
     bw = True                 # the tablet's Chart Style: the HLH labels are built for a white or a dark ground
@@ -689,6 +690,10 @@ def tick_cycles(now, force=False):
         # the boxes the tablet draws: the FROZEN records over the frozen history (a box once drawn stays), the live
         # flags / reach after the newest frozen conflict
         conf, cfh, cfl = CVP.apply(t, conf, cfh, cfl)
+        try:
+            S.mpb_msg = mpb_msg(t, t_end, done, px1)
+        except Exception:
+            traceback.print_exc()
         S.cyc_base = (t, is_buy, strong, move, cbuy, csell, t_end, done, px0, px1, pxh, pxl, cols0, pick_b, rate, state,
                       lead, conf, cfh, cfl)
         S.cyc_key = key
@@ -853,7 +858,6 @@ def tick_hlh(now):
         if S.hlh_out is not False:
             S.hlh_out = False; S.hlh_pics = {}
             send({"t": "hlh", "on": False})
-        tick_hvp(None, False, now)
         return
     if now - S.hlh_t < 1.0:
         return
@@ -872,7 +876,6 @@ def tick_hlh(now):
     # the terminal keeps its own "POC acceptance areas" option exactly as the user has it, and nothing about the
     # blocs, the POC line, the merges or the colours changes -- the option is display-only by design.
     out = st.build("tab", S.hlh_xm, bloc, not S.bw, week_on, now, badges=bdg, tables=tab, poc_runs=False, bars=bars)
-    tick_hvp(st, week_on, now)
     if out is S.hlh_out:
         return
     S.hlh_out = out
@@ -891,32 +894,49 @@ def tick_hlh(now):
     send({"t": "hlh", "on": True, "note": out[2], "pics": pics, "labels": labels, "dashes": dashes})
 
 
-def tick_hvp(st, week_on, now):
-    """THE MARKET POSITION FADE (user 2026-09-24: "fade buy button if market went below the recent HLH VP or even
-    created a lower HLH VP / fade sell button if market went above or even created a higher HLHVP"). Sent here: the
-    NEWEST HLH day bloc -- the drawn row whose candles end latest -- with its LOW / HIGH (its candles' lowest low /
-    highest high: the user's choice over VAL / VAH or the outer VA), its POC, and how it was CREATED against the
-    bloc before it: dir -1 = lower (its POC under the previous bloc's VAL), +1 = higher (over the previous VAH), 0 =
-    neither (the user's choice over any POC shift). The tablet compares its own live price every frame
-    (PriceTools.fadeFor): outside the bloc the price decides, inside it dir does -- "the latest move wins" (the
-    user's choice over fading both when the two disagree). Day blocs only: the week toggle's blocs span the week.
-    st None / HLH off / no bloc -> {"on": false}, both buttons plain."""
-    msg = {"t": "hvp", "on": False}
+def mpb_msg(t, t_end, done, close):
+    """THE MARKET POSITION BIAS (user 2026-09-26: "remove completely the logic of the market position buttons we
+    currently have (buttons turning to gray) and replace it by this one: first we have to detect the last break of the
+    conflict VP ... a candle that closes above/below a most recent high/low of the conflict VP (the thickest lines of
+    the conflict VP) / if above we have a bullish bias / if below we have a bearish bias"). The break: CVP.bias --
+    every closed cycle candle against the conflict VP that was the most recent one when it closed. The midline: the
+    CURRENT conflict VP's (the chain's newest), (high + low) / 2, the yellow line the tablet draws. The buttons
+    themselves (the price against the midline) are the tablet's, on its own live price: PriceTools.biasMask."""
+    bias, k, rec = CVP.bias(t, t_end, done, close, float(config.CVP_FREEZE_SETTLE_SECS), float(config.TICK_SIZE))
+    chn = CVP.chain()
+    d = int(config.PRICE_DECIMALS) + 3
+    msg = {"t": "mpb", "bias": int(bias), "mid": None, "hi": None, "lo": None, "vp": None}
+    if chn:
+        v = chn[0]["vp"]
+        msg.update(hi=round(float(v["hi"]), d), lo=round(float(v["lo"]), d),
+                   mid=round(0.5 * (float(v["hi"]) + float(v["lo"])), d), vp=round(float(chn[0]["t0"]), 3))
+    if k >= 0 and rec is not None:
+        msg.update(brk_t=round(float(t[k]), 3), brk_c=round(float(close[k]), d), brk_vp=round(float(rec["t0"]), 3),
+                   brk_lv=round(float(rec["vp"]["hi"] if bias > 0 else rec["vp"]["lo"]), d))
+    return msg
+
+
+def tick_mpb():
+    """Send the MARKET POSITION BIAS when it changed (a new break, a new current conflict VP), and say so."""
+    msg = S.mpb_msg
+    if msg is None or msg == S.mpb_sent:
+        return
+    S.mpb_sent = msg
+    send(msg)
     try:
-        if st is not None:
-            rows = [m for pk in st.periods(week_on, now) if not pk[0] for m in (pk[5] or ())]
-            nb = _newest_bloc(rows)
-            if nb is not None:
-                rec, prev = nb["rec"], nb["prev"]
-                msg = {"t": "hvp", "on": True, "name": str(rec.name), "lo": nb["lo"], "hi": nb["hi"], "poc": nb["poc"],
-                       "prev": str(prev.name) if prev is not None else None, "dir": nb["dir"]}
+        hm = lambda x: time.strftime("%d %H:%M:%S", time.gmtime(float(x)))
+        b = int(msg["bias"])
+        brk = ("the %s candle closed %.2f %s the %s VP's %s %.2f" % (
+            hm(msg["brk_t"]), msg["brk_c"], "above" if b > 0 else "below", hm(msg["brk_vp"]),
+            "high" if b > 0 else "low", msg["brk_lv"])) if b else "no break in the read"
+        cur = ("current VP %s %.2f-%.2f, midline %.3f" % (hm(msg["vp"]), msg["lo"], msg["hi"], msg["mid"])
+               if msg.get("mid") is not None else "no conflict VP")
+        log("market position bias: %s -- %s; %s -> %s" % (
+            "BULLISH" if b > 0 else "BEARISH" if b < 0 else "none", brk, cur,
+            "SELL gray, BUY green below the midline" if b > 0 else
+            "BUY gray, SELL red above the midline" if b < 0 else "both gray"))
     except Exception:
         traceback.print_exc()
-        msg = {"t": "hvp", "on": False}
-    if msg != S.hvp_sent:
-        S.hvp_sent = msg
-        send(msg)
-        log("hvp %s" % ({k: v for k, v in msg.items() if k != "t"},))
 
 
 def tick_cvp():
@@ -963,28 +983,6 @@ def tick_cvp():
         log("conflict VP chain: %d VPs over %d frozen conflicts | %s" % (len(chn), len(CVP.items), " | ".join(parts)))
     except Exception:
         traceback.print_exc()
-
-
-def _newest_bloc(rows):
-    """The NEWEST HLH day bloc among `rows` (the row whose candles end latest, tie on start) and how it was created
-    against the one before it: {rec, prev, lo, hi, poc, dir}, or None -- "the VP" of the live Market Position fade
-    (tick_hvp). (97687ad also rebuilt it per past cycle for the Takeover's bias, removed at the user's word.)"""
-    ok = [m for m in rows if m is not None and m.tB is not None and m.bLo is not None and m.bHi is not None
-          and m.vah is not None and m.val is not None]
-    if not ok:
-        return None
-    ok.sort(key=lambda m: (float(m.tB), float(m.tA) if m.tA is not None else 0.0))
-    rec = ok[-1]
-    prev = ok[-2] if len(ok) > 1 else None
-    poc = _hlh.H.bloc_poc(rec)
-    dr = 0
-    if prev is not None and poc is not None:
-        if float(poc) < float(prev.val):
-            dr = -1
-        elif float(poc) > float(prev.vah):
-            dr = 1
-    return {"rec": rec, "prev": prev, "lo": float(rec.bLo), "hi": float(rec.bHi),
-            "poc": float(poc) if poc is not None else None, "dir": dr}
 
 
 def tick_bp(now):
@@ -1053,7 +1051,7 @@ def on_cmd(c):
         S.bins_sent = None; S.cyc_full_needed = True; S.iimp_id = None; S.interp_id = None; S.liq_sig = None
         S.cyc_lead_sent = None; S.cyc_conf_sent = None; S.cyc_cfh_sent = None; S.cyc_cfl_sent = None
         S.lines_sig = {"cint": None, "cimp": None}
-        S.hlh_out = None; S.hlh_pics = {}; S.bp_sig = None; S.hvp_sent = None; S.cvp_sent = None
+        S.hlh_out = None; S.hlh_pics = {}; S.bp_sig = None; S.mpb_sent = None; S.cvp_sent = None
         hello()
         log("hi from the tablet -- sending everything")
     elif k == "view":
@@ -1167,6 +1165,7 @@ def engine_tick():
         tick_bins()
         tick_cycles(now, force=S.cyc_full_needed)
         tick_cvp()
+        tick_mpb()
         tick_iimp()
         w._lines_tick(now)                      # the same crosses() read, so a memo hit
         tick_lines("cint"); tick_lines("cimp")

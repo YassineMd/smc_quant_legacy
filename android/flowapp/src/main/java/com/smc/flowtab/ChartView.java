@@ -353,8 +353,8 @@ public final class ChartView extends View {
             @Override public float viewRight() { return getWidth(); }
             @Override public int tzOff() { synchronized (M.lock) { return M.tzOff; } }
             @Override public boolean bw() { return bw; }
-            @Override public int hvpFade() {
-                synchronized (M.lock) { return M.hvpOn ? PriceTools.fadeMask(M.livePx, M.hvpLo, M.hvpHi, M.hvpDir, M.hvpPoc) : 0; }
+            @Override public int mpGray() {
+                synchronized (M.lock) { return PriceTools.biasMask(M.livePx, M.mpbBias, M.mpbMid); }
             }
         }, events);
     }

@@ -50,6 +50,11 @@ happened at 7am, we shouldnt have a gap", and "when a conflict VP is draw it sta
               high / low with the last one (or is under min_gap bars from it) links to an OLDER conflict, and its VP
               covers -- replaces -- the last VP (the user's own example: 100-101 skips 100-100.5), but only when it
               reaches beyond that VP (THE PRIORITY RULE).
+  THE BIAS    (user 2026-09-26, the tablet's Market Position buttons): "detect the last break of the conflict VP ...
+              a candle that closes above/below a most recent high/low of the conflict VP (the thickest lines of the
+              conflict VP) / if above we have a bullish bias / if below we have a bearish bias". Frozen.bias(): every
+              CLOSED candle is judged against the conflict VP that was the most recent one when it closed; the last
+              close beyond its high / low decides. See Frozen.bias.
 """
 from __future__ import annotations
 
@@ -373,6 +378,56 @@ class Frozen:
                 x1 = max(x1, float(chn[k - 1]["vp"]["d0"]))
             out.append((it, float(v["d0"]), x1))
         return out
+
+    def bias(self, t, t_end, done, close, settle: float, tick: float) -> Tuple[int, int, Optional[dict]]:
+        """THE MARKET POSITION BIAS (user 2026-09-26): "first we have to detect the last break of the conflict VP, what
+        I mean by breach is a candle that closes above/below a most recent high/low of the conflict VP (the thickest
+        lines of the conflict VP) / if above we have a bullish bias / if below we have a bearish bias".
+
+        Every CLOSED candle of the read (the cycle candles: `close` = each one's last price, the forming one never
+        counts) is judged against the conflict VP that was THE MOST RECENT ONE WHEN IT CLOSED -- the newest record
+        with a VP of its own that was frozen by then. A VP exists from the moment its conflict 1 froze live: the bar
+        after that conflict closed, plus `settle` seconds (freeze_new's own condition); records older than the read
+        existed before it. So no candle is judged against a VP that did not exist yet, and the bias read later is the
+        one read live (what is frozen never changes). Close above that VP's HIGH -> +1 (bullish), below its LOW -> -1
+        (bearish), on the tick (a close ON the line is no break). The bias is the LAST break's side.
+
+        Returns (bias, k, rec): k = the breaking candle's index in the read (-1 and bias 0 when none), rec = the VP
+        record it broke."""
+        t = np.asarray(t, dtype=np.float64)
+        te = np.asarray(t_end, dtype=np.float64)
+        dn = np.asarray(done, dtype=bool)
+        cl = np.asarray(close, dtype=np.float64)
+        n = int(t.size)
+        if n == 0:
+            return 0, -1, None
+        tol = 0.5 * float(tick)
+        recs, known = [], []
+        for it in self.items:
+            if it.get("c2") is None or it.get("vp") is None:
+                continue                                  # no VP of its own: the current VP stays the current one
+            tb = float(it["tb"])
+            if tb < float(t[0]) - 0.5:
+                k_at = -np.inf                            # frozen before the read begins
+            else:
+                b = int(np.searchsorted(t, tb - 0.5))
+                k_at = float(te[min(b + 1, n - 1)]) + float(settle)
+            recs.append(it)
+            known.append(k_at)
+        if not recs:
+            return 0, -1, None
+        known = np.maximum.accumulate(np.asarray(known, dtype=np.float64))
+        j = np.searchsorted(known, te, side="right") - 1          # the most recent VP when each candle closed
+        ok = dn & (j >= 0) & np.isfinite(cl)
+        jj = np.clip(j, 0, len(recs) - 1)
+        hi = np.array([float(r["vp"]["hi"]) for r in recs])[jj]
+        lo = np.array([float(r["vp"]["lo"]) for r in recs])[jj]
+        brk = np.where(ok & (cl > hi + tol), 1, np.where(ok & (cl < lo - tol), -1, 0))
+        idx = np.flatnonzero(brk)
+        if not idx.size:
+            return 0, -1, None
+        k = int(idx[-1])
+        return int(brk[k]), k, recs[int(jj[k])]
 
     def apply(self, t, conf, cfh, cfl):
         """The conflict flags and box reach the tablet draws: the FROZEN record over the frozen history (a live flag

@@ -26,7 +26,7 @@ public final class PriceTools {
         float xPx(double t); float yPx(double p); double xVal(float px); double yVal(float py);
         RectF pane(); float plotRight(); double tick(); int dec(); double now(); double live();
         float viewRight(); int tzOff(); boolean bw();
-        int hvpFade();                               // bit 1 = fade BUY, bit 2 = fade SELL (fadeMask)
+        int mpGray();                                // bit 1 = BUY gray, bit 2 = SELL gray (biasMask)
     }
     public interface Events { void toast(String msg); void changed(); }
 
@@ -373,34 +373,20 @@ public final class PriceTools {
         c.restore();
     }
 
-    /** THE MARKET POSITION FADE (user 2026-09-24: "fade buy button if market went below the recent HLH VP or even
-     *  created a lower HLH VP / fade sell button if market went above or even created a higher HLHVP"), against the
-     *  NEWEST HLH day bloc (the engine's tick_hvp): -1 = fade BUY, +1 = fade SELL, 0 = neither.
-     *  Outside the bloc the PRICE decides: under its low fades BUY, over its high fades SELL (low / high = its candles'
-     *  lowest low / highest high, the user's choice). Inside it, how the bloc was CREATED decides: dir -1 = its POC
-     *  under the previous bloc's VAL fades BUY, +1 = over the previous VAH fades SELL. "The latest move wins": never
-     *  both. A faded button still places its bracket -- the fade is a warning, not a lock. */
-    public static int fadeFor(double px, double lo, double hi, int dir) {
-        if (Double.isNaN(px) || Double.isNaN(lo) || Double.isNaN(hi)) return 0;
-        if (px < lo) return -1;
-        if (px > hi) return 1;
-        return dir < 0 ? -1 : (dir > 0 ? 1 : 0);
-    }
-
-    /** fadeFor PLUS THE POC FILTER (user 2026-09-25: "in case buy is active it should be only active if below the POC
-     *  of its current VP, in case sell is active it should be only active if above the POC of its current VP"). The
-     *  VP is the same newest HLH day bloc: a BUY the bloc rule leaves active still fades unless the price is BELOW its
-     *  POC, a SELL unless it is ABOVE it (at the POC itself, neither). So BOTH can fade now -- e.g. price outside
-     *  the bloc, where the bloc rule fades one side and the POC filter the other. No POC -> the bloc rule alone.
-     *  Returns bit 1 = fade BUY, bit 2 = fade SELL. */
-    public static int fadeMask(double px, double lo, double hi, int dir, double poc) {
-        int base = fadeFor(px, lo, hi, dir);
-        boolean fb = base < 0, fs = base > 0;
-        if (!Double.isNaN(px) && !Double.isNaN(poc)) {
-            if (!(px < poc)) fb = true;
-            if (!(px > poc)) fs = true;
-        }
-        return (fb ? 1 : 0) | (fs ? 2 : 0);
+    /** THE MARKET POSITION BIAS (user 2026-09-26: "remove completely the logic of the market position buttons we
+     *  currently have (buttons turning to gray) and replace it by this one"): the engine's bias -- the side of the last
+     *  closed candle that broke the conflict VP (closed above its high: +1, below its low: -1) -- and the CURRENT
+     *  conflict VP's yellow midline, against the live price:
+     *  "if we have a bullish bias the sell button is always gray untill we have a bearish bias and vice versa. / if for
+     *  example we have a bullish bias, it only turns on to green if the current price is below the the yellow midline
+     *  of the most recent conflict VP / if for example we have a bearish bias, it only turns on to red if the current
+     *  price is above the yellow midline of the most recent conflict VP". No bias yet (or no price / midline): both
+     *  gray. A gray button still places its bracket -- a warning, not a lock. Returns bit 1 = BUY gray, bit 2 = SELL
+     *  gray. */
+    public static int biasMask(double px, int bias, double mid) {
+        boolean buyOn = bias > 0 && px < mid;          // NaN compares false: gray
+        boolean sellOn = bias < 0 && px > mid;
+        return (buyOn ? 0 : 1) | (sellOn ? 0 : 2);
     }
 
     /** The toolbar (top left of the pane) and the BUY / SELL pair (bottom left), on top of everything. */
@@ -424,7 +410,7 @@ public final class PriceTools {
         if (showMarket) {
             float w = 54 * d, h = 22 * d, y = r.bottom - h - 6 * d, xr = m.viewRight() - 6 * d;
             sellBtn.set(xr - w, y, xr, y + h); buyBtn.set(xr - 2 * w - 5 * d, y, xr - w - 5 * d, y + h);
-            int fade = m.hvpFade();
+            int fade = m.mpGray();
             boolean bwg = m.bw();                        // faded = gray, dimmer text, on either ground
             int fFill = bwg ? Color.parseColor("#d4d4d4") : Color.parseColor("#3a3d42");
             int fText = bwg ? Color.parseColor("#9a9a9a") : Color.parseColor("#80868b");
