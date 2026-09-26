@@ -64,6 +64,12 @@ public final class InterpView extends View {
     public interface Listener { void onRowTap(FlowModel.Row r); }
     private Listener listener;
     public void setListener(Listener l) { listener = l; }
+    // THE HISTORY (user 2026-09-26): scrolled to within ~1.5 screens of the end, the feed asks for the page before its
+    // oldest card; the engine answers with FlowModel.onInterpPage
+    public interface OlderListener { void onNeedOlder(double t1); }
+    private OlderListener olderListener;
+    public void setOlderListener(OlderListener l) { olderListener = l; }
+    private final float FOOT_H;
     public double selT0 = Double.NaN;                 // the marked card: the cycle tapped here or on the chart
 
     public InterpView(Context ctx, FlowModel model) {
@@ -73,6 +79,7 @@ public final class InterpView extends View {
         PAD = 10 * d; TOPY = PAD + 40 * d;             // the first card clears the hamburger button (46 dp)
         CARD_H = 192 * d; CARD_GAP = 7 * d; SEP_H = 24 * d;       // 114 + the I x I strip (2026-09-24)
         WHY_NOT_LH = 14.5f * d;                        // a card with a why-not line grows by this per line, two at most
+        FOOT_H = 40 * d;                               // the history footer under the last card
         dashed = new DashPathEffect(new float[]{4 * d, 3 * d}, 0);
         setBackgroundColor(Color.parseColor("#141414"));
         fling = new OverScroller(ctx);
@@ -129,7 +136,7 @@ public final class InterpView extends View {
         scroll = clampScroll(scroll);
     }
 
-    private float maxScroll() { return Math.max(0f, TOPY + total + PAD - getHeight()); }
+    private float maxScroll() { return Math.max(0f, TOPY + total + PAD + FOOT_H - getHeight()); }
     private float clampScroll(float s) { return Math.max(0f, Math.min(s, maxScroll())); }
 
     private int rowAt(float y) {
@@ -159,7 +166,7 @@ public final class InterpView extends View {
 
     public void refresh() {
         List<FlowModel.Row> rs;
-        synchronized (model.lock) { rs = model.rows; }
+        synchronized (model.lock) { rs = model.displayRows(); }
         // keep the reader's place: if they have scrolled into history, move by however far the cards they were
         // reading were pushed down by the new ones on top
         int added = 0;
@@ -216,6 +223,23 @@ public final class InterpView extends View {
             if (i > 0 && !hour(rs.get(i)).equals(hour(rs.get(i - 1))) && y - SEP_H < h && y > 0) drawSep(c, rs.get(i), x, y - SEP_H, cw, dim);
             if (y + hs[i] < 20 * d) continue;
             drawCard(c, rs.get(i), x, y, cw, hs[i], dim, det);
+        }
+        // THE HISTORY FOOTER, and the ask for the page before the oldest card once the reader is near the end
+        boolean pending, none;
+        synchronized (model.lock) { pending = !Double.isNaN(model.pageAsked); none = model.noOlder; }
+        if (!rs.isEmpty()) {
+            float fy = base + total + 22 * d;
+            if (fy < h) {
+                String ft = pending ? "loading older cycles..." : (none ? "start of the engine's history (72 h)" : "scroll for older cycles");
+                text(c, ft, x + cw / 2 - width(ft, sans, 10.5f) / 2, fy, sans, 10.5f, dim);
+            }
+            long nowMs = System.currentTimeMillis();
+            boolean stale = pending && nowMs - model.pageAskedAt > 20000;       // unanswered: ask again
+            if (!none && (!pending || stale) && olderListener != null && base + total < h + 1.5f * h) {
+                double t1 = rs.get(rs.size() - 1).t0;
+                synchronized (model.lock) { model.pageAsked = t1; model.pageAskedAt = nowMs; }
+                olderListener.onNeedOlder(t1);
+            }
         }
         c.restore();
         if (rs.isEmpty()) text(c, model.connected ? "waiting for the first cycles" : "connecting to the engine...", PAD, 44 * d, sans, 11, dim);

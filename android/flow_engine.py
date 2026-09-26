@@ -38,6 +38,8 @@ WIRE (newline-delimited JSON; arrays are base64 of little-endian float32 unless 
   <- mode    {v}                                                            the I x I dropdown
   <- tog     {k, v}                                                         k: lines | hlh | bigplayer | takeover
   <- bpmin   {usd}                                                          the Big Player MIN PRINT slider
+  <- interp_page {t1}                                                       the feed's cards BEFORE t1 (history)
+  -> interp_page {t1, t0, rows, more, final}   the cards of [t0, t1); more = older exist; final = every wall in
   <- explain {k}                                                            k = the cycle's start (x0)
   <- mark    {t0 | null}                                                    the marked card / candle changed: kept in the
              snapshot FILE the Claude connector reads (android/auction_mcp.py)
@@ -406,6 +408,7 @@ class State:
     cyc_conf_sent = None      # ... and the conflict flags (both tapes >= CONFLICT_TAPE_MIN)
     cyc_cfh_sent = None; cyc_cfl_sent = None   # ... and the conflict boxes' reach (NaN off a conflict bar)
     dom_areas = None          # LINES IMPACT's bright areas over the whole read: (side, t0, t1, low, high)
+    pages = {}                # the feed's history pages served before their walls were in: t1 -> (column, asked at)
     lines_sig = {"cint": None, "cimp": None}   # the two split panes, each keyed on what it last sent
     hlh_out = None; hlh_t = 0.0; hlh_xm = None; hlh_pics = {}
     hvp_sent = None           # the last "hvp" payload (resent only when it changes)
@@ -691,14 +694,8 @@ def tick_lines(kind):
     send(m)
 
 
-def tick_interp():
-    pnl = getattr(w, "interp_panel", None)
-    if pnl is None:
-        return
-    rows = getattr(pnl, "_rows", None)
-    if rows is None or id(rows) == S.interp_id:
-        return
-    S.interp_id = id(rows)
+def rows_json(rows):
+    """Interpretation rows as the tablet reads them -- the live feed and the history pages alike."""
     out = []
     for r in rows:
         try:
@@ -711,12 +708,90 @@ def tick_interp():
                         int(st), bool(strong), bool(forming), int(col), str(mv_txt), int(mv_sign), str(mv_word), _raw])
         except Exception:
             continue
+    return out
+
+
+def tick_interp():
+    pnl = getattr(w, "interp_panel", None)
+    if pnl is None:
+        return
+    rows = getattr(pnl, "_rows", None)
+    if rows is None or id(rows) == S.interp_id:
+        return
+    S.interp_id = id(rows)
+    out = rows_json(rows)
     # the feed rebuilds its list every tick even when no word changed: send only what reads differently
     payload = json.dumps(out, separators=(",", ":"))
     if payload == getattr(S, "interp_payload", None):
         return
     S.interp_payload = payload
     send({"t": "interp", "rows": out})
+
+
+def interp_page(t1, now):
+    """THE FEED'S HISTORY (user 2026-09-26: "I am not able to read interpretation before 17:55"): the cards of the
+    cycles that START in [t1 - INTERP_PAGE_SECS, t1), for a tablet that scrolled to the end of what it holds. Built
+    ONCE by the terminal's own card builder on a read that starts _lb_secs() earlier (every baseline as the live feed
+    has it) and ends 2 h later (the cycles next to t1 are finished). The ORDER-BOOK walls those cards' I x I reading
+    stands on are fetched on demand -- the grid is extended to the page as a left pan of the chart would, at its paced
+    rate -- and the page is sent again, final, once they are in (tick_pages)."""
+    sp = w._flow.span()
+    if not sp:
+        return None
+    s0, s1 = float(sp[0]), float(sp[1])
+    show0 = max(s0, float(t1) - float(config.INTERP_PAGE_SECS))
+    C = float(config.IIMP_WALL_COL_SECS)
+    if show0 >= float(t1) - 1.0:
+        return {"t1": float(t1), "t0": show0, "rows": [], "more": False, "final": True, "need": None}
+    a = max(s0, show0 - float(w._lb_secs())); b = min(s1, float(t1) + 2 * 3600.0)
+    arrs = w._flow.crosses(a, b, float(w._flow_win), float(config.FLOW_CROSS_MIN_SPREAD_PCT),
+                           float(config.FLOW_CROSS_MIN_HOLD_SECS), int(config.FLOW_CROSS_MAX),
+                           float(config.FLOW_CROSS_CONTEXT_SECS), float(config.TICK_SIZE))
+    t = np.asarray(arrs[0], dtype=np.float64)
+    rows = []
+    if t.size:
+        vis = (t >= show0 - 1e-6) & (t < float(t1) - 0.5)
+        if vis.any():
+            rows = w._interp_rows_from(a, b, arrs, vis, now, False, max_rows=100000)[0]
+    # the walls: extend the grid's on-demand backfill down to this page (and its lookback), like a left pan
+    w._wall_seen_lo = min(float(w.__dict__.get("_wall_seen_lo", show0)), show0)
+    need = int(max(a, now - float(config.DEPTH_RETENTION_HOURS) * 3600.0 + 120.0) // C) - 1
+    wl = w.__dict__.get("_wall_lo")
+    final = wl is not None and int(wl) <= need
+    return {"t1": float(t1), "t0": show0, "rows": rows_json(rows), "more": show0 > s0 + 60.0, "final": bool(final),
+            "need": need}
+
+
+def serve_page(t1, now):
+    try:
+        pg = interp_page(t1, now)
+    except Exception as ex:
+        log("interp page: %s" % ex)
+        pg = None
+    if pg is None:
+        return
+    need = pg.pop("need")
+    send(dict(pg, t="interp_page"))
+    if not pg["final"] and need is not None:
+        S.pages[round(float(t1), 3)] = (need, now)          # re-sent once its walls are in
+    else:
+        S.pages.pop(round(float(t1), 3), None)
+    log("interp page before %s: %d cards%s" % (time.strftime("%H:%M:%S", time.gmtime(float(t1))), len(pg["rows"]),
+                                              "" if pg["final"] else " (walls still loading)"))
+
+
+def tick_pages(now):
+    """Send a history page again, FINAL, once the wall grid reaches it (its cards' I x I reading is then complete);
+    give up on it after 15 minutes."""
+    if not S.pages or now - getattr(S, "pages_t", 0.0) < 5.0:
+        return
+    S.pages_t = now
+    wl = w.__dict__.get("_wall_lo")
+    for key, (need, t_ask) in list(S.pages.items()):
+        if wl is not None and int(wl) <= int(need):
+            serve_page(key, now)
+        elif now - t_ask > 900.0:
+            S.pages.pop(key, None)
 
 
 def tick_liq():
@@ -915,6 +990,7 @@ def on_cmd(c):
             cl.ready = True
         S.bins_sent = None; S.cyc_full_needed = True; S.iimp_id = None; S.interp_id = None; S.liq_sig = None
         S.cyc_lead_sent = None; S.cyc_conf_sent = None; S.cyc_cfh_sent = None; S.cyc_cfl_sent = None
+        S.pages = {}
         S.lines_sig = {"cint": None, "cimp": None}
         S.hlh_out = None; S.hlh_pics = {}; S.bp_sig = None; S.hvp_sent = None
         hello()
@@ -947,6 +1023,11 @@ def on_cmd(c):
             else:
                 w._lp_(key)["smn"] = n; w._lp_(key)["sig"] = None
             S.lines_sig[key] = None
+    elif k == "interp_page":                              # the feed's history, on demand (user 2026-09-26)
+        try:
+            serve_page(float(c.get("t1")), time.time())
+        except Exception as ex:
+            log("interp_page: %s" % ex)
     elif k == "bpmin":                                    # the tablet's Big Player MIN PRINT slider (user 2026-09-25)
         try:
             w.menu.set_big_player_min_usd(float(c.get("usd")))  # tick_bp's signature carries the threshold: marks follow
@@ -1032,7 +1113,7 @@ def engine_tick():
         tick_iimp()
         w._lines_tick(now)                      # the same crosses() read, so a memo hit
         tick_lines("cint"); tick_lines("cimp")
-        tick_interp(); tick_liq()
+        tick_interp(); tick_liq(); tick_pages(now)
         tick_hlh(now); tick_bp(now)
     except Exception:
         traceback.print_exc()

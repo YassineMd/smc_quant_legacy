@@ -340,6 +340,10 @@ INTERP_SPAN_SECS = 6 * 3600.0   # The feed is anchored at the LIVE EDGE and span
                                 # chart's view: zooming or panning must not empty it (user 2026-09-11). That
                                 # costs a second crosses() entry -- measured 0.88 ms cold at 4 h, 1.19 at 6 h,
                                 # so 2 reads per 0.5 s tick instead of 1: +0.24% of one core.
+INTERP_PAGE_SECS = 6 * 3600.0   # the tablet's feed HISTORY (user 2026-09-26: "I am not able to read interpretation
+                                # before 17:55"): scrolled to its end, the tablet asks its engine for the cards of the
+                                # PREVIOUS this-many seconds, page after page back to the store's start -- built once,
+                                # on demand (terminal._interp_rows_from), never on every tick like the live feed
 INTERP_STALE_SECS = 600.0       # The feed's read ENDS at the store's own live edge, so "is the last cycle
                                 # still forming?" is really "is the tape fresh?". A quiet market can go
                                 # minutes without a print -- measured 189 s behind wall-clock on live tape --

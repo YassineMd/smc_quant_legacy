@@ -374,7 +374,62 @@ public final class FlowModel {
     }
 
     public void onInterp(JSONObject m) {
-        JSONArray a = m.optJSONArray("rows");
+        List<Row> out = parseRows(m.optJSONArray("rows"));
+        synchronized (lock) {
+            // a card the LIVE window lets go of (it is anchored at now - 6 h) is kept as history, so the feed never
+            // gets a hole between the live cards and the pages already fetched below them
+            if (!out.isEmpty()) {
+                double oldest = out.get(out.size() - 1).t0;
+                for (Row r : rows) if (!r.forming && !"-".equals(r.name) && r.t0 < oldest - 0.5) addOld(r);
+            }
+            rows = out; version++;
+        }
+    }
+
+    // ---- THE FEED'S HISTORY (user 2026-09-26: "I am not able to read interpretation before 17:55"): pages of older
+    // cards the engine builds on demand (flow_engine.interp_page), newest first, below the live window's cards
+    public List<Row> oldRows = new ArrayList<>();
+    public double pageAsked = Double.NaN;            // the t1 of the page asked for and not answered yet
+    public long pageAskedAt = 0;
+    public boolean noOlder = false;                  // the engine has nothing older than what is held
+
+    /** A history page: the cards of [t0, t1) replace whatever was held there (a page is sent again, final, once the
+     *  engine's walls reach it). */
+    public void onInterpPage(JSONObject m) {
+        List<Row> got = parseRows(m.optJSONArray("rows"));
+        double t0 = m.optDouble("t0", Double.NaN), t1 = m.optDouble("t1", Double.NaN);
+        synchronized (lock) {
+            if (!Double.isNaN(t0) && !Double.isNaN(t1)) {
+                List<Row> keep = new ArrayList<>();
+                for (Row r : oldRows) if (r.t0 < t0 - 0.5 || r.t0 >= t1 - 0.5) keep.add(r);
+                oldRows = keep;
+            }
+            for (Row r : got) addOld(r);
+            if (!Double.isNaN(pageAsked) && !Double.isNaN(t1) && Math.abs(pageAsked - t1) < 1.0) {
+                pageAsked = Double.NaN;
+                if (!m.optBoolean("more", true)) noOlder = true;
+            }
+            version++;
+        }
+    }
+
+    /** Insert keeping oldRows newest first, one card per cycle start (within half a second). Under the lock. */
+    private void addOld(Row r) {
+        int i = 0;
+        while (i < oldRows.size() && oldRows.get(i).t0 > r.t0 + 0.5) i++;
+        if (i < oldRows.size() && Math.abs(oldRows.get(i).t0 - r.t0) <= 0.5) { oldRows.set(i, r); return; }
+        oldRows.add(i, r);
+    }
+
+    /** The feed as drawn: the live cards, then the history below the oldest of them. Under the lock. */
+    public List<Row> displayRows() {
+        List<Row> out = new ArrayList<>(rows);
+        double oldest = rows.isEmpty() ? Double.POSITIVE_INFINITY : rows.get(rows.size() - 1).t0;
+        for (Row r : oldRows) if (r.t0 < oldest - 0.5) out.add(r);
+        return out;
+    }
+
+    private static List<Row> parseRows(JSONArray a) {
         List<Row> out = new ArrayList<>();
         if (a != null) {
             for (int i = 0; i < a.length(); i++) {
@@ -401,7 +456,7 @@ public final class FlowModel {
                 out.add(row);
             }
         }
-        synchronized (lock) { rows = out; version++; }
+        return out;
     }
 
     public void onLiq(JSONObject m) {
