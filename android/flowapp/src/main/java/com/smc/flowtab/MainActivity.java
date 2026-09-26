@@ -104,7 +104,6 @@ public final class MainActivity extends Activity implements EngineClient.Listene
             return false;
         });
         interp.setListener(r -> { chart.focusCycle(r.t0, r.t1); markChanged(); });
-        interp.setOlderListener(t1 -> feed.sendInterpPage(t1));   // the feed's history, on demand (2026-09-26)
         root = new FrameLayout(this);
         root.setBackgroundColor(Color.parseColor("#141414"));
         root.addView(row, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
@@ -222,10 +221,7 @@ public final class MainActivity extends Activity implements EngineClient.Listene
     @Override public void onState(boolean connected) {
         runOnUiThread(() -> {
             chart.dataChanged(); interp.refresh();
-            if (connected) {
-                synchronized (model.lock) { model.pageAsked = Double.NaN; }   // a new engine owes no page
-                sendToggles();
-            }
+            if (connected) sendToggles();
         });
     }
 

@@ -63,13 +63,6 @@ public final class EngineClient extends Thread {
         } catch (Exception ignored) { }
     }
 
-    /** The feed reached the end of what it holds (user 2026-09-26): the cards of the cycles before `t1`, please. */
-    public void sendInterpPage(double t1) {
-        try {
-            send(new JSONObject().put("t", "interp_page").put("t1", t1));
-        } catch (Exception ignored) { }
-    }
-
     /** The Big Player MIN PRINT slider moved (user 2026-09-25): the smallest print / player, in USD, the marks show. */
     public void sendBpMin(double usd) {
         try {
@@ -215,7 +208,6 @@ public final class EngineClient extends Thread {
                 case "cint": model.onLines("cint", m); break;
                 case "cimp": model.onLines("cimp", m); break;
                 case "interp": model.onInterp(m); break;
-                case "interp_page": model.onInterpPage(m); break;
                 case "liq": model.onLiq(m); break;
                 case "explain": model.onExplain(m); break;
                 case "hlh": model.onHlh(m); break;

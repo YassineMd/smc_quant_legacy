@@ -20762,13 +20762,45 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
             return
         self._interp_draw(now)
 
-    def _interp_rows_from(self, vx0, vx1, arrs, vis, now, live, max_rows=None):
-        """The Interpretation CARDS for the cycles of one crosses() read [vx0, vx1] flagged in `vis` -- every card
-        the feed draws is built here. Split out of _interp_draw (2026-09-26) so the tablet's engine can build the
-        cards of an OLDER window on demand (the feed itself stays anchored at the live edge): same baselines (the
-        read starts _lb_secs() before what it shows), same I x I reading, same gates. `live` False skips the read's
-        unfinished last cycle. Returns (rows, t_end_c, px0, px1, pxh, pxl, iimp) -- the auction snapshot's inputs."""
-        t, is_buy, strong, move, cbuy, csell, t_end, done = arrs
+    def _interp_draw(self, now: float) -> None:
+        """One row per cycle, newest first: the state name, and the readings behind it.
+
+        The classifier is the user's own quadrant map -- aggressive $/SECOND against this cycle's recent
+        baseline, crossed with the Speed pane's own ticks/s ratio. Both were measured before anything was
+        drawn (see app/flow_interp.py for the numbers and for what did NOT reproduce).
+
+        The book columns are EVIDENCE beside the state, never an input to it, and a cycle with too few depth
+        columns prints "-" rather than a fabricated reading."""
+        p = getattr(self, "interp_panel", None)
+        if p is None or self._interp_data is None:
+            return
+        vx0, vx1, (t, is_buy, strong, move, cbuy, csell, t_end, done) = self._interp_data
+        if t.size == 0:
+            if self._interp_sig != ("empty",):
+                self._interp_sig = ("empty",); p.setRows([])
+            return
+        # the feed's own window is shown; the cycles the read holds BEFORE it are everyone's baseline and nothing
+        # else (see _interp_tick). Anchored at the live edge, so a pan still cannot take rows away.
+        vis = np.asarray(t, dtype=np.float64) >= float(self.__dict__.get("_interp_show0", vx0)) - 1e-6
+        if not vis.any():
+            vis[-1] = True                        # a single cycle older than the whole window: still show it
+        nvis = int(vis.sum())
+        # the forming cycle's elapsed time is bucketed, so a live cycle does not rebuild the feed every frame.
+        # The read ends at the store's own live edge, so the open cycle is genuinely the forming one -- unless
+        # the tape itself has gone stale, which is worth not lying about.
+        live = bool(vx1 >= now - float(config.INTERP_STALE_SECS))
+        _form = float(now - t[-1]) if (live and t.size and not bool(done[-1])) else 0.0
+        # the live price is IN the signature: without it the forming row would keep printing the price it had
+        # when the cycle opened, which is the whole bug this fixes
+        _lp = self._engine_live_px()
+        sig = (nvis, round(float(t[-1]), 2), int(self._flow_win), int(_form // 2), live,
+               round(float(_lp), 6) if _lp is not None else None,
+               int(len(getattr(self, "_lob_cache", {}) or {})) // 8,
+               int(t.size), int(getattr(self._flow, "rev_hist", 0)),   # the baseline behind the window moved
+               self._iimp_bright_tok())              # the I x I pane re-rated: a bright card may fill or empty
+        if sig == self._interp_sig:
+            return
+        self._interp_sig = sig
         side, _rate, _st = self._cycle_impact(is_buy, strong, move, cbuy, csell)
         mv = np.nan_to_num(move, nan=0.0)
         # the two prices the move is the difference of. SAME crosses() arguments, so this reads the memo entry
@@ -20837,7 +20869,7 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
         rows = _interp_build_rows(t[k], t_end_c[k], done[k], mv[k], side[k],
                                   vol_ratio[k], spd_ratio[k], rb[k], ra[k], buy_r[k], sell_r[k],
                                   float(config.SPEED_FLAT_TICKS), float(config.INTERP_WEAK_BELOW),
-                                  int(max_rows if max_rows is not None else config.INTERP_MAX_ROWS), now=now, live=live,
+                                  int(config.INTERP_MAX_ROWS), now=now, live=live,
                                   px_start=px0[k], px_end=px1[k], px_dec=_dec,
                                   slow_c=float(config.SPEED_SLOW), fast_c=float(config.SPEED_FAST),
                                   px_hi=pxh[k], px_lo=pxl[k], tick=float(config.TICK_SIZE),
@@ -20848,49 +20880,6 @@ WHAT IS DRAWN COMES FROM THE CACHE -- every cycle this pane has ever read (see _
                                        float(config.BREAK_KEPT_MIN), float(config.BREAK_OPP_TAPE_MIN)),
                                   vac=(float(config.VAC_WALL_MAX), float(config.VAC_OPP_TAPE_MAX)))
         rows = self._interp_bright_demote(rows)
-        return rows, t_end_c, px0, px1, pxh, pxl, _ii
-
-    def _interp_draw(self, now: float) -> None:
-        """One row per cycle, newest first: the state name, and the readings behind it.
-
-        The classifier is the user's own quadrant map -- aggressive $/SECOND against this cycle's recent
-        baseline, crossed with the Speed pane's own ticks/s ratio. Both were measured before anything was
-        drawn (see app/flow_interp.py for the numbers and for what did NOT reproduce).
-
-        The book columns are EVIDENCE beside the state, never an input to it, and a cycle with too few depth
-        columns prints "-" rather than a fabricated reading."""
-        p = getattr(self, "interp_panel", None)
-        if p is None or self._interp_data is None:
-            return
-        vx0, vx1, (t, is_buy, strong, move, cbuy, csell, t_end, done) = self._interp_data
-        if t.size == 0:
-            if self._interp_sig != ("empty",):
-                self._interp_sig = ("empty",); p.setRows([])
-            return
-        # the feed's own window is shown; the cycles the read holds BEFORE it are everyone's baseline and nothing
-        # else (see _interp_tick). Anchored at the live edge, so a pan still cannot take rows away.
-        vis = np.asarray(t, dtype=np.float64) >= float(self.__dict__.get("_interp_show0", vx0)) - 1e-6
-        if not vis.any():
-            vis[-1] = True                        # a single cycle older than the whole window: still show it
-        nvis = int(vis.sum())
-        # the forming cycle's elapsed time is bucketed, so a live cycle does not rebuild the feed every frame.
-        # The read ends at the store's own live edge, so the open cycle is genuinely the forming one -- unless
-        # the tape itself has gone stale, which is worth not lying about.
-        live = bool(vx1 >= now - float(config.INTERP_STALE_SECS))
-        _form = float(now - t[-1]) if (live and t.size and not bool(done[-1])) else 0.0
-        # the live price is IN the signature: without it the forming row would keep printing the price it had
-        # when the cycle opened, which is the whole bug this fixes
-        _lp = self._engine_live_px()
-        sig = (nvis, round(float(t[-1]), 2), int(self._flow_win), int(_form // 2), live,
-               round(float(_lp), 6) if _lp is not None else None,
-               int(len(getattr(self, "_lob_cache", {}) or {})) // 8,
-               int(t.size), int(getattr(self._flow, "rev_hist", 0)),   # the baseline behind the window moved
-               self._iimp_bright_tok())              # the I x I pane re-rated: a bright card may fill or empty
-        if sig == self._interp_sig:
-            return
-        self._interp_sig = sig
-        rows, t_end_c, px0, px1, pxh, pxl, _ii = self._interp_rows_from(
-            vx0, vx1, (t, is_buy, strong, move, cbuy, csell, t_end, done), vis, now, live)
         # THE AUCTION READING (2026-09-24): computed with the cards' I x I reading and kept for the snapshot file (the
         # Claude connector, /auction-read) -- NEVER drawn on the cards (the card strip was removed at the user's word:
         # "not really interested by what you added on the interpretation"). `ex` carries what the cards and the
