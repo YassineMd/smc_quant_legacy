@@ -50,7 +50,7 @@ public final class ChartView extends View {
     public boolean showHlh = false, showBp = false;
     public boolean showCvp = true;                   // CONFLICT VP (user 2026-09-26): drawn by drawCvp
     public boolean showCvpPrev = false;              // ... and the PREVIOUS ones (its sub-toggle)
-    public boolean showCvpUt = false;                // ... and the finished VPs' UNTESTED AREAS (its other sub-toggle)
+    public boolean showCvpUt = false;                // ... UNTESTED only: the current VP + the previous ones not yet tested
     public boolean bw = true;                       // Chart Style "Simple BW": white canvas, black ink, black / white candles
     private int cBg, cFg, cTitle, cGuide, cSep, cMid, cInk;
 
@@ -469,10 +469,10 @@ public final class ChartView extends View {
         }
     }
 
-    /** A tap on a drawn Conflict VP's HIGH or LOW line (within CVP_TAP_TOL, inside its span), with the previous VPs on:
+    /** A tap on a drawn Conflict VP's HIGH or LOW line (within CVP_TAP_TOL, inside its span), with previous VPs shown:
      *  show that VP alone, or -- tapping it again -- all of them. The newest drawn wins where lines overlap. */
     private boolean cvpTap(float x, float y) {
-        if (!showCvp || !showCvpPrev) return false;
+        if (!showCvp || !(showCvpPrev || showCvpUt)) return false;
         float tol = CVP_TAP_TOL * d;
         for (int i = cvpHits.size() - 1; i >= 0; i--) {
             double[] h = cvpHits.get(i);
@@ -916,11 +916,11 @@ public final class ChartView extends View {
         cvpHits.clear();
         double[][] vps = s.cvpVps;
         if (vps == null) return;
-        if (!s.cvpPrev) cvpSolo = Double.NaN;
+        if (!s.cvpPrev && !s.cvpUt) cvpSolo = Double.NaN;
         if (!Double.isNaN(cvpSolo)) {
             boolean there = false;
-            for (double[] v : vps) if (Math.abs(v[FlowModel.CVP_T0] - cvpSolo) < 0.5) { there = true; break; }
-            if (!there) cvpSolo = Double.NaN;
+            for (double[] v : vps) if (Math.abs(v[FlowModel.CVP_T0] - cvpSolo) < 0.5 && cvpShown(s, v)) { there = true; break; }
+            if (!there) cvpSolo = Double.NaN;                      // gone from the chain, or hidden (tested)
         }
         // each VP's colour by its place in the chain: the current one red, the previous ones blue, green, ... newest first
         int nPrev = 0;
@@ -936,8 +936,7 @@ public final class ChartView extends View {
         // the oldest first, the current one last: on top
         for (int i = vps.length - 1; i >= 0; i--) {
             double[] v = vps[i];
-            boolean cur = v[FlowModel.CVP_CUR] > 0.5;
-            if (!cur && !s.cvpPrev) continue;
+            if (!cvpShown(s, v)) continue;
             if (!Double.isNaN(cvpSolo) && Math.abs(v[FlowModel.CVP_T0] - cvpSolo) >= 0.5) continue;   // shown alone: skip the rest
             double t1 = (v[FlowModel.CVP_LIVE] > 0.5 && !Double.isNaN(formEnd)) ? Math.max(v[FlowModel.CVP_T1], formEnd) : v[FlowModel.CVP_T1];
             drawCvpOne(c, v, t1, cvpCols[i], r, top, hgt, yl, yh);
@@ -945,6 +944,16 @@ public final class ChartView extends View {
     }
 
     private int[] cvpCols = new int[16];
+
+    /** Which VPs are drawn. THE CURRENT ONE ALWAYS ("omit the most recent VP we keep it"). The previous ones: with
+     *  UNTESTED on, only those whose area price has not come back to yet (user 2026-09-26: "when i toggle it on it
+     *  should hide the previous VPs that got already tested") -- whether or not PREVIOUS is on; otherwise all of them
+     *  with PREVIOUS. */
+    private static boolean cvpShown(Snap s, double[] v) {
+        if (v[FlowModel.CVP_CUR] > 0.5) return true;
+        if (s.cvpUt) return v.length > FlowModel.CVP_UT && v[FlowModel.CVP_UT] > 0.5;
+        return s.cvpPrev;
+    }
     // the UNTESTED AREAS' fill and edge: the VP's own colour, faint enough for the candles to read through it
     private static final int CVP_AREA_FILL_A = 0x2E, CVP_AREA_EDGE_A = 0xB0;
 
@@ -953,9 +962,10 @@ public final class ChartView extends View {
      *  expecting the below yellow line area to be tested, and if it was a red arrow conflict VP we gonna be expecting
      *  its above yellow area to be tested / so this indicator when toggled in checks for the below/above yellow line
      *  areas that were not tested, and hides the one that got tested. it only checks for the conflict VPs up to 24h
-     *  maximum"). The engine decides which (conflict_vp.untested -> ut); each is drawn from where its VP ENDED (t1) to
-     *  the chart's right edge, between the yellow midline and the VP's LOW (green arrow) or HIGH (red arrow), in the
-     *  VP's own colour -- whether or not the previous VPs' lines are shown. A VP shown alone shows only its own area. */
+     *  maximum", then "actually dont limit it to 24h"). The engine decides which (conflict_vp.Frozen.untested -> ut);
+     *  each is drawn from where its VP ENDED (t1) to the chart's right edge, between the yellow midline and the VP's
+     *  LOW (green arrow) or HIGH (red arrow), in the VP's own colour, with that VP (cvpShown). A VP shown alone shows
+     *  only its own area. */
     private void drawCvpAreas(Canvas c, double[][] vps, RectF r, float top, float hgt, double yl, double yh) {
         double ky = hgt / Math.max(1e-12, yh - yl);
         for (int i = vps.length - 1; i >= 0; i--) {

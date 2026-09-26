@@ -495,8 +495,8 @@ public final class FlowModel {
     // [t0, t1, lo, hi, poc, vah, val, vah2, val2, live, cur, up, dn, c2t0, c2lo, ut] -- drawn from t0 to t1, low / high of
     // the two red boxes, the HLH VP's lines. cur = THE Conflict VP, the others the PREVIOUS ones (a chain back in time
     // that never overlaps); up / dn = the green / red arrow, under conflict 2's box (c2t0, c2lo); ut = 1: a FINISHED VP
-    // whose area below (green) / above (red) its yellow midline price has not come back to since t1, ended within 24 h
-    // (the UNTESTED AREAS sub-toggle).
+    // whose area below (green) / above (red) its yellow midline price has not come back to since t1, no time limit
+    // (the UNTESTED AREAS sub-toggle keeps only these and the current one).
     public static final int CVP_T0 = 0, CVP_T1 = 1, CVP_LO = 2, CVP_HI = 3, CVP_POC = 4, CVP_VAH = 5, CVP_VAL = 6,
             CVP_VAH2 = 7, CVP_VAL2 = 8, CVP_LIVE = 9, CVP_CUR = 10, CVP_UP = 11, CVP_DN = 12, CVP_C2T0 = 13, CVP_C2LO = 14,
             CVP_UT = 15, CVP_N = 16;

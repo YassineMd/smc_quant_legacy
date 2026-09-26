@@ -53,8 +53,9 @@ happened at 7am, we shouldnt have a gap", and "when a conflict VP is draw it sta
   UNTESTED AREAS (user 2026-09-26, a sub-toggle): "after every conflict VP that ends, in the future the above/below
               yellow area to be tested, we are always expecting the price to come back to it ... a green arrow conflict
               VP ... we are expecting the below yellow line area to be tested, and if it was a red arrow conflict VP we
-              gonna be expecting its above yellow area to be tested ... it only checks for the conflict VPs up to 24h
-              maximum". See untested().
+              gonna be expecting its above yellow area to be tested", then "dont limit it to 24h ... when i toggle it on
+              it should hide the previous VPs that got already tested, omit the most recent VP we keep it". See
+              Frozen.untested (what has been tested is remembered, so the check reaches past the 72 h of candles).
   THE BIAS    (user 2026-09-26, the tablet's Market Position buttons): "detect the last break of the conflict VP ...
               a candle that closes above/below a most recent high/low of the conflict VP (the thickest lines of the
               conflict VP) / if above we have a bullish bias / if below we have a bearish bias". Frozen.bias(): every
@@ -153,50 +154,22 @@ def profile(base: int, bin_secs: float, buy, sell, pxh, pxl, t0: float, t1: floa
             "usd": float(vp.sum()), "rows": int(rows), "k": int(k)}
 
 
-def untested(drawn, t, pxh, pxl, now: float, max_secs: float, tick: float) -> dict:
-    """THE UNTESTED AREAS of the FINISHED conflict VPs (user 2026-09-26: "after every conflict VP that ends, in the
-    future the above/below yellow area to be tested, we are always expecting the price to come back to it. for example
-    we have a green arrow conflict VP that finished because another one just got created. we are expecting the below
-    yellow line area to be tested, and if it was a red arrow conflict VP we gonna be expecting its above yellow area to
-    be tested / so this indicator when toggled in checks for the below/above yellow line areas that were not tested,
-    and hides the one that got tested. it only checks for the conflict VPs up to 24h maximum").
-
-    `drawn` = Frozen.drawn() (newest first; the first is the CURRENT VP, which has not ended). Each other VP ENDED where
-    its lines stop -- where the next newer VP begins (x1) -- and from there on:
-      GREEN arrow (its high came from its conflict 1) -> the area BELOW the yellow midline, midline .. its low, is
-          tested once any price trades AT OR UNDER the midline (a candle's low: a wick counts);
-      RED arrow (its low came from its conflict 1)   -> the area ABOVE it, midline .. its high, once any price trades at
-          or over the midline.
-    Prices = the cycle candles' highs / lows from the first candle starting at x1, the forming one included. Only VPs
-    that ended within `max_secs` of `now`. Returns {index in drawn: (side, lo, hi, x1)} of the areas NOT tested yet --
-    side +1 = the area below the midline (green arrow), -1 = above it (red arrow)."""
-    t = np.asarray(t, dtype=np.float64)
-    hs = np.asarray(pxh, dtype=np.float64)
-    ls = np.asarray(pxl, dtype=np.float64)
-    tol = 0.5 * float(tick)
-    out = {}
-    for k, (it, _x0, x1) in enumerate(drawn):
-        if k == 0 or float(now) - float(x1) > float(max_secs):
-            continue                                      # the current VP has not ended; too old
-        v = it["vp"]
-        vhi, vlo = float(v["hi"]), float(v["lo"])
-        up = abs(vhi - float(it["hi"])) < tol             # green arrow: conflict 1 made the high
-        dn = abs(vlo - float(it["lo"])) < tol             # red arrow: conflict 1 made the low
-        if up == dn:
-            continue                                      # no single arrow (never under the pair rule)
-        mid = 0.5 * (vhi + vlo)
-        i0 = int(np.searchsorted(t, float(x1) - 0.5))
-        if up:
-            seen = ls[i0:]
-            if seen.size and np.nanmin(seen) <= mid + 1e-9:
-                continue                                  # tested: price came back down to the midline
-            out[k] = (1, vlo, mid, float(x1))
-        else:
-            seen = hs[i0:]
-            if seen.size and np.nanmax(seen) >= mid - 1e-9:
-                continue                                  # tested: price came back up to the midline
-            out[k] = (-1, mid, vhi, float(x1))
-    return out
+def area_of(it: dict, tol: float) -> Optional[Tuple[int, float, float, float]]:
+    """A VP's EXPECTED AREA (user 2026-09-26: "for example we have a green arrow conflict VP that finished because
+    another one just got created. we are expecting the below yellow line area to be tested, and if it was a red arrow
+    conflict VP we gonna be expecting its above yellow area to be tested"): (side, lo, hi, mid) -- side +1 = BELOW its
+    yellow midline, midline .. its low (green arrow: conflict 1 made the high); -1 = ABOVE it, midline .. its high (red
+    arrow: conflict 1 made the low). None when the VP has no single arrow (never under the pair rule)."""
+    v = it.get("vp")
+    if v is None:
+        return None
+    vhi, vlo = float(v["hi"]), float(v["lo"])
+    up = abs(vhi - float(it["hi"])) < tol
+    dn = abs(vlo - float(it["lo"])) < tol
+    if up == dn:
+        return None
+    mid = 0.5 * (vhi + vlo)
+    return (1, vlo, mid, mid) if up else (-1, mid, vhi, mid)
 
 
 class Frozen:
@@ -214,6 +187,10 @@ class Frozen:
         self.keep = float(keep_secs)
         self.items: List[dict] = []
         self.rule = RULE                                  # a store without one predates the pair rule: see redecide()
+        # THE UNTESTED AREAS' memory (see untested): t0 -> when its area was found TESTED (for good), and t0 -> the time
+        # up to which it was verified UNTESTED -- so a VP whose end has left the 72 h of candles is still known
+        self.tested: dict = {}
+        self.watch: dict = {}
         self.load()
 
     # ---------------------------------------------------------------- persistence
@@ -226,6 +203,8 @@ class Frozen:
             if int(d.get("ver", 0)) == VER:
                 self.items = sorted((dict(x) for x in (d.get("items") or [])), key=lambda x: float(x["t0"]))
                 self.rule = int(d.get("rule", 1))
+                self.tested = {round(float(k), 3): float(v) for k, v in (d.get("tested") or {}).items()}
+                self.watch = {round(float(k), 3): float(v) for k, v in (d.get("watch") or {}).items()}
         except Exception:
             self.items = []
 
@@ -234,12 +213,17 @@ class Frozen:
             return
         tmp = self.path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump({"ver": VER, "rule": self.rule, "items": self.items}, fh, separators=(",", ":"))
+            json.dump({"ver": VER, "rule": self.rule, "items": self.items,
+                       "tested": {"%.3f" % k: v for k, v in self.tested.items()},
+                       "watch": {"%.3f" % k: v for k, v in self.watch.items()}}, fh, separators=(",", ":"))
         os.replace(tmp, self.path)
 
     def prune(self, now: float) -> bool:
         n0 = len(self.items)
         self.items = [x for x in self.items if float(x["te"]) >= float(now) - self.keep]
+        keys = {round(float(x["t0"]), 3) for x in self.items}
+        self.tested = {k: v for k, v in self.tested.items() if k in keys}
+        self.watch = {k: v for k, v in self.watch.items() if k in keys}
         return len(self.items) != n0
 
     def newest_t0(self) -> Optional[float]:
@@ -429,6 +413,61 @@ class Frozen:
                 x1 = max(x1, float(chn[k - 1]["vp"]["d0"]))
             out.append((it, float(v["d0"]), x1))
         return out
+
+    def untested(self, drawn, t, pxh, pxl, now: float, tick: float) -> Tuple[dict, bool]:
+        """THE UNTESTED AREAS of the FINISHED conflict VPs (user 2026-09-26: "after every conflict VP that ends, in the
+        future the above/below yellow area to be tested, we are always expecting the price to come back to it ... so
+        this indicator when toggled in checks for the below/above yellow line areas that were not tested, and hides the
+        one that got tested", then "actually dont limit it to 24h and as I told you when i toggle it on it should hide
+        the previous VPs that got already tested, omit the most recent VP we keep it").
+
+        `drawn` = drawn() (newest first; the first is the CURRENT VP: it has not ended -- the tablet always keeps it).
+        Every other VP ENDED where its lines stop, where the next newer VP begins (x1); its area (area_of) is TESTED by
+        the first price that trades at or under its midline (green arrow) / at or over it (red arrow) from x1 on -- a
+        candle's low / high, so a wick counts, the forming candle too. No time limit.
+        The read holds 72 h of candles and the records 4 days, so the store REMEMBERS: `tested` (t0 -> when; tested
+        once is tested for good) and `watch` (t0 -> the time up to which it was verified untested). A VP whose end lies
+        before the first candle held is checked from that candle on only if it was watched into the read; otherwise
+        it cannot be told and is not returned (the tablet hides it with the tested ones).
+        Returns ({index in drawn: (side, lo, hi, x1)} of the areas NOT tested, whether `tested` grew)."""
+        t = np.asarray(t, dtype=np.float64)
+        hs = np.asarray(pxh, dtype=np.float64)
+        ls = np.asarray(pxl, dtype=np.float64)
+        tol = 0.5 * float(tick)
+        read0 = float(t[0]) if t.size else float("inf")
+        out = {}
+        grew = False
+        for k, (it, _x0, x1) in enumerate(drawn):
+            if k == 0:
+                continue                                  # the current VP has not ended
+            key = round(float(it["t0"]), 3)
+            if key in self.tested:
+                continue
+            a = area_of(it, tol)
+            if a is None:
+                continue
+            side, lo, hi, mid = a
+            x1 = float(x1)
+            if x1 >= read0 - 0.5:
+                i0 = int(np.searchsorted(t, x1 - 0.5))
+            elif float(self.watch.get(key, -np.inf)) >= read0 - 0.5:
+                i0 = 0                                    # watched untested into the read: carry on from its start
+            else:
+                continue                                  # ended before the candles held and never watched: unknown
+            if side > 0:
+                seen = ls[i0:]
+                hit = bool(seen.size) and float(np.nanmin(seen)) <= mid + 1e-9
+            else:
+                seen = hs[i0:]
+                hit = bool(seen.size) and float(np.nanmax(seen)) >= mid - 1e-9
+            if hit:
+                self.tested[key] = float(now)
+                self.watch.pop(key, None)
+                grew = True
+                continue
+            self.watch[key] = float(now)
+            out[k] = (side, lo, hi, x1)
+        return out, grew
 
     def bias(self, t, t_end, done, close, settle: float, tick: float) -> Tuple[int, int, Optional[dict]]:
         """THE MARKET POSITION BIAS (user 2026-09-26): "first we have to detect the last break of the conflict VP, what

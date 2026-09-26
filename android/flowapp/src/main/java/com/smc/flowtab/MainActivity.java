@@ -77,7 +77,7 @@ public final class MainActivity extends Activity implements EngineClient.Listene
         chart.showHlh = prefs.getBoolean("hlh", false);
         chart.showCvp = prefs.getBoolean("cvp", true);      // CONFLICT VP (user 2026-09-26), on until the user turns it off
         chart.showCvpPrev = prefs.getBoolean("cvp_prev", false);   // ... its previous ones, off until the user asks
-        chart.showCvpUt = prefs.getBoolean("cvp_ut", false);       // ... the finished ones' untested areas, likewise
+        chart.showCvpUt = prefs.getBoolean("cvp_ut", false);       // ... UNTESTED only (the tested ones hidden), likewise
         chart.showBp = prefs.getBoolean("bigplayer", false);
         bpMin = prefs.getFloat("bp_min", (float) BP_DEFAULT);
         chart.initTools(prefs, new PriceTools.Events() {
@@ -319,7 +319,7 @@ public final class MainActivity extends Activity implements EngineClient.Listene
             for (CheckBox cb : cvpSub) if (cb != null) cb.setEnabled(v);
         });
         cvpSub[0] = toggle(col, "Previous Conflict VPs  (one colour each)", "cvp_prev", chart.showCvpPrev, v -> chart.showCvpPrev = v);
-        cvpSub[1] = toggle(col, "Untested Areas  (below / above the yellow line, 24 h)", "cvp_ut", chart.showCvpUt, v -> chart.showCvpUt = v);
+        cvpSub[1] = toggle(col, "Untested Areas  (hides the previous VPs already tested)", "cvp_ut", chart.showCvpUt, v -> chart.showCvpUt = v);
         for (CheckBox cb : cvpSub) {
             cb.setTextSize(13);
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);

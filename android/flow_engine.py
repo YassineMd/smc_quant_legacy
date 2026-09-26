@@ -41,9 +41,10 @@ WIRE (newline-delimited JSON; arrays are base64 of little-endian float32 unless 
              conflict), the others the PREVIOUS ones -- the chain of conflict-2 links; live is always 0 (a forming
              conflict makes no VP); up / dn = its HIGH / its LOW was taken from its LAST conflict (conflict 1): the
              tablet's green up / red down arrow, drawn BELOW THE LOW OF CONFLICT 2 -- whose box starts at c2t0 (it ends
-             at t0) and whose frozen low is c2lo (NaN once that record is dropped). ut = 1: a FINISHED VP (ended within
-             CVP_UNTESTED_MAX_SECS) whose expected area -- below its yellow midline for a green arrow, above it for a red
-             one -- price has not traded into since it ended (the UNTESTED AREAS sub-toggle; conflict_vp.untested).
+             at t0) and whose frozen low is c2lo (NaN once that record is dropped). ut = 1: a FINISHED VP whose expected
+             area -- below its yellow midline for a green arrow, above it for a red one -- price has not traded into
+             since it ended, no time limit (the UNTESTED AREAS sub-toggle keeps only these and the current VP;
+             conflict_vp.Frozen.untested). 0: tested, the current VP, or not known.
              See tick_cvp, app/conflict_vp.py
   <- hi      {}                                                             first line from the tablet
   <- view    {x0, x1, follow}                                               the tablet's x range (epoch seconds)
@@ -423,6 +424,7 @@ class State:
     hlh_out = None; hlh_t = 0.0; hlh_xm = None; hlh_pics = {}
     mpb_msg = None; mpb_sent = None            # the MARKET POSITION BIAS built with the cycles, and the one the tablet has
     cvp_sent = None; cvp_pair = None           # the CONFLICT VP payload the tablet last got, and the chain last logged
+    cvp_save_t = 0.0                           # the last save of the store's untested-areas memory
     dom_ok = False            # dom_areas was built while the wall grid covered the whole read it needs (cvp_ready)
     bw = True                 # the tablet's Chart Style: the HLH labels are built for a white or a dark ground
     bp_sig = None
@@ -957,8 +959,11 @@ def tick_cvp():
     ut = {}
     if S.cyc_base is not None:
         try:
-            ut = _cvp.untested(drawn, S.cyc_base[0], S.cyc_base[10], S.cyc_base[11], time.time(),
-                               float(config.CVP_UNTESTED_MAX_SECS), float(config.TICK_SIZE))
+            _now = time.time()
+            ut, _grew = CVP.untested(drawn, S.cyc_base[0], S.cyc_base[10], S.cyc_base[11], _now, float(config.TICK_SIZE))
+            if _grew or _now - S.cvp_save_t > 600.0:    # a newly tested area at once; how far each was watched, now and then
+                CVP.save()
+                S.cvp_save_t = _now
         except Exception:
             traceback.print_exc()
     for k_, (q, x0_, x1_) in enumerate(drawn):
@@ -983,10 +988,11 @@ def tick_cvp():
         S.cvp_ut_key = ukey
         try:
             hm = lambda x: time.strftime("%d %H:%M:%S", time.gmtime(float(x)))
-            log("conflict VP untested areas: %d | %s" % (len(ut), " | ".join(
-                "%s VP %s %s %.3f-%.3f since %s" % ("green" if a[0] > 0 else "red", hm(drawn[k][0]["t0"]),
-                                                 "below" if a[0] > 0 else "above", a[1], a[2], hm(a[3]))
-                for k, a in sorted(ut.items()))))
+            log("conflict VP untested areas: %d of %d previous VPs (%d tested so far) | %s" % (
+                len(ut), max(0, len(drawn) - 1), len(CVP.tested), " | ".join(
+                    "%s VP %s %s %.3f-%.3f since %s" % ("green" if a[0] > 0 else "red", hm(drawn[k][0]["t0"]),
+                                                     "below" if a[0] > 0 else "above", a[1], a[2], hm(a[3]))
+                    for k, a in sorted(ut.items())[:12])))
         except Exception:
             traceback.print_exc()
     key = tuple((q["t0"], q["c2"]) for q in chn)
