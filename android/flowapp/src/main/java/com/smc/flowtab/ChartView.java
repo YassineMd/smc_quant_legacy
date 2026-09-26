@@ -848,6 +848,8 @@ public final class ChartView extends View {
             Color.parseColor("#2962FF"), Color.parseColor("#00C853"), Color.parseColor("#AA00FF"), Color.parseColor("#FF6D00"),
             Color.parseColor("#00B8D4"), Color.parseColor("#C51162"), Color.parseColor("#795548")};
     private static final float CVP_VA_W = 2f;          // terminal px, like an HLH bloc's VAH / VAL (x d x PCPX)
+    // the MIDDLE line's yellow: pure yellow on a dark canvas, a deeper one on Simple BW's white, where #FFD600 washes out
+    private static final int CVP_MID = Color.parseColor("#FFD600"), CVP_MID_BW = Color.parseColor("#E6B800");
 
     private void drawCvp(Canvas c, Snap s, RectF r, float top, float hgt, double yl, double yh, double formEnd) {
         double[][] vps = s.cvpVps;
@@ -875,6 +877,21 @@ public final class ChartView extends View {
         double ky = hgt / Math.max(1e-12, yh - yl);
         pl.setColor(col);
         pl.setStrokeWidth(Math.max(1f, CVP_VA_W * d * PCPX));
+        // the VP's own HIGH and LOW (user 2026-09-26: "draw solid lines same color as the VP lines of the high of the
+        // conflict and low of the conflict") -- the range its two conflict boxes set -- and its MIDDLE in yellow ("a
+        // middle yellow line which is basically half the distance high/low conflict"); drawn first, under the rest
+        double hi = v[FlowModel.CVP_HI], lo = v[FlowModel.CVP_LO];
+        for (double p : new double[]{hi, lo}) {
+            if (Double.isNaN(p)) continue;
+            float y = (float) (top + (yh - p) * ky);
+            if (y >= top && y <= r.bottom) c.drawLine(x0, y, x1, y, pl);
+        }
+        if (!Double.isNaN(hi) && !Double.isNaN(lo)) {
+            float y = (float) (top + (yh - 0.5 * (hi + lo)) * ky);
+            pl.setColor(bw ? CVP_MID_BW : CVP_MID);
+            if (y >= top && y <= r.bottom) c.drawLine(x0, y, x1, y, pl);
+            pl.setColor(col);
+        }
         for (double p : new double[]{v[FlowModel.CVP_VAH], v[FlowModel.CVP_VAL]}) {
             if (Double.isNaN(p)) continue;
             float y = (float) (top + (yh - p) * ky);
