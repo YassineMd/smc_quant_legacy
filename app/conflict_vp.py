@@ -5,11 +5,14 @@ The user, 2026-09-26: "This indicator creates VP from the last 2 conflicts/merge
 should be at least 10 bars away from it ... if they have the same high or low we skip ... we will draw our conflict VP
 from conflict 2 to conflict 1, the High will be 101 and the low will be 99 ... we gonna draw the same lines as HLH VP
 indicator". Then: "add a toggle so that I am able to see the previous ones ... each VP lines should be of different
-color ... the VPs should NOT be overlapping".
+color ... the VPs should NOT be overlapping", "the select conflict should normally be connected to the one that
+happened at 7am, we shouldnt have a gap", and "when a conflict VP is draw it stays fix it shouldnt change".
 
-  CONFLICT 1  the newest conflict RUN (consecutive conflict bars are one box, as the tablet draws them).
-  CONFLICT 2  walking back from conflict 1: the first run that ends at least `min_gap` bars before conflict 1 starts
-              and whose high AND low both differ from conflict 1's (a shared high or a shared low -> skipped).
+  CONFLICT 1  a conflict RUN (consecutive conflict bars are one box, as the tablet draws them) once it is COMPLETE:
+              the bar after it has closed without being a conflict. A forming candle never makes a VP: its tapes move
+              until it closes, and one that read "conflict" for 8 s at 11:08:02 swapped the VP there and back.
+  CONFLICT 2  walking back from conflict 1: the first conflict that ends at least `min_gap` bars before conflict 1
+              starts and whose high AND low both differ from conflict 1's (a shared high or low -> skipped).
   A conflict's high / low are its RED BOX's: the reach to the closest previous lime / purple area
               (terminal._conflict_boxes), held to at least its own candles, as the tablet frames it.
   THE VP      from conflict 2's first bar to conflict 1's last, from the lower of the two lows to the higher of the
@@ -21,23 +24,28 @@ color ... the VPs should NOT be overlapping".
               value area grows from it to the bigger neighbouring row (tie -> above) until va_pct % of the volume is
               inside (hlh_profile.value_area, the HLH's own function); the outer value area does the same to va2_pct %.
               VAH / VAL are the top / bottom TICK of the value area's rows.
-  THE PREVIOUS ONES  a CONNECTED chain back in time (user, 2026-09-26: "the select conflict should normally be
-              connected to the one that happened at 7am, we shouldnt have a gap"): the next older VP's conflict 1 IS
-              the newer VP's conflict 2, and its own conflict 2 is found by the same rule. Each VP of the chain is the
-              one that was CURRENT when its conflict 1 was the newest conflict, and its profile keeps both of its
-              conflicts. Its LINES stop where the newer VP's begin -- the shared conflict's first bar -- so the chain
-              has no gap and no overlap ("the VPs should NOT be overlapping"). A run with no conflict 2 breaks the
-              chain: the run before it is tried as a conflict 1 (that VP's lines then run to its own conflict 1's end).
-              ⚠ The first cut restarted the search at the run BEFORE the shared conflict, which skipped a link: the
-              08:31 conflict never became a conflict 1, and its VP to 06:59 (07:49 shares its low) was missing.
+  FROZEN      everything is decided ONCE, the moment a conflict completes (Frozen.freeze_new): its box, its conflict 2
+              and its VP's lines. Nothing recomputes them afterwards -- not late prints, not LINES IMPACT's areas
+              arriving with the wall grid, not an engine restart (the store is a file). The red boxes of the frozen
+              conflicts are drawn from the same record, so a VP's high / low always sit on its boxes.
+  THE CHAIN   the current VP is the newest frozen conflict's; the previous ones follow the conflict-2 links back
+              (each older VP's conflict 1 IS the newer one's conflict 2: no gap). A VP is DRAWN from its conflict 2's
+              END to its conflict 1's end, so the next VP begins exactly where the older one's lines stop and adding
+              a VP never moves an older one's lines. The one change the rule itself makes: a new conflict that
+              shares a high / low with the last one (or is under min_gap bars from it) links to an OLDER conflict,
+              and its VP covers -- replaces -- the last VP (the user's own example: 100-101 skips 100-100.5).
 """
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Tuple
+import json
+import os
+from typing import List, Optional, Tuple
 
 import numpy as np
 
 from . import hlh_profile as H
+
+VER = 1
 
 
 def runs(conf) -> List[Tuple[int, int]]:
@@ -58,64 +66,6 @@ def run_box(a: int, b: int, cfh, cfl, pxh, pxl) -> Tuple[float, float]:
     if not hs.size or not ls.size:
         return float("nan"), float("nan")
     return float(hs.max()), float(ls.min())
-
-
-def _find_c2(rr, boxes, j: int, min_gap: int, tol: float):
-    """Run j as conflict 1: (m, skipped), m = the index in rr of its conflict 2 or None. skipped = [(a, b, high,
-    low, why)] for the runs passed over on the way back, why "near" / "same high" / "same low"."""
-    a1 = rr[j][0]
-    h1, l1 = boxes[j]
-    skipped = []
-    for m in range(j - 1, -1, -1):
-        a2, b2 = rr[m]
-        h2, l2 = boxes[m]
-        if a1 - b2 < int(min_gap):
-            skipped.append((a2, b2, h2, l2, "near"))
-            continue
-        if not (np.isfinite(h2) and np.isfinite(l2)):
-            continue
-        if abs(h2 - h1) < tol:
-            skipped.append((a2, b2, h2, l2, "same high"))
-            continue
-        if abs(l2 - l1) < tol:
-            skipped.append((a2, b2, h2, l2, "same low"))
-            continue
-        return m, skipped
-    return None, skipped
-
-
-def chain(rr, boxes, min_gap: int, tick: float, max_n: Optional[int] = None) -> List[Tuple[int, int, list]]:
-    """[(j, m, skipped)] newest first: run j is a VP's conflict 1, run m its conflict 2. CONNECTED: the next VP's
-    conflict 1 is this VP's conflict 2 (j = m); a run with no conflict 2 is passed over (j - 1)."""
-    tol = 0.5 * float(tick)
-    out = []
-    j = len(rr) - 1
-    while j >= 1 and (max_n is None or len(out) < int(max_n)):
-        if not (np.isfinite(boxes[j][0]) and np.isfinite(boxes[j][1])):
-            j -= 1
-            continue
-        m, sk = _find_c2(rr, boxes, j, min_gap, tol)
-        if m is None:
-            j -= 1
-            continue
-        out.append((j, m, sk))
-        j = m                                              # the shared conflict: no gap between the two VPs
-    return out
-
-
-def pick_pair(conf, cfh, cfl, pxh, pxl, min_gap: int, tick: float):
-    """(c1, c2, skipped) of the CURRENT VP: c1 / c2 = (a, b, high, low), c2 None when no run qualifies, c1 None when
-    there is no conflict at all (or its box is unknown)."""
-    rr = runs(conf)
-    if not rr:
-        return None, None, []
-    boxes = [run_box(a, b, cfh, cfl, pxh, pxl) for a, b in rr]
-    j = len(rr) - 1
-    if not (np.isfinite(boxes[j][0]) and np.isfinite(boxes[j][1])):
-        return None, None, []
-    c1 = rr[j] + boxes[j]
-    m, sk = _find_c2(rr, boxes, j, min_gap, 0.5 * float(tick))
-    return c1, (rr[m] + boxes[m] if m is not None else None), sk
 
 
 def profile(base: int, bin_secs: float, buy, sell, pxh, pxl, t0: float, t1: float, lo: float, hi: float,
@@ -175,52 +125,143 @@ def profile(base: int, bin_secs: float, buy, sell, pxh, pxl, t0: float, t1: floa
             "usd": float(vp.sum()), "rows": int(rows), "k": int(k)}
 
 
-def build(t, t_end, conf, cfh, cfl, pxh, pxl, base: int, bin_secs: float, buy, sell, bpxh, bpxl, tick: float,
-          min_gap: int, rows_target: int, va_pct: float, va2_pct: float, done=None, t_draw=None,
-          memo: Optional[Dict] = None, rev: int = 0, max_n: Optional[int] = None) -> dict:
-    """Every VP of the chain, newest first: {"vps": [{c1, c2, skipped, lo, hi, t0, t1, poc, vah, val, vah2, val2, usd,
-    rows, k, live, cur}, ...], "runs": number of conflict runs}.
+class Frozen:
+    """The FROZEN conflicts, oldest first, each decided once when it completed and never touched again:
+    {t0, tb, te: its first bar's start, last bar's start, last bar's end; hi, lo: its box; n: bars; c2: the t0 of its
+    conflict 2 or None; skip: [[t0, why], ...] the conflicts passed over on the way back; vp: None or {lo, hi, poc,
+    vah, val, vah2, val2, usd, rows, k, d0, d1} with d0 / d1 the span its lines are DRAWN over}.
 
-    `t_end` is crosses()' own (the next crossing; the end of the tape for the forming cycle): it cuts the seconds.
-    `t_draw` (optional) is where a VP's lines END on the chart -- the engine's t_end with the forming cycle clamped to
-    now, as the candles are drawn. cur = its conflict 1 is the NEWEST conflict run (the one Conflict VP); live = that
-    run's last bar is the forming cycle (`done` False there). `memo` (a dict the caller keeps) holds the profiles
-    already built, keyed on the seconds, the range and `rev` (the store's rev_hist: older bins rewritten) -- a VP
-    whose seconds end within a minute of the tape's end is always rebuilt (late prints)."""
-    rr = runs(conf)
-    out = {"vps": [], "runs": len(rr)}
-    if len(rr) < 2:
+    `path` keeps it across engine restarts (JSON, rewritten whole -- a few hundred records at most). Conflicts older
+    than `keep_secs` are dropped. Only conflicts NEWER than the newest frozen one are ever added: the frozen history
+    is never rewritten, whatever the live flags later say about it."""
+
+    def __init__(self, path: Optional[str] = None, keep_secs: float = 4 * 86400.0):
+        self.path = path
+        self.keep = float(keep_secs)
+        self.items: List[dict] = []
+        self.load()
+
+    # ---------------------------------------------------------------- persistence
+    def load(self) -> None:
+        if not self.path or not os.path.exists(self.path):
+            return
+        try:
+            with open(self.path, "r", encoding="utf-8") as fh:
+                d = json.load(fh)
+            if int(d.get("ver", 0)) == VER:
+                self.items = sorted((dict(x) for x in (d.get("items") or [])), key=lambda x: float(x["t0"]))
+        except Exception:
+            self.items = []
+
+    def save(self) -> None:
+        if not self.path:
+            return
+        tmp = self.path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump({"ver": VER, "items": self.items}, fh, separators=(",", ":"))
+        os.replace(tmp, self.path)
+
+    def prune(self, now: float) -> bool:
+        n0 = len(self.items)
+        self.items = [x for x in self.items if float(x["te"]) >= float(now) - self.keep]
+        return len(self.items) != n0
+
+    def newest_t0(self) -> Optional[float]:
+        return float(self.items[-1]["t0"]) if self.items else None
+
+    # ---------------------------------------------------------------- freezing
+    def freeze_new(self, t, t_end, done, conf, cfh, cfl, pxh, pxl, now: float, settle: float, base: int,
+                   bin_secs: float, buy, sell, bpxh, bpxl, tick: float, min_gap: int, rows_target: int,
+                   va_pct: float, va2_pct: float) -> List[dict]:
+        """Freeze every conflict run of the read that has COMPLETED -- the bar after it closed at least `settle`
+        seconds ago without being a conflict -- and starts after the newest frozen one, oldest first. Each gets its
+        box now, its conflict 2 by the rule over the FROZEN conflicts (their frozen boxes; bars counted on this
+        read), and its VP's lines from the bins now. Returns the records added."""
+        t = np.asarray(t, dtype=np.float64)
+        n = int(t.size)
+        tol = 0.5 * float(tick)
+        last = self.newest_t0()
+        added = []
+        for a, b in runs(conf):
+            if b + 1 >= n or not bool(done[b + 1]) or float(now) - float(t_end[b + 1]) < float(settle):
+                continue                                  # still open: the bar after it is forming, or just closed
+            t0 = float(t[a])
+            if last is not None and t0 <= last + 0.5:
+                continue                                  # frozen already, or older than the frozen history
+            hi, lo = run_box(a, b, cfh, cfl, pxh, pxl)
+            if not (np.isfinite(hi) and np.isfinite(lo)):
+                continue
+            it = {"t0": round(t0, 3), "tb": round(float(t[b]), 3), "te": round(float(t_end[b]), 3),
+                  "hi": round(hi, 6), "lo": round(lo, 6), "n": int(b - a + 1), "c2": None, "skip": [], "vp": None}
+            c2 = None
+            for f in reversed(self.items):
+                if float(f["tb"]) >= float(t[0]) - 0.5:
+                    gap = a - int(np.searchsorted(t, float(f["tb"]) - 0.5))   # bars from its last bar to our first
+                else:
+                    gap = int(min_gap)                    # older than the read: more than a read away
+                if gap < int(min_gap):
+                    it["skip"].append([f["t0"], "near"])
+                    continue
+                if abs(float(f["hi"]) - hi) < tol:
+                    it["skip"].append([f["t0"], "same high"])
+                    continue
+                if abs(float(f["lo"]) - lo) < tol:
+                    it["skip"].append([f["t0"], "same low"])
+                    continue
+                c2 = f
+                break
+            if c2 is not None:
+                it["c2"] = c2["t0"]
+                vlo, vhi = min(lo, float(c2["lo"])), max(hi, float(c2["hi"]))
+                vp = profile(base, bin_secs, buy, sell, bpxh, bpxl, float(c2["t0"]), float(t_end[b]), vlo, vhi, tick,
+                             rows_target, va_pct, va2_pct)
+                if vp is not None:
+                    it["vp"] = {"lo": round(vlo, 6), "hi": round(vhi, 6), "poc": round(vp["poc"], 6),
+                                "vah": round(vp["vah"], 6), "val": round(vp["val"], 6), "vah2": round(vp["vah2"], 6),
+                                "val2": round(vp["val2"], 6), "usd": round(vp["usd"], 2), "rows": vp["rows"],
+                                "k": vp["k"], "d0": float(c2["te"]), "d1": it["te"]}
+            self.items.append(it)
+            last = t0
+            added.append(it)
+        return added
+
+    # ---------------------------------------------------------------- reading
+    def chain(self) -> List[dict]:
+        """The VPs to draw, newest first: from the newest frozen conflict, follow the conflict-2 links; a conflict
+        without a VP hands on to the frozen conflict just before it."""
+        idx = {float(x["t0"]): i for i, x in enumerate(self.items)}
+        out = []
+        i = len(self.items) - 1
+        while i >= 0:
+            it = self.items[i]
+            if it.get("c2") is None or it.get("vp") is None:
+                i -= 1
+                continue
+            out.append(it)
+            j = idx.get(float(it["c2"]))
+            if j is None or j >= i:
+                break                                     # its conflict 2 has been dropped (older than keep)
+            i = j
         return out
-    boxes = [run_box(a, b, cfh, cfl, pxh, pxl) for a, b in rr]
-    td = t_draw if t_draw is not None else t_end
-    edge = (int(base) + int(np.size(buy))) * float(bin_secs)       # the end of the tape
-    new_memo = {}
-    newer_c2 = None               # the run index of the newer DRAWN VP's conflict 2 (the conflict the next one shares)
-    for j, m, sk in chain(rr, boxes, min_gap, tick, max_n):
-        a1, b1 = rr[j]; a2, b2 = rr[m]
-        h1, l1 = boxes[j]; h2, l2 = boxes[m]
-        lo = min(l1, l2); hi = max(h1, h2)
-        t0 = float(t[a2]); tc = float(t_end[b1])
-        key = (round(t0, 3), round(tc, 3), round(lo, 6), round(hi, 6), int(rev))
-        vp = memo.get(key) if (memo is not None and tc < edge - 60.0) else None
-        if vp is None:
-            vp = profile(base, bin_secs, buy, sell, bpxh, bpxl, t0, tc, lo, hi, tick, rows_target, va_pct, va2_pct)
-        if vp is None:
-            newer_c2 = None       # not drawn: the next one runs its lines to its own conflict 1's end
-            continue
-        if tc < edge - 60.0:
-            new_memo[key] = vp
-        # the LINES of a VP whose conflict 1 is the newer VP's conflict 2 stop at that shared conflict's first bar,
-        # where the newer VP's begin: connected, not overlapping. Its PROFILE keeps both of its conflicts.
-        shared = newer_c2 is not None and j == newer_c2
-        d = dict(vp)
-        d.update({"c1": (a1, b1, h1, l1), "c2": (a2, b2, h2, l2), "skipped": sk, "lo": float(lo), "hi": float(hi),
-                  "t0": t0, "t1": float(t[a1]) if shared else float(td[b1]), "shared": bool(shared),
-                  "cur": j == len(rr) - 1,
-                  "live": bool(j == len(rr) - 1 and done is not None and not bool(np.asarray(done)[b1]))})
-        newer_c2 = m
-        out["vps"].append(d)
-    if memo is not None:
-        memo.clear()
-        memo.update(new_memo)
-    return out
+
+    def apply(self, t, conf, cfh, cfl):
+        """The conflict flags and box reach the tablet draws: the FROZEN record over the frozen history (a live flag
+        or reach there is not drawn -- what was drawn stays), the live values after the newest frozen conflict."""
+        conf = np.array(conf, copy=True)
+        cfh = np.array(cfh, dtype=np.float64, copy=True)
+        cfl = np.array(cfl, dtype=np.float64, copy=True)
+        if not self.items:
+            return conf, cfh, cfl
+        t = np.asarray(t, dtype=np.float64)
+        hist = t < float(self.items[-1]["te"]) - 0.5
+        conf[hist] = 0
+        cfh[hist] = np.nan
+        cfl[hist] = np.nan
+        for it in self.items:
+            i0 = int(np.searchsorted(t, float(it["t0"]) - 0.5))
+            i1 = int(np.searchsorted(t, float(it["tb"]) + 0.5))
+            if i1 > i0:
+                conf[i0:i1] = 1
+                cfh[i0:i1] = float(it["hi"])
+                cfl[i0:i1] = float(it["lo"])
+        return conf, cfh, cfl

@@ -677,6 +677,12 @@ CONFLICT_LOOKBACK_SECS = 24 * 3600.0
 # draws the HLH VP's lines (VAH / VAL at HLH_VA_PCT, the outer value area dashed at HLH_VA2_PCT, the POC). About
 # HLH_ROWS rows of whole ticks. Tablet only (app/conflict_vp.py, android/flow_engine.py tick_cvp).
 CVP_MIN_GAP_BARS = 10
+# ... FROZEN once drawn (user 2026-09-26: "when a conflict VP is draw it stays fix it shouldnt change"): a conflict is
+# frozen -- its box, its conflict 2, its VP's lines -- once the bar after it has been CLOSED this long (late prints), and
+# the records are kept in this file under the engine's data/ (across restarts) for this long.
+CVP_FREEZE_SETTLE_SECS = 10.0
+CVP_STATE_FILE = "conflict_vp_frozen.json"
+CVP_KEEP_SECS = 4 * 86400.0
 IIMP_WALL_CHUNK = 900           # columns per request (3.75 h; ~50 KB, the Limit Orders pane's own budget)
 # THE LIVE EDGE (2026-09-23). A new cycle is only known ~20 s after it opened (FLOW_CROSS_MIN_HOLD_SECS), and its
 # wall is the column that ENDS at or before its open -- so that column has been over for 20 s or more by then.
