@@ -195,10 +195,20 @@ public final class EngineClient extends Thread {
         return true;
     }
 
+    // the engine's messages by type, logged every 5 s (FLOW tag): what drives the redraws
+    private final java.util.TreeMap<String, Integer> msgN = new java.util.TreeMap<>();
+    private long msgLogAt = 0;
+
     private void handle(String line) {
         try {
             JSONObject m = new JSONObject(line);
             String t = m.optString("t");
+            msgN.merge(t, 1, Integer::sum);
+            long now = System.currentTimeMillis();
+            if (now - msgLogAt >= 5000) {
+                if (msgLogAt > 0) Log.i("FLOW", "msgs/5s: " + msgN);
+                msgLogAt = now; msgN.clear();
+            }
             switch (t) {
                 case "hello": model.onHello(m); listener.onState(true); break;
                 case "bins": model.onBins(m); break;

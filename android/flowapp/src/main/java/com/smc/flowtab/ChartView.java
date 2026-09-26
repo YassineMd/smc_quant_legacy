@@ -256,7 +256,7 @@ public final class ChartView extends View {
     private final GestureDetector gest; private final ScaleGestureDetector scale;
     private final Handler h = new Handler(Looper.getMainLooper());
     private boolean framePending = false;
-    private final Runnable heartbeat = new Runnable() { @Override public void run() { if (follow) invalidate(); h.postDelayed(this, 250); } };
+    private final Runnable heartbeat = new Runnable() { @Override public void run() { if (follow) dataChanged(); h.postDelayed(this, 250); } };
     private static final int TEAL = Color.parseColor("#26a69a"), RED = Color.parseColor("#ef5350"), ORANGE = Color.parseColor("#ff9f43");
     // LINES IMPACT, the bands the leader CLIMBED into: the user's own swatches (2026-09-23). The sellers'
     // is PURPLE, not red -- bright red against the dim band's #ef5350 was red on red, separating only by
@@ -359,11 +359,22 @@ public final class ChartView extends View {
         }, events);
     }
 
-    /** A data frame: coalesced onto the next vsync. */
+    /** A data frame: coalesced, and -- while nobody touches the chart -- at most one every IDLE_FRAME_MS.
+     *  ⚠ SPEED (2026-09-26, "it has become a little bit slow"): the price alone arrives ten times a second and every
+     *  change starts the 160 ms slide, so the whole chart was redrawn ~30 times a second, each frame ~8 ms of drawing
+     *  and ~16 ms of GPU: the tablet never idled and touches queued behind frames. Watching, the chart now draws at most
+     *  25 frames a second (the slide still runs, in ~4 steps); a finger on it (touchUntilMs) lifts the cap, and the
+     *  gestures themselves still redraw at once. */
+    private static final long IDLE_FRAME_MS = 40;
+    private long lastFrameNs = 0, touchUntilMs = 0;
+    private final Runnable frameRun = () -> { framePending = false; invalidate(); };
+
     public void dataChanged() {
         if (framePending) return;
         framePending = true;
-        postOnAnimation(() -> { framePending = false; invalidate(); });
+        long wait = System.currentTimeMillis() < touchUntilMs ? 0
+                : Math.max(0, IDLE_FRAME_MS - (System.nanoTime() - lastFrameNs) / 1_000_000L);
+        if (wait == 0) postOnAnimation(frameRun); else postOnAnimationDelayed(frameRun, wait);
     }
 
     public void recentre() {
@@ -396,6 +407,7 @@ public final class ChartView extends View {
         // once took over a DRAG to move the crosshair, which cost it panning -- the one thing the user reaches for
         // most. Hover already drives the crosshair with no conflict, so every touch, pen or finger, now falls
         // straight through to the same pan / pinch / tap path. A pen that cannot hover simply has no crosshair.
+        touchUntilMs = System.currentTimeMillis() + 300;                   // a finger on the chart: data frames uncapped
         if (ev.getActionMasked() == MotionEvent.ACTION_DOWN) clearCross();   // touching is not hovering
         if (smoothTouch(ev)) return true;      // a slider owns its own drag, before pan / pinch see it
         if (keptTouch(ev)) return true;        // the KEPT pane's toggle and Net: they sit in the splitter's grab band
@@ -496,16 +508,25 @@ public final class ChartView extends View {
 
     // ------------------------------------------------------------------ draw
     private long drawNs = 0, drawMaxNs = 0, drawN = 0, drawLogAt = 0;
+    // what each part of a frame costs (kept filter, price, flow, limit orders, I x I, the two Lines panes, kept ticks,
+    // the rest), logged with the "draw:" line
+    private final long[] partNs = new long[8];
 
     @Override protected void onDraw(Canvas c) {
         long t0 = System.nanoTime();
+        lastFrameNs = t0;
         drawFrame(c);
         long dt = System.nanoTime() - t0;
         drawNs += dt; drawMaxNs = Math.max(drawMaxNs, dt); drawN++;
         long now = System.currentTimeMillis();
         if (now - drawLogAt > 5000) {
-            if (drawLogAt > 0) android.util.Log.i("FLOW", String.format(Locale.US, "draw: n=%d avg=%.1fms max=%.1fms", drawN, drawNs / 1e6 / Math.max(1, drawN), drawMaxNs / 1e6));
-            drawLogAt = now; drawNs = drawMaxNs = drawN = 0;
+            if (drawLogAt > 0) {
+                double k = 1e6 * Math.max(1, drawN);
+                android.util.Log.i("FLOW", String.format(Locale.US, "draw: n=%d avg=%.1fms max=%.1fms | kept %.1f price %.1f flow %.1f liq %.1f iimp %.1f lines %.1f keptpane %.1f rest %.1f",
+                        drawN, drawNs / 1e6 / Math.max(1, drawN), drawMaxNs / 1e6, partNs[0] / k, partNs[1] / k, partNs[2] / k,
+                        partNs[3] / k, partNs[4] / k, partNs[5] / k, partNs[6] / k, partNs[7] / k));
+            }
+            drawLogAt = now; drawNs = drawMaxNs = drawN = 0; java.util.Arrays.fill(partNs, 0);
         }
     }
 
@@ -533,7 +554,7 @@ public final class ChartView extends View {
             s.bpOn = M.bpOn && showBp; s.bpBub = M.bpBub; s.bpDia = M.bpDia; s.bpLmax = M.bpLmax;
             s.cvpOn = M.cvpOn && showCvp; s.cvpVps = M.cvpVps; s.cvpPrev = showCvpPrev;
             s.series = new float[3][];
-            if (paneOn[PANE_FLOW] && s.buy.length > 0) M.series(vx0 - 1, vx1 + 1, (int) (2 * plotR), s.series);
+            if (paneOn[PANE_FLOW] && M.binN > 0) M.series(vx0 - 1, vx1 + 1, (int) (2 * plotR), s.series);
         }
         // the forming candle's close, the live line and the pill SLIDE to a new tick over 160 ms with the terminal's
         // decelerating ease (_lc_tick); a NEW forming bar shows at once, no slide
@@ -544,25 +565,34 @@ public final class ChartView extends View {
             if (lcT0 != 0) {
                 double tt = (System.nanoTime() - lcT0) / 1.6e8;
                 if (tt >= 1.0) { lcCur = lcTo; lcT0 = 0; }
-                else { double e = 1.0 - (1.0 - tt) * (1.0 - tt); lcCur = lcFrom + (lcTo - lcFrom) * e; postInvalidateOnAnimation(); }
+                else { double e = 1.0 - (1.0 - tt) * (1.0 - tt); lcCur = lcFrom + (lcTo - lcFrom) * e; dataChanged(); }   // the capped cadence
             } else lcCur = lcTo;
             s.liveAnim = lcCur;
         } else s.liveAnim = s.livePx;
         if (tools != null && !Double.isNaN(s.livePx)) tools.onPrice(s.livePx, now);
+        long pt0 = System.nanoTime();
         domKeptBuild(s);                              // the bright areas' kept filter, for PRICE and LINES IMPACT alike
+        partNs[0] += System.nanoTime() - pt0; pt0 = System.nanoTime();
         if (paneOn[PANE_PRICE]) drawPrice(c, s, now);
+        partNs[1] += System.nanoTime() - pt0; pt0 = System.nanoTime();
         if (paneOn[PANE_FLOW]) drawFlow(c, s, now);
+        partNs[2] += System.nanoTime() - pt0; pt0 = System.nanoTime();
         if (paneOn[PANE_LIQ]) drawLiq(c, s);
+        partNs[3] += System.nanoTime() - pt0; pt0 = System.nanoTime();
         if (paneOn[PANE_IIMP]) drawIimp(c, s, now);
+        partNs[4] += System.nanoTime() - pt0; pt0 = System.nanoTime();
         if (paneOn[PANE_CINT]) drawLinesPane(c, s, PANE_CINT);
         if (paneOn[PANE_CIMP]) drawLinesPane(c, s, PANE_CIMP);
+        partNs[5] += System.nanoTime() - pt0; pt0 = System.nanoTime();
         if (paneOn[PANE_KEPT]) drawKept(c, s, now);
+        partNs[6] += System.nanoTime() - pt0; pt0 = System.nanoTime();
         if (showLines) drawCycleLines(c, s);
         drawSelection(c, s, now);
         drawCrosshair(c, s);
         drawTimeAxis(c);
         drawCrossClock(c);
         drawGrips(c);
+        partNs[7] += System.nanoTime() - pt0;
         if (!s.connected) {
             pt.setTextSize(13 * d); pt.setColor(cTitle); pt.setTypeface(Typeface.MONOSPACE);
             c.drawText("connecting to the engine (adb reverse tcp:8766)...", 12 * d, getHeight() - TAXIS_H - 8 * d, pt);

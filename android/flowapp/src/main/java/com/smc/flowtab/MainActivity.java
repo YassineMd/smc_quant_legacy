@@ -60,6 +60,10 @@ public final class MainActivity extends Activity implements EngineClient.Listene
         chart = new ChartView(this, model);
         chart.setHost(this);
         interp = new InterpView(this, model);
+        // ⚠ SPEED (2026-09-26): the feed is text-heavy and changes about once a second, while the chart beside it redraws
+        // 20-30 times a second -- and every frame re-issued all of the feed's text to the GPU. As a hardware layer it is
+        // one texture per frame until the feed itself changes.
+        interp.setLayerType(View.LAYER_TYPE_HARDWARE, null);
         chart.showLines = prefs.getBoolean("lines", true);
         chart.showPrice = prefs.getBoolean("price", true);
         chart.showFlow = prefs.getBoolean("flow", true);
@@ -222,7 +226,7 @@ public final class MainActivity extends Activity implements EngineClient.Listene
 
     @Override public void onState(boolean connected) {
         runOnUiThread(() -> {
-            chart.dataChanged(); interp.refresh();
+            chart.dataChanged(); interp.refresh(true);
             if (connected) sendToggles();
         });
     }

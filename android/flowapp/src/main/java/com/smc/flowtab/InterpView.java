@@ -116,11 +116,20 @@ public final class InterpView extends View {
 
     /** The why-not line of a card wrapped to its text width, two lines at most -- ONE wrap for the layout and the
      * painter, so a card is exactly as tall as what it draws. Before the view has a width it counts one line. */
+    // ⚠ SPEED (2026-09-26): every refresh re-wrapped the why-not line of all 240 cards with measureText -- ~31 ms on the
+    // UI thread once a second, a visible hitch. A card's why-not text never changes, so its wrap is kept per text at this
+    // width (the list is only read); a new width starts over, and the map is dropped when it outgrows the feed.
+    private final java.util.HashMap<String, List<String>> wrapCache = new java.util.HashMap<>();
+    private float wrapTw = -1f;
+
     private List<String> whyNotLines(FlowModel.Row r, float tw) {
         List<String> out = new ArrayList<>();
         if (r.whyNot == null || r.whyNot.isEmpty()) return out;
         if (tw <= 0) { out.add(r.whyNot); return out; }
-        return wrap(r.whyNot, bold, 10.5f, tw, 2);
+        if (tw != wrapTw || wrapCache.size() > 2 * rows.size() + 64) { wrapCache.clear(); wrapTw = tw; }
+        List<String> c = wrapCache.get(r.whyNot);
+        if (c == null) { c = wrap(r.whyNot, bold, 10.5f, tw, 2); wrapCache.put(r.whyNot, c); }
+        return c;
     }
 
     @Override protected void onSizeChanged(int w, int h, int ow, int oh) {
@@ -157,9 +166,35 @@ public final class InterpView extends View {
         invalidate();
     }
 
-    public void refresh() {
+    private final Runnable liveTick = this::invalidate;   // the live dot's once-a-second redraw (see onDraw)
+
+    public void refresh() { refresh(false); }
+
+    /** Lay the cards out again and redraw -- only when they CHANGED (the model hands over a new list with every
+     *  "interp"), or when forced (the connection changed: the empty feed's text says so). ⚠ SPEED (2026-09-26): this
+     *  ran on every engine message -- the price alone is ten a second -- re-measuring every card and redrawing all
+     *  their text for rows that move about once a second. */
+    // what the feed costs, logged every 5 s next to the chart's "draw:" line (FLOW tag): refreshes that re-laid the
+    // cards out, and the draws, each with its average time
+    private long fRefN = 0, fRefNs = 0, fDrawN = 0, fDrawNs = 0, fLogAt = 0;
+
+    private void feedLog() {
+        long now = System.currentTimeMillis();
+        if (now - fLogAt < 5000) return;
+        if (fLogAt > 0) android.util.Log.i("FLOW", String.format(java.util.Locale.US, "feed: refresh n=%d avg=%.1fms | draw n=%d avg=%.1fms",
+                fRefN, fRefNs / 1e6 / Math.max(1, fRefN), fDrawN, fDrawNs / 1e6 / Math.max(1, fDrawN)));
+        fLogAt = now; fRefN = fRefNs = fDrawN = fDrawNs = 0;
+    }
+
+    public void refresh(boolean force) {
         List<FlowModel.Row> rs;
         synchronized (model.lock) { rs = model.rows; }
+        if (!force && rs == rows) return;
+        long fT0 = System.nanoTime();
+        try { refreshNow(rs); } finally { fRefN++; fRefNs += System.nanoTime() - fT0; feedLog(); }
+    }
+
+    private void refreshNow(List<FlowModel.Row> rs) {
         // keep the reader's place: if they have scrolled into history, move by however far the cards they were
         // reading were pushed down by the new ones on top
         int added = 0;
@@ -199,6 +234,11 @@ public final class InterpView extends View {
     }
 
     @Override protected void onDraw(Canvas c) {
+        long fT0 = System.nanoTime();
+        try { drawFeed(c); } finally { fDrawN++; fDrawNs += System.nanoTime() - fT0; feedLog(); }
+    }
+
+    private void drawFeed(Canvas c) {
         int w = getWidth(), h = getHeight();
         int dim = col(dark ? "#6f7a82" : "#7a7a7a"), det = col(dark ? "#9aa8b0" : "#303030");
         text(c, title, PAD, 15 * d, bold, 11, col(dark ? "#7d8492" : "#303030"));
@@ -220,7 +260,11 @@ public final class InterpView extends View {
         c.restore();
         if (rs.isEmpty()) text(c, model.connected ? "waiting for the first cycles" : "connecting to the engine...", PAD, 44 * d, sans, 11, dim);
         boolean live = !rs.isEmpty() && rs.get(0).forming && TOPY - scroll + CARD_H > 0;
-        if (live) postInvalidateDelayed(1000);        // the live dot breathes with the second
+        // the live dot breathes with the second -- ONE pending tick, whatever else draws in between. ⚠ SPEED (2026-09-26):
+        // this was postInvalidateDelayed(1000) from every onDraw, so each extra draw (a refresh, a scroll) started one
+        // MORE self-renewing tick; they piled up for as long as the app ran -- measured ~43 feed redraws a second next
+        // to the chart's ~12: the "it has become a little bit slow" that grew with the session.
+        if (live) { removeCallbacks(liveTick); postDelayed(liveTick, 1000); }
     }
 
     /** The hour divider: this card's hour, then a hairline. */

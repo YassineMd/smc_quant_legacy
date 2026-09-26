@@ -34,8 +34,16 @@ public final class FlowModel {
     public boolean connected = false;
 
     // ---- bins (absolute bin index = seconds since the epoch)
+    // ⚠ SPEED (2026-09-26, "it has become a little bit slow"): the store grows by one bin a SECOND, and the arrays used to
+    // be exactly that long -- so every second all of them were copied whole into new ones: 72 h x 5 arrays = ~5 MB of
+    // garbage a second, the 10 MB large-object GCs in the log. They now keep BIN_SLACK of spare room and binN says how
+    // many bins are held: the live edge is written in place and a copy happens about once an hour. px / pxh / pxl ride
+    // along on the wire but nothing on the tablet draws them, so they are neither decoded nor kept.
     public long binBase = 0;
-    public float[] buy = new float[0], sell = new float[0], px = new float[0], pxh = new float[0], pxl = new float[0];
+    public int binN = 0;                         // bins held: buy / sell [0, binN); the arrays are longer (spare room)
+    public float[] buy = new float[0], sell = new float[0];
+    public int binsVer = 0;                      // bumps whenever a bin changes (the Flow pane's series cache)
+    private static final int BIN_SLACK = 3600;
 
     // ---- cycles (the whole store, uncapped)
     public int nCyc = 0;
@@ -186,32 +194,28 @@ public final class FlowModel {
     }
 
     public void onBins(JSONObject m) {
-        long base = m.optLong("base"); int n = m.optInt("n"); boolean full = m.optBoolean("full", false);
-        float[] b = f32(m.optString("buy")), s = f32(m.optString("sell")), p = f32(m.optString("px")), h = f32(m.optString("pxh")), l = f32(m.optString("pxl"));
+        long base = m.optLong("base"); boolean full = m.optBoolean("full", false);
+        float[] b = f32(m.optString("buy")), s = f32(m.optString("sell"));
+        int n = Math.min(b.length, s.length);
         synchronized (lock) {
-            if (full || buy.length == 0) {
-                binBase = base; buy = b; sell = s; px = p; pxh = h; pxl = l;
+            if (full || binN == 0) {
+                binBase = base; binN = n;
+                buy = java.util.Arrays.copyOf(b, n + BIN_SLACK); sell = java.util.Arrays.copyOf(s, n + BIN_SLACK);
             } else {
-                long lo = Math.min(binBase, base), hi = Math.max(binBase + buy.length, base + n);
+                long lo = Math.min(binBase, base), hi = Math.max(binBase + binN, base + n);
                 int total = (int) (hi - lo);
-                if (lo != binBase) {                                   // a prepend: shift what we hold
+                if (lo != binBase || total > buy.length) {             // a prepend (a backfill chunk) or out of room: ONE copy
                     int shift = (int) (binBase - lo);
-                    buy = shiftRight(buy, shift, total); sell = shiftRight(sell, shift, total); px = shiftRight(px, shift, total);
-                    pxh = shiftRight(pxh, shift, total); pxl = shiftRight(pxl, shift, total);
-                    binBase = lo;
+                    float[] nb = new float[total + BIN_SLACK], ns = new float[total + BIN_SLACK];
+                    System.arraycopy(buy, 0, nb, shift, binN); System.arraycopy(sell, 0, ns, shift, binN);
+                    buy = nb; sell = ns; binBase = lo;
                 }
                 int off = (int) (base - binBase);
-                buy = replace(buy, off, b, total); sell = replace(sell, off, s, total); px = replace(px, off, p, total);
-                pxh = replace(pxh, off, h, total); pxl = replace(pxl, off, l, total);
+                System.arraycopy(b, 0, buy, off, n); System.arraycopy(s, 0, sell, off, n);
+                binN = total;
             }
-            version++;
+            binsVer++; version++;
         }
-    }
-
-    private static float[] shiftRight(float[] a, int shift, int total) {
-        float[] out = new float[total];
-        System.arraycopy(a, 0, out, shift, Math.min(a.length, total - shift));
-        return out;
     }
 
     public void onCycles(JSONObject m) {
@@ -526,13 +530,20 @@ public final class FlowModel {
     }
 
     /** The rolling-window flow at bin i (absolute index): the $ of the `win` seconds ending at that bin. */
+    // the last series handed out, and what it was cut from: a frame that asks for the same whole seconds of the same bins
+    // gets the same arrays -- the chart draws 20-30 frames a second, the bins move about 10 times
+    private float[][] serOut = null; private int serVer = -1, serI0, serI1, serMax, serW;
+
     public void series(double t0, double t1, int maxPts, float[][] out) {
         // out[0] = t, out[1] = buy, out[2] = sell -- allocated here at the decimated length
         int w = Math.max(1, (int) Math.round(win));
-        int n = buy.length;
+        int n = binN;
         int i0 = (int) (Math.floor(t0) - binBase), i1 = (int) (Math.floor(t1) - binBase);
         i0 = Math.max(0, i0); i1 = Math.min(n - 1, i1);
         if (i1 < i0 || n == 0) { out[0] = out[1] = out[2] = new float[0]; return; }
+        if (serOut != null && serVer == binsVer && serI0 == i0 && serI1 == i1 && serMax == maxPts && serW == w) {
+            out[0] = serOut[0]; out[1] = serOut[1]; out[2] = serOut[2]; return;
+        }
         int step = Math.max(1, (int) Math.ceil((i1 - i0 + 1) / (double) Math.max(16, maxPts)));
         int m = (i1 - i0) / step + 1;
         float[] t = new float[m], b = new float[m], s = new float[m];
@@ -552,5 +563,6 @@ public final class FlowModel {
             t[j] = (float) (i + 1); b[j] = (float) sb; s[j] = (float) ss; j++;
         }
         out[0] = t; out[1] = b; out[2] = s;      // t is the bin END, relative to binBase (add binBase for epoch)
+        serOut = new float[][]{t, b, s}; serVer = binsVer; serI0 = i0; serI1 = i1; serMax = maxPts; serW = w;
     }
 }
