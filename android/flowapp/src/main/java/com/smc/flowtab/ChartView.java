@@ -427,6 +427,7 @@ public final class ChartView extends View {
             if (tools.tapButton(x, y)) { invalidate(); return; }
             if (pane[PANE_PRICE].contains(x, y) && x < plotR && (tools.tapPane(x, y) || "trend".equals(tools.tool))) { invalidate(); return; }
         }
+        if (paneOn[PANE_PRICE] && pane[PANE_PRICE].contains(x, y) && x < plotR && cvpTap(x, y)) return;
         if (paneOn[PANE_PRICE] && pane[PANE_PRICE].contains(x, y) && x < plotR) { cycleTap(x); return; }
         if (paneOn[PANE_IIMP] && x >= ddX0 && x <= ddX1 && y >= ddY0 && y <= ddY1) {
             if (host != null) host.onModeMenu(ddX0, ddY1);
@@ -454,6 +455,25 @@ public final class ChartView extends View {
             }
         }
     }
+
+    /** A tap on a drawn Conflict VP's HIGH or LOW line (within CVP_TAP_TOL, inside its span), with the previous VPs on:
+     *  show that VP alone, or -- tapping it again -- all of them. The newest drawn wins where lines overlap. */
+    private boolean cvpTap(float x, float y) {
+        if (!showCvp || !showCvpPrev) return false;
+        float tol = CVP_TAP_TOL * d;
+        for (int i = cvpHits.size() - 1; i >= 0; i--) {
+            double[] h = cvpHits.get(i);
+            if (x < h[0] - 4 * d || x > h[1] + 4 * d) continue;
+            if (Math.abs(y - h[2]) <= tol || Math.abs(y - h[3]) <= tol) {
+                cvpSolo = Double.isNaN(cvpSolo) ? h[4] : Double.NaN;
+                invalidate();
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static final float CVP_TAP_TOL = 14f;       // dp either side of a high / low line that counts as a tap on it
 
     // ------------------------------------------------------------------ layout
     private void layoutPanes() {
@@ -852,9 +872,24 @@ public final class ChartView extends View {
     // the MIDDLE line's yellow: pure yellow on a dark canvas, a deeper one on Simple BW's white, where #FFD600 washes out
     private static final int CVP_MID = Color.parseColor("#FFD600"), CVP_MID_BW = Color.parseColor("#E6B800");
 
+    // SHOW ONE VP ALONE (user 2026-09-26: "when im in Previous Conflict VPs and click on High/low of a VP it hides all
+    // the others, when I click again on it it shows te other, like a toggle"): the solo VP's key is its conflict 1's end
+    // (T1, frozen and unique); NaN = all shown. It clears itself when the previous VPs are switched off and when that VP
+    // is gone from the chain (a newer conflict replaced it, or it aged out). cvpHits = where each drawn VP's HIGH / LOW
+    // lines lie this frame, {x0, x1, yHigh, yLow, key}, in drawing order (the newest last: on top) -- cvpTap reads it.
+    private double cvpSolo = Double.NaN;
+    private final ArrayList<double[]> cvpHits = new ArrayList<>();
+
     private void drawCvp(Canvas c, Snap s, RectF r, float top, float hgt, double yl, double yh, double formEnd) {
+        cvpHits.clear();
         double[][] vps = s.cvpVps;
         if (vps == null) return;
+        if (!s.cvpPrev) cvpSolo = Double.NaN;
+        if (!Double.isNaN(cvpSolo)) {
+            boolean there = false;
+            for (double[] v : vps) if (Math.abs(v[FlowModel.CVP_T1] - cvpSolo) < 0.5) { there = true; break; }
+            if (!there) cvpSolo = Double.NaN;
+        }
         int nPrev = 0;
         for (double[] v : vps) if (v[FlowModel.CVP_CUR] < 0.5) nPrev++;
         // the oldest first, the current one last: on top
@@ -864,6 +899,7 @@ public final class ChartView extends View {
             boolean cur = v[FlowModel.CVP_CUR] > 0.5;
             if (!cur) prevIdx--;
             if (!cur && !s.cvpPrev) continue;
+            if (!Double.isNaN(cvpSolo) && Math.abs(v[FlowModel.CVP_T1] - cvpSolo) >= 0.5) continue;   // shown alone: skip the rest
             int col = cur ? CVP_COL : CVP_PREV_COLS[prevIdx % CVP_PREV_COLS.length];
             double t1 = (v[FlowModel.CVP_LIVE] > 0.5 && !Double.isNaN(formEnd)) ? Math.max(v[FlowModel.CVP_T1], formEnd) : v[FlowModel.CVP_T1];
             drawCvpOne(c, v, t1, col, r, top, hgt, yl, yh);
@@ -907,6 +943,7 @@ public final class ChartView extends View {
         // conflict and low of the conflict") -- the range its two conflict boxes set -- and its MIDDLE in yellow ("a
         // middle yellow line which is basically half the distance high/low conflict"); drawn first, under the rest
         double hi = v[FlowModel.CVP_HI], lo = v[FlowModel.CVP_LO];
+        cvpHits.add(new double[]{x0, x1, top + (yh - hi) * ky, top + (yh - lo) * ky, v[FlowModel.CVP_T1]});
         pl.setStrokeWidth(CVP_HILO_W * d);                 // "make it 3px" (user 2026-09-26): thicker than VAH / VAL
         for (double p : new double[]{hi, lo}) {
             if (Double.isNaN(p)) continue;
