@@ -848,6 +848,7 @@ public final class ChartView extends View {
             Color.parseColor("#2962FF"), Color.parseColor("#00C853"), Color.parseColor("#AA00FF"), Color.parseColor("#FF6D00"),
             Color.parseColor("#00B8D4"), Color.parseColor("#C51162"), Color.parseColor("#795548")};
     private static final float CVP_VA_W = 2f;          // terminal px, like an HLH bloc's VAH / VAL (x d x PCPX)
+    private static final float CVP_HILO_W = 3f;        // dp: the VP's HIGH / LOW lines ("make it 3px", read as the boxes' "2px" was: dp)
     // the MIDDLE line's yellow: pure yellow on a dark canvas, a deeper one on Simple BW's white, where #FFD600 washes out
     private static final int CVP_MID = Color.parseColor("#FFD600"), CVP_MID_BW = Color.parseColor("#E6B800");
 
@@ -869,6 +870,29 @@ public final class ChartView extends View {
         }
     }
 
+    private static final float CVP_ARROW_DX = 9f, CVP_ARROW_STEP = 14f;   // dp: first arrow's centre from the VP's left end, spacing
+
+    /** A filled arrow -- shaft and head, 16 dp tall -- centred on (x, y): the Takeover marks' green / red, but an arrow
+     *  and not a triangle, so the two never read as the same mark. A thin outline in the canvas colour keeps it clear of
+     *  the VP lines it sits on. */
+    private void cvpArrow(Canvas c, float x, float y, boolean up) {
+        float hh = 8 * d, hw = 6 * d, sw = 1.8f * d, neck = 1 * d;
+        float s = up ? 1f : -1f;                                   // up: the tip above y; down: below
+        path.reset();
+        path.moveTo(x, y - s * hh);
+        path.lineTo(x + hw, y - s * neck);
+        path.lineTo(x + sw, y - s * neck);
+        path.lineTo(x + sw, y + s * hh);
+        path.lineTo(x - sw, y + s * hh);
+        path.lineTo(x - sw, y - s * neck);
+        path.lineTo(x - hw, y - s * neck);
+        path.close();
+        pf.setColor(up ? Color.parseColor("#00C853") : Color.parseColor("#FF1F1F"));
+        c.drawPath(path, pf);
+        pl.setColor(cBg); pl.setStrokeWidth(1 * d);
+        c.drawPath(path, pl);
+    }
+
     private void drawCvpOne(Canvas c, double[] v, double t1, int col, RectF r, float top, float hgt, double yl, double yh) {
         double t0 = v[FlowModel.CVP_T0];
         if (Double.isNaN(t0) || Double.isNaN(t1) || t1 < vx0 || t0 > vx1) return;
@@ -881,11 +905,13 @@ public final class ChartView extends View {
         // conflict and low of the conflict") -- the range its two conflict boxes set -- and its MIDDLE in yellow ("a
         // middle yellow line which is basically half the distance high/low conflict"); drawn first, under the rest
         double hi = v[FlowModel.CVP_HI], lo = v[FlowModel.CVP_LO];
+        pl.setStrokeWidth(CVP_HILO_W * d);                 // "make it 3px" (user 2026-09-26): thicker than VAH / VAL
         for (double p : new double[]{hi, lo}) {
             if (Double.isNaN(p)) continue;
             float y = (float) (top + (yh - p) * ky);
             if (y >= top && y <= r.bottom) c.drawLine(x0, y, x1, y, pl);
         }
+        pl.setStrokeWidth(Math.max(1f, CVP_VA_W * d * PCPX));
         if (!Double.isNaN(hi) && !Double.isNaN(lo)) {
             float y = (float) (top + (yh - 0.5 * (hi + lo)) * ky);
             pl.setColor(bw ? CVP_MID_BW : CVP_MID);
@@ -918,6 +944,20 @@ public final class ChartView extends View {
                 if (j >= seg.length) break;
             }
             if (j > 0) c.drawLines(seg, 0, j, pl);
+        }
+        // THE ARROWS (user 2026-09-26: "at the extreme left of the conflict VP draw an icon arrow up green or down red /
+        // down red if the low was taken from the last conflict and up green if the high was taken from the last
+        // conflict"): at the VP's own left end, on its middle line, over its lines -- only when that end is on screen.
+        // A last conflict that made both extremes shows both; one inside the older conflict's range shows none.
+        boolean up = v.length > FlowModel.CVP_UP && v[FlowModel.CVP_UP] > 0.5;
+        boolean dn = v.length > FlowModel.CVP_DN && v[FlowModel.CVP_DN] > 0.5;
+        if ((up || dn) && !Double.isNaN(hi) && !Double.isNaN(lo)) {
+            float xl = xPx(t0), ym = (float) (top + (yh - 0.5 * (hi + lo)) * ky);
+            if (xl >= r.left && xl <= plotR && ym >= top && ym <= r.bottom) {
+                float ax = xl + CVP_ARROW_DX * d;
+                if (up) { cvpArrow(c, ax, ym, true); ax += CVP_ARROW_STEP * d; }
+                if (dn) cvpArrow(c, ax, ym, false);
+            }
         }
     }
 

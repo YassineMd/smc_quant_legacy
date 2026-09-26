@@ -495,7 +495,7 @@ public final class FlowModel {
     // is the newest conflict), the others the PREVIOUS ones (a chain back in time that never overlaps); live = cur's
     // conflict 1 is the forming cycle, and t1 is then its START (the lines run to the forming candle's end).
     public static final int CVP_T0 = 0, CVP_T1 = 1, CVP_LO = 2, CVP_HI = 3, CVP_POC = 4, CVP_VAH = 5, CVP_VAL = 6,
-            CVP_VAH2 = 7, CVP_VAL2 = 8, CVP_LIVE = 9, CVP_CUR = 10;
+            CVP_VAH2 = 7, CVP_VAL2 = 8, CVP_LIVE = 9, CVP_CUR = 10, CVP_UP = 11, CVP_DN = 12, CVP_N = 13;
     public boolean cvpOn = false;
     public double[][] cvpVps = new double[0][];
 
@@ -507,8 +507,8 @@ public final class FlowModel {
             vps = new double[a.length()][];
             for (int i = 0; i < a.length(); i++) {
                 org.json.JSONArray r = a.optJSONArray(i);
-                double[] v = new double[11];
-                for (int k = 0; k < 11; k++) v[k] = (r != null && k < r.length()) ? r.optDouble(k, Double.NaN) : Double.NaN;
+                double[] v = new double[CVP_N];
+                for (int k = 0; k < CVP_N; k++) v[k] = (r != null && k < r.length()) ? r.optDouble(k, Double.NaN) : Double.NaN;
                 vps[i] = v;
             }
         }
