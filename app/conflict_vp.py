@@ -21,10 +21,15 @@ color ... the VPs should NOT be overlapping".
               value area grows from it to the bigger neighbouring row (tie -> above) until va_pct % of the volume is
               inside (hlh_profile.value_area, the HLH's own function); the outer value area does the same to va2_pct %.
               VAH / VAL are the top / bottom TICK of the value area's rows.
-  THE PREVIOUS ONES  a CHAIN back in time that never overlaps: the next older VP's conflict 1 is the newest run that
-              ENDS BEFORE the newer VP's conflict 2 STARTS, and its conflict 2 is found by the same rule. A run that
-              has no conflict 2 is passed over and the run before it is tried. Each VP of the chain is the one that
-              was CURRENT when its conflict 1 was the newest conflict.
+  THE PREVIOUS ONES  a CONNECTED chain back in time (user, 2026-09-26: "the select conflict should normally be
+              connected to the one that happened at 7am, we shouldnt have a gap"): the next older VP's conflict 1 IS
+              the newer VP's conflict 2, and its own conflict 2 is found by the same rule. Each VP of the chain is the
+              one that was CURRENT when its conflict 1 was the newest conflict, and its profile keeps both of its
+              conflicts. Its LINES stop where the newer VP's begin -- the shared conflict's first bar -- so the chain
+              has no gap and no overlap ("the VPs should NOT be overlapping"). A run with no conflict 2 breaks the
+              chain: the run before it is tried as a conflict 1 (that VP's lines then run to its own conflict 1's end).
+              ⚠ The first cut restarted the search at the run BEFORE the shared conflict, which skipped a link: the
+              08:31 conflict never became a conflict 1, and its VP to 06:59 (07:49 shares its low) was missing.
 """
 from __future__ import annotations
 
@@ -80,8 +85,8 @@ def _find_c2(rr, boxes, j: int, min_gap: int, tol: float):
 
 
 def chain(rr, boxes, min_gap: int, tick: float, max_n: Optional[int] = None) -> List[Tuple[int, int, list]]:
-    """[(j, m, skipped)] newest first: run j is a VP's conflict 1, run m its conflict 2. Non-overlapping by
-    construction -- after a VP, the search resumes at the run just before its conflict 2."""
+    """[(j, m, skipped)] newest first: run j is a VP's conflict 1, run m its conflict 2. CONNECTED: the next VP's
+    conflict 1 is this VP's conflict 2 (j = m); a run with no conflict 2 is passed over (j - 1)."""
     tol = 0.5 * float(tick)
     out = []
     j = len(rr) - 1
@@ -94,7 +99,7 @@ def chain(rr, boxes, min_gap: int, tick: float, max_n: Optional[int] = None) -> 
             j -= 1
             continue
         out.append((j, m, sk))
-        j = m - 1
+        j = m                                              # the shared conflict: no gap between the two VPs
     return out
 
 
@@ -190,6 +195,7 @@ def build(t, t_end, conf, cfh, cfl, pxh, pxl, base: int, bin_secs: float, buy, s
     td = t_draw if t_draw is not None else t_end
     edge = (int(base) + int(np.size(buy))) * float(bin_secs)       # the end of the tape
     new_memo = {}
+    newer_c2 = None               # the run index of the newer DRAWN VP's conflict 2 (the conflict the next one shares)
     for j, m, sk in chain(rr, boxes, min_gap, tick, max_n):
         a1, b1 = rr[j]; a2, b2 = rr[m]
         h1, l1 = boxes[j]; h2, l2 = boxes[m]
@@ -200,13 +206,19 @@ def build(t, t_end, conf, cfh, cfl, pxh, pxl, base: int, bin_secs: float, buy, s
         if vp is None:
             vp = profile(base, bin_secs, buy, sell, bpxh, bpxl, t0, tc, lo, hi, tick, rows_target, va_pct, va2_pct)
         if vp is None:
+            newer_c2 = None       # not drawn: the next one runs its lines to its own conflict 1's end
             continue
         if tc < edge - 60.0:
             new_memo[key] = vp
+        # the LINES of a VP whose conflict 1 is the newer VP's conflict 2 stop at that shared conflict's first bar,
+        # where the newer VP's begin: connected, not overlapping. Its PROFILE keeps both of its conflicts.
+        shared = newer_c2 is not None and j == newer_c2
         d = dict(vp)
         d.update({"c1": (a1, b1, h1, l1), "c2": (a2, b2, h2, l2), "skipped": sk, "lo": float(lo), "hi": float(hi),
-                  "t0": t0, "t1": float(td[b1]), "cur": j == len(rr) - 1,
+                  "t0": t0, "t1": float(t[a1]) if shared else float(td[b1]), "shared": bool(shared),
+                  "cur": j == len(rr) - 1,
                   "live": bool(j == len(rr) - 1 and done is not None and not bool(np.asarray(done)[b1]))})
+        newer_c2 = m
         out["vps"].append(d)
     if memo is not None:
         memo.clear()
