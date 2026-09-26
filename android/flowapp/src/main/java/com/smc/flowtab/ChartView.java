@@ -954,8 +954,9 @@ public final class ChartView extends View {
         if (s.cvpUt) return v.length > FlowModel.CVP_UT && v[FlowModel.CVP_UT] > 0.5;
         return s.cvpPrev;
     }
-    // the UNTESTED AREAS' fill and edge: the VP's own colour, faint enough for the candles to read through it
-    private static final int CVP_AREA_FILL_A = 0x2E, CVP_AREA_EDGE_A = 0xB0;
+    // the UNTESTED AREAS' fill, the VP's own colour, no border (user 2026-09-26: "lower the opacity of the boxes you
+    // created of the untested area and remove their borders, keep just the fill"): about half the first 0x2E
+    private static final int CVP_AREA_FILL_A = 0x18;
 
     /** THE UNTESTED AREAS (user 2026-09-26: "after every conflict VP that ends, in the future the above/below yellow area
      *  to be tested, we are always expecting the price to come back to it ... a green arrow conflict VP ... we are
@@ -984,9 +985,6 @@ public final class ChartView extends View {
             int rgb = cvpCols[i] & 0x00FFFFFF;
             pf.setColor(rgb | (CVP_AREA_FILL_A << 24));
             c.drawRect(x0, Math.max(yTop, top), x1, Math.min(yBot, r.bottom), pf);
-            pl.setColor(rgb | (CVP_AREA_EDGE_A << 24)); pl.setStrokeWidth(1 * d);
-            if (yTop >= top) c.drawLine(x0, yTop, x1, yTop, pl);
-            if (yBot <= r.bottom) c.drawLine(x0, yBot, x1, yBot, pl);
         }
     }
 
