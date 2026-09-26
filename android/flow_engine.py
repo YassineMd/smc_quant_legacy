@@ -45,6 +45,9 @@ WIRE (newline-delimited JSON; arrays are base64 of little-endian float32 unless 
              area -- below its yellow midline for a green arrow, above it for a red one -- price has not traded into
              since it ended, no time limit (the UNTESTED AREAS sub-toggle keeps only these and the current VP;
              conflict_vp.Frozen.untested). 0: tested, the current VP, or not known.
+             exp: [[x0 of its VP, side, t0, t1, low, high], ...] -- EXPECTED TEST: each VP's LINES IMPACT areas of its
+             arrow's colour (lime for green, purple for red) that start inside it; the tablet draws them on to the
+             VP's t1 (conflict_vp.expected_areas).
              See tick_cvp, app/conflict_vp.py
   <- hi      {}                                                             first line from the tablet
   <- view    {x0, x1, follow}                                               the tablet's x range (epoch seconds)
@@ -979,7 +982,15 @@ def tick_cvp():
                      round(float(v["vah2"]), d), round(float(v["val2"]), d), 0, 1 if k_ == 0 else 0, up, dn,
                      round(float(c2["t0"]), 3) if c2 else None, round(float(c2["lo"]), d) if c2 else None,
                      1 if k_ in ut else 0])
-    msg = {"t": "cvp", "on": bool(rows), "vps": rows}
+    # EXPECTED TEST (user 2026-09-26, a sub-toggle): each VP's lime (green arrow) / purple (red arrow) LINES IMPACT
+    # areas, the tablet extends them to the VP's end
+    exp = []
+    try:
+        for k_, sd_, a0_, a1_, lo_, hi_ in _cvp.expected_areas(drawn, by, S.dom_areas or [], tol):
+            exp.append([round(float(drawn[k_][1]), 3), int(sd_), round(a0_, 3), round(a1_, 3), round(lo_, d), round(hi_, d)])
+    except Exception:
+        traceback.print_exc()
+    msg = {"t": "cvp", "on": bool(rows), "vps": rows, "exp": exp}
     if msg != S.cvp_sent:
         S.cvp_sent = msg
         send(msg)

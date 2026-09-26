@@ -502,6 +502,10 @@ public final class FlowModel {
             CVP_UT = 15, CVP_N = 16;
     public boolean cvpOn = false;
     public double[][] cvpVps = new double[0][];
+    // EXPECTED TEST (user 2026-09-26): the engine's "exp" -- [x0 of its VP (its row's T0), side +1 lime / -1 purple,
+    // area t0, area t1, low, high] per LINES IMPACT area of a VP's arrow colour that starts inside that VP
+    public static final int EXP_VP = 0, EXP_SIDE = 1, EXP_T0 = 2, EXP_T1 = 3, EXP_LO = 4, EXP_HI = 5, EXP_N = 6;
+    public double[][] cvpExp = new double[0][];
 
     public void onCvp(JSONObject m) {
         boolean on = m.optBoolean("on", false);
@@ -516,7 +520,18 @@ public final class FlowModel {
                 vps[i] = v;
             }
         }
-        synchronized (lock) { cvpOn = on && vps.length > 0; cvpVps = vps; version++; }
+        double[][] exp = new double[0][];
+        org.json.JSONArray e = on ? m.optJSONArray("exp") : null;
+        if (e != null) {
+            exp = new double[e.length()][];
+            for (int i = 0; i < e.length(); i++) {
+                org.json.JSONArray r = e.optJSONArray(i);
+                double[] v = new double[EXP_N];
+                for (int k = 0; k < EXP_N; k++) v[k] = (r != null && k < r.length()) ? r.optDouble(k, Double.NaN) : Double.NaN;
+                exp[i] = v;
+            }
+        }
+        synchronized (lock) { cvpOn = on && vps.length > 0; cvpVps = vps; cvpExp = exp; version++; }
     }
 
     public void onExplain(JSONObject m) {

@@ -56,6 +56,10 @@ happened at 7am, we shouldnt have a gap", and "when a conflict VP is draw it sta
               gonna be expecting its above yellow area to be tested", then "dont limit it to 24h ... when i toggle it on
               it should hide the previous VPs that got already tested, omit the most recent VP we keep it". See
               Frozen.untested (what has been tested is remembered, so the check reaches past the 72 h of candles).
+  EXPECTED TEST (user 2026-09-26, a sub-toggle): "the points we expect to be tested are the lines impact area / if
+              its an up arrow VP we expect the lime green lines impact areas to be tested and for the down arrow VP we
+              expect the purple areas from lines impact to be tested. / so when this indictor is toggled on it expends
+              these areas up to the point where the conflict VP ends". See expected_areas().
   THE BIAS    (user 2026-09-26, the tablet's Market Position buttons): "detect the last break of the conflict VP ...
               a candle that closes above/below a most recent high/low of the conflict VP (the thickest lines of the
               conflict VP) / if above we have a bullish bias / if below we have a bearish bias". Frozen.bias(): every
@@ -152,6 +156,31 @@ def profile(base: int, bin_secs: float, buy, sell, pxh, pxl, t0: float, t1: floa
     return {"poc": poc, "vah": top(vHi) * tick, "val": (lo_t + vLo * k) * tick,
             "vah2": top(wHi) * tick, "val2": (lo_t + wLo * k) * tick,
             "usd": float(vp.sum()), "rows": int(rows), "k": int(k)}
+
+
+def expected_areas(drawn, by_t0: dict, areas, tol: float) -> List[Tuple[int, int, float, float, float, float]]:
+    """EXPECTED TEST (user 2026-09-26: "as I told you we expect the price to test the area, but the points we expect to
+    be tested are the lines impact area / if its an up arrow VP we expect the lime green lines impact areas to be tested
+    and for the down arrow VP we expect the purple areas from lines impact to be tested. / so when this indictor is
+    toggled on it expends these areas up to the point where the conflict VP ends").
+
+    `drawn` = Frozen.drawn() (newest first), `by_t0` = the records by t0 (for each VP's conflict 2), `areas` = LINES
+    IMPACT's BRIGHT areas over the read, (side, t0, t1, low, high) with +1 lime (buyers) / -1 purple (sellers) -- the
+    ones the tablet's price pane boxes. A VP with a GREEN arrow (its conflict 1 made the high) takes the LIME areas, a
+    RED arrow the PURPLE ones, that START inside it: from its conflict 2's first bar to where its lines end (x1).
+    Returns [(k, side, a_t0, a_t1, low, high)] -- k = the VP's index in `drawn`; the tablet draws each area on to x1."""
+    out = []
+    for k, (it, x0, x1) in enumerate(drawn):
+        a = area_of(it, tol)
+        if a is None:
+            continue
+        side = a[0]                                       # +1 green arrow -> lime, -1 red arrow -> purple
+        c2 = by_t0.get(float(it["c2"])) if it.get("c2") is not None else None
+        start = float(c2["t0"]) if c2 is not None else float(x0)
+        for (sd, a0, a1, lo, hi) in (areas or ()):
+            if int(sd) == side and start - 0.5 <= float(a0) < float(x1):
+                out.append((k, side, float(a0), float(a1), float(lo), float(hi)))
+    return out
 
 
 def area_of(it: dict, tol: float) -> Optional[Tuple[int, float, float, float]]:

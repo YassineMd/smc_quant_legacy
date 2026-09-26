@@ -78,6 +78,7 @@ public final class MainActivity extends Activity implements EngineClient.Listene
         chart.showCvp = prefs.getBoolean("cvp", true);      // CONFLICT VP (user 2026-09-26), on until the user turns it off
         chart.showCvpPrev = prefs.getBoolean("cvp_prev", false);   // ... its previous ones, off until the user asks
         chart.showCvpUt = prefs.getBoolean("cvp_ut", false);       // ... UNTESTED only (the tested ones hidden), likewise
+        chart.showCvpExp = prefs.getBoolean("cvp_exp", false);     // ... EXPECTED TEST (lime / purple areas on to the VP's end)
         chart.showBp = prefs.getBoolean("bigplayer", false);
         bpMin = prefs.getFloat("bp_min", (float) BP_DEFAULT);
         chart.initTools(prefs, new PriceTools.Events() {
@@ -313,13 +314,14 @@ public final class MainActivity extends Activity implements EngineClient.Listene
         // seperate it from the other indicators"): an indented sub-toggle, greyed out while the Conflict VP is off
         // ... and its UNTESTED AREAS (user 2026-09-26: "we gonna add another indictor subtoggle to Conflict VP"): the
         // same kind of sub-toggle, under it
-        CheckBox[] cvpSub = new CheckBox[2];
+        CheckBox[] cvpSub = new CheckBox[3];
         toggle(col, "Conflict VP  (the last two conflict boxes)", "cvp", chart.showCvp, v -> {
             chart.showCvp = v;
             for (CheckBox cb : cvpSub) if (cb != null) cb.setEnabled(v);
         });
         cvpSub[0] = toggle(col, "Previous Conflict VPs  (one colour each)", "cvp_prev", chart.showCvpPrev, v -> chart.showCvpPrev = v);
         cvpSub[1] = toggle(col, "Untested Areas  (hides the previous VPs already tested)", "cvp_ut", chart.showCvpUt, v -> chart.showCvpUt = v);
+        cvpSub[2] = toggle(col, "Expected Test  (lime / purple areas on to the VP's end)", "cvp_exp", chart.showCvpExp, v -> chart.showCvpExp = v);
         for (CheckBox cb : cvpSub) {
             cb.setTextSize(13);
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);

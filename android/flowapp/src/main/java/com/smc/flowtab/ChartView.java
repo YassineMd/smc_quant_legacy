@@ -51,6 +51,7 @@ public final class ChartView extends View {
     public boolean showCvp = true;                   // CONFLICT VP (user 2026-09-26): drawn by drawCvp
     public boolean showCvpPrev = false;              // ... and the PREVIOUS ones (its sub-toggle)
     public boolean showCvpUt = false;                // ... UNTESTED only: the current VP + the previous ones not yet tested
+    public boolean showCvpExp = false;               // ... EXPECTED TEST: each VP's lime / purple areas drawn on to its end
     public boolean bw = true;                       // Chart Style "Simple BW": white canvas, black ink, black / white candles
     private int cBg, cFg, cTitle, cGuide, cSep, cMid, cInk;
 
@@ -554,6 +555,7 @@ public final class ChartView extends View {
             s.hlhOn = M.hlhOn && showHlh; s.hlhNote = M.hlhNote; s.hlhPics = M.hlhPics; s.hlhLabels = M.hlhLabels; s.hlhDashes = M.hlhDashes;
             s.bpOn = M.bpOn && showBp; s.bpBub = M.bpBub; s.bpDia = M.bpDia; s.bpLmax = M.bpLmax;
             s.cvpOn = M.cvpOn && showCvp; s.cvpVps = M.cvpVps; s.cvpPrev = showCvpPrev; s.cvpUt = showCvpUt;
+            s.cvpExpOn = showCvpExp; s.cvpExp = M.cvpExp;
             s.series = new float[3][];
             if (paneOn[PANE_FLOW] && M.binN > 0) M.series(vx0 - 1, vx1 + 1, (int) (2 * plotR), s.series);
         }
@@ -610,7 +612,7 @@ public final class ChartView extends View {
         FlowModel.Lines cint, cimp;
         boolean hlhOn; String hlhNote; List<FlowModel.HlhPic> hlhPics; List<FlowModel.HlhLabel> hlhLabels; List<FlowModel.HlhDash> hlhDashes;
         boolean bpOn; double[][] bpBub, bpDia; int bpLmax;
-        boolean cvpOn, cvpPrev, cvpUt; double[][] cvpVps;
+        boolean cvpOn, cvpPrev, cvpUt, cvpExpOn; double[][] cvpVps, cvpExp;
         double liveAnim;
     }
 
@@ -933,6 +935,7 @@ public final class ChartView extends View {
             cvpCols[i] = cur ? CVP_COL : CVP_PREV_COLS[prevIdx % CVP_PREV_COLS.length];
         }
         if (s.cvpUt) drawCvpAreas(c, vps, r, top, hgt, yl, yh);                    // under every VP's lines
+        if (s.cvpExpOn) drawCvpExpected(c, s, vps, r, top, hgt, yl, yh);
         // the oldest first, the current one last: on top
         for (int i = vps.length - 1; i >= 0; i--) {
             double[] v = vps[i];
@@ -944,6 +947,36 @@ public final class ChartView extends View {
     }
 
     private int[] cvpCols = new int[16];
+
+    /** EXPECTED TEST (user 2026-09-26: "as I told you we expect the price to test the area, but the points we expect to
+     *  be tested are the lines impact area / if its an up arrow VP we expect the lime green lines impact areas to be
+     *  tested and for the down arrow VP we expect the purple areas from lines impact to be tested. / so when this
+     *  indictor is toggled on it expends these areas up to the point where the conflict VP ends"). For every VP drawn
+     *  (cvpShown, and the one shown alone), the engine's LINES IMPACT areas of its arrow's colour that start inside it
+     *  (conflict_vp.expected_areas) are drawn on to where the VP's lines end (its T1): the price pane's own lime /
+     *  purple box, same paint and padding. Where "Lines Impact areas on Price" already boxes the area itself, only the
+     *  extension is added (from the area's end), so the area is not painted twice. */
+    private void drawCvpExpected(Canvas c, Snap s, double[][] vps, RectF r, float top, float hgt, double yl, double yh) {
+        double[][] ex = s.cvpExp;
+        if (ex == null || ex.length == 0 || !(yh > yl)) return;
+        float pad = DOM_BOX_PAD * d;
+        for (double[] e : ex) {
+            double[] v = null;
+            for (double[] w : vps) if (Math.abs(w[FlowModel.CVP_T0] - e[FlowModel.EXP_VP]) < 0.5) { v = w; break; }
+            if (v == null || !cvpShown(s, v)) continue;
+            if (!Double.isNaN(cvpSolo) && Math.abs(v[FlowModel.CVP_T0] - cvpSolo) >= 0.5) continue;
+            double end = v[FlowModel.CVP_T1], from = showDomPrice ? e[FlowModel.EXP_T1] : e[FlowModel.EXP_T0];
+            double lo = e[FlowModel.EXP_LO], hi = e[FlowModel.EXP_HI];
+            if (Double.isNaN(end) || Double.isNaN(from) || Double.isNaN(lo) || Double.isNaN(hi) || !(end > from)) continue;
+            float x0 = Math.max(xPx(from), r.left), x1 = Math.min(xPx(end), plotR);
+            if (x1 <= x0) continue;
+            float y0 = (float) (top + (yh - hi) / (yh - yl) * hgt) - pad;
+            float y1 = (float) (top + (yh - lo) / (yh - yl) * hgt) + pad;
+            if (y1 < top || y0 > r.bottom) continue;
+            domPaint(e[FlowModel.EXP_SIDE] > 0 ? 1 : -1, true);
+            c.drawRect(x0, Math.max(y0, top), x1, Math.min(y1, r.bottom), pf);
+        }
+    }
 
     /** Which VPs are drawn. THE CURRENT ONE ALWAYS ("omit the most recent VP we keep it"). The previous ones: with
      *  UNTESTED on, only those whose area price has not come back to yet (user 2026-09-26: "when i toggle it on it
