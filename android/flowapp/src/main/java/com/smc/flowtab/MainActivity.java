@@ -71,6 +71,8 @@ public final class MainActivity extends Activity implements EngineClient.Listene
         chart.showDomPrice = prefs.getBoolean("domprice", true);
         chart.showTakeover = prefs.getBoolean("takeover", true);
         chart.showHlh = prefs.getBoolean("hlh", false);
+        chart.showCvp = prefs.getBoolean("cvp", true);      // CONFLICT VP (user 2026-09-26), on until the user turns it off
+        chart.showCvpPrev = prefs.getBoolean("cvp_prev", false);   // ... its previous ones, off until the user asks
         chart.showBp = prefs.getBoolean("bigplayer", false);
         bpMin = prefs.getFloat("bp_min", (float) BP_DEFAULT);
         chart.initTools(prefs, new PriceTools.Events() {
@@ -302,6 +304,19 @@ public final class MainActivity extends Activity implements EngineClient.Listene
         toggle(col, "Big Player", "bigplayer", chart.showBp, v -> { chart.showBp = v; feed.sendToggle("bigplayer", v); });
         bpSlider(col);
         toggle(col, "HLH Volume Profile", "hlh", chart.showHlh, v -> { chart.showHlh = v; feed.sendToggle("hlh", v); });
+        // THE PREVIOUS CONFLICT VPs (user 2026-09-26: "it should be under the conflict VP indicator, inside it so we
+        // seperate it from the other indicators"): an indented sub-toggle, greyed out while the Conflict VP is off
+        CheckBox[] cvpPrev = new CheckBox[1];
+        toggle(col, "Conflict VP  (the last two conflict boxes)", "cvp", chart.showCvp, v -> {
+            chart.showCvp = v;
+            if (cvpPrev[0] != null) cvpPrev[0].setEnabled(v);
+        });
+        cvpPrev[0] = toggle(col, "Previous Conflict VPs  (one colour each)", "cvp_prev", chart.showCvpPrev, v -> chart.showCvpPrev = v);
+        cvpPrev[0].setTextSize(13);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.leftMargin = (int) Ui.dp(this, 30);
+        cvpPrev[0].setLayoutParams(lp);
+        cvpPrev[0].setEnabled(chart.showCvp);
         toggle(col, "Lines Impact areas on Price", "domprice", chart.showDomPrice, v -> chart.showDomPrice = v);
         section(col, "Indicator  ›  Cycle Chart");
         toggle(col, "Takeover ▲▼  (one side owns the cycle)", "takeover", chart.showTakeover, v -> { chart.showTakeover = v; feed.sendToggle("takeover", v); });
@@ -384,13 +399,16 @@ public final class MainActivity extends Activity implements EngineClient.Listene
         col.addView(tv);
     }
 
-    private void toggle(LinearLayout col, String label, String key, boolean cur, OnTog on) {
+    private CheckBox toggle(LinearLayout col, String label, String key, boolean cur, OnTog on) {
         CheckBox cb = new CheckBox(this);
         cb.setText(label);
-        cb.setTextColor(Color.parseColor("#cfd3da"));
+        cb.setTextColor(new android.content.res.ColorStateList(
+                new int[][]{new int[]{-android.R.attr.state_enabled}, new int[]{}},
+                new int[]{Color.parseColor("#5d6470"), Color.parseColor("#cfd3da")}));   // a greyed-out sub-toggle reads as such
         cb.setTextSize(15);
         cb.setChecked(cur);
         cb.setOnCheckedChangeListener((btn, v) -> { prefs.edit().putBoolean(key, v).apply(); on.set(v); chart.dataChanged(); });
         col.addView(cb);
+        return cb;
     }
 }

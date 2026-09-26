@@ -489,6 +489,32 @@ public final class FlowModel {
         }
     }
 
+    // THE CONFLICT VPs (user 2026-09-26): the engine's "cvp" (tick_cvp), newest first, one row per VP:
+    // [t0, t1, lo, hi, poc, vah, val, vah2, val2, live, cur] -- a profile from its conflict 2's first bar (t0) to its
+    // conflict 1's last (t1), low / high of the two red boxes, the HLH VP's lines. cur = THE Conflict VP (its conflict 1
+    // is the newest conflict), the others the PREVIOUS ones (a chain back in time that never overlaps); live = cur's
+    // conflict 1 is the forming cycle, and t1 is then its START (the lines run to the forming candle's end).
+    public static final int CVP_T0 = 0, CVP_T1 = 1, CVP_LO = 2, CVP_HI = 3, CVP_POC = 4, CVP_VAH = 5, CVP_VAL = 6,
+            CVP_VAH2 = 7, CVP_VAL2 = 8, CVP_LIVE = 9, CVP_CUR = 10;
+    public boolean cvpOn = false;
+    public double[][] cvpVps = new double[0][];
+
+    public void onCvp(JSONObject m) {
+        boolean on = m.optBoolean("on", false);
+        double[][] vps = new double[0][];
+        org.json.JSONArray a = on ? m.optJSONArray("vps") : null;
+        if (a != null) {
+            vps = new double[a.length()][];
+            for (int i = 0; i < a.length(); i++) {
+                org.json.JSONArray r = a.optJSONArray(i);
+                double[] v = new double[11];
+                for (int k = 0; k < 11; k++) v[k] = (r != null && k < r.length()) ? r.optDouble(k, Double.NaN) : Double.NaN;
+                vps[i] = v;
+            }
+        }
+        synchronized (lock) { cvpOn = on && vps.length > 0; cvpVps = vps; version++; }
+    }
+
     public void onExplain(JSONObject m) {
         synchronized (lock) { explainK = m.optDouble("k"); explainHtml = m.optString("html", ""); version++; }
     }

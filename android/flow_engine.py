@@ -33,6 +33,12 @@ WIRE (newline-delimited JSON; arrays are base64 of little-endian float32 unless 
   -> hvp     {on, name, lo, hi, poc, prev, dir}                             the NEWEST HLH day bloc: its low / high, and
              dir = -1 created LOWER (its POC under the previous bloc's VAL), +1 HIGHER (over its VAH), 0 neither --
              the tablet fades the Market Position BUY / SELL against it (see tick_hvp)
+  -> cvp     {on, vps: [[t0, t1, lo, hi, poc, vah, val, vah2, val2, live, cur], ...]}   the CONFLICT VPs, newest
+             first: each a profile from its conflict 2's first bar (t0) to its conflict 1's last (t1), low / high of
+             the two boxes, the HLH VP's lines; cur = THE Conflict VP (its conflict 1 is the newest conflict), the
+             others the PREVIOUS ones -- a chain back in time that never overlaps; live = cur's conflict 1 is the
+             forming cycle (t1 is then that cycle's START: the tablet runs the lines to its forming end). See
+             tick_cvp, app/conflict_vp.py
   <- hi      {}                                                             first line from the tablet
   <- view    {x0, x1, follow}                                               the tablet's x range (epoch seconds)
   <- mode    {v}                                                            the I x I dropdown
@@ -79,6 +85,7 @@ from app import terminal as _term                             # noqa: E402
 from app.terminal import MinimalTerminalWindow                # noqa: E402
 from app import flow_interp as FI                             # noqa: E402
 from app import hlh_draw as _hlh                              # noqa: E402
+from app import conflict_vp as _cvp                           # noqa: E402
 from PySide6 import QtGui as _QtGui                           # noqa: E402
 
 
@@ -409,6 +416,9 @@ class State:
     lines_sig = {"cint": None, "cimp": None}   # the two split panes, each keyed on what it last sent
     hlh_out = None; hlh_t = 0.0; hlh_xm = None; hlh_pics = {}
     hvp_sent = None           # the last "hvp" payload (resent only when it changes)
+    cvp = None                # the CONFLICT VPs as tick_cycles last built them (app/conflict_vp.build)
+    cvp_memo = {}             # ... their settled profiles (conflict_vp.build's memo)
+    cvp_sent = None; cvp_pair = None           # ... the payload the tablet last got, and the chain last logged
     bw = True                 # the tablet's Chart Style: the HLH labels are built for a white or a dark ground
     bp_sig = None
     view = None; follow = True
@@ -582,6 +592,20 @@ def tick_cycles(now, force=False):
             S.dom_ms = 1000.0 * (time.perf_counter() - _ta)
         _why = []
         cfh, cfl = w._conflict_boxes(t, pxh, pxl, conf, S.dom_areas, float(config.CONFLICT_LOOKBACK_SECS), _why)
+        # THE CONFLICT VP (user 2026-09-26): the last two conflict boxes -> a volume profile between them, from the
+        # store's 1 s bins. Rebuilt with every fresh read (the forming cycle's tape moves it while conflict 1 forms).
+        try:
+            # t_end cuts the seconds (the cycles' own rule), te_c is where the lines end on the chart
+            # the PREVIOUS ones too (user 2026-09-26: "add a toggle so that I am able to see the previous ones"):
+            # the whole non-overlapping chain of the read, a settled VP's profile memoised until the tape behind it
+            # is rewritten (rev_hist)
+            S.cvp = _cvp.build(t, t_end, conf, cfh, cfl, pxh, pxl, int(st._base), float(st.bin), st._buy, st._sell,
+                               st._pxh, st._pxl, float(config.TICK_SIZE), int(config.CVP_MIN_GAP_BARS),
+                               int(config.HLH_ROWS), float(config.HLH_VA_PCT), float(config.HLH_VA2_PCT), done=done,
+                               t_draw=te_c, memo=S.cvp_memo, rev=int(getattr(st, "rev_hist", 0)))
+        except Exception as _e:
+            log("conflict VP: %s" % _e)
+            S.cvp = None
         if now - getattr(S, "cf_log_t", 0.0) > 60.0:          # what the boxes reach to, last 6 h (the engine's log)
             S.cf_log_t = now
             _hm = lambda x: time.strftime("%d %H:%M:%S", time.gmtime(float(x)))
@@ -828,6 +852,54 @@ def tick_hvp(st, week_on, now):
         log("hvp %s" % ({k: v for k, v in msg.items() if k != "t"},))
 
 
+def tick_cvp():
+    """THE CONFLICT VP (user 2026-09-26: "This indicator creates VP from the last 2 conflicts/merged conflicts ... we
+    gonna draw the same lines as HLH VP indicator"), and the PREVIOUS ones ("add a toggle so that I am able to see the
+    previous ones ... each VP lines should be of different color ... the VPs should NOT be overlapping"): the chain
+    tick_cycles built, sent when what the tablet draws moved. The tablet draws the lines (ChartView.drawCvp) and owns
+    both toggles and the colours; the engine always sends. A LIVE VP (its conflict 1 is the forming cycle) is sent
+    with t1 = that cycle's START, so the forming candle's growth alone never resends the chain."""
+    v = S.cvp
+    vps = (v or {}).get("vps") or []
+    cb = S.cyc_base
+    tt = cb[0] if cb is not None else None
+    d = int(config.PRICE_DECIMALS) + 3
+    rows = []
+    for q in vps:
+        t1 = float(tt[q["c1"][1]]) if (q["live"] and tt is not None) else float(q["t1"])
+        rows.append([round(float(q["t0"]), 3), round(t1, 3), round(float(q["lo"]), d), round(float(q["hi"]), d),
+                     round(float(q["poc"]), d), round(float(q["vah"]), d), round(float(q["val"]), d),
+                     round(float(q["vah2"]), d), round(float(q["val2"]), d), 1 if q["live"] else 0, 1 if q["cur"] else 0])
+    msg = {"t": "cvp", "on": bool(rows), "vps": rows}
+    if msg != S.cvp_sent:
+        S.cvp_sent = msg
+        send(msg)
+    # the log names the chain when it changes: the current VP in full (its two runs, what was passed over on the way
+    # back, the lines), then the previous ones' spans -- by START TIMES (a backfill prepends cycles and shifts every
+    # index) and box ranges (the reach moves when LINES IMPACT's areas arrive with the wall grid)
+    key = tuple(tuple(r_[:4]) for r_ in rows)          # spans + ranges: a live VP's moving POC / VA does not re-log
+    if key == S.cvp_pair:
+        return
+    S.cvp_pair = key
+    try:
+        hm = lambda k: time.strftime("%d %H:%M:%S", time.gmtime(float(tt[k]))) if tt is not None and 0 <= k < tt.size else "?"
+        run = lambda c: "%s-%s %.2f-%.2f" % (hm(c[0]), hm(c[1])[3:], c[3], c[2])
+        lines = lambda q: "%.2f-%.2f POC %.2f VA %.2f-%.2f outer %.2f-%.2f $%.2fM, %d rows of %d ticks" % (
+            q["lo"], q["hi"], q["poc"], q["val"], q["vah"], q["val2"], q["vah2"], q["usd"] / 1e6, q["rows"], q["k"])
+        cur = next((q for q in vps if q["cur"]), None)
+        prev = [q for q in vps if not q["cur"]]
+        if cur is not None:
+            sk = "".join(" | skipped %s (%s)" % (run(x), x[4]) for x in (cur.get("skipped") or [])[:6])
+            head = "conflict 1 %s, conflict 2 %s%s -> %s%s" % (run(cur["c1"]), run(cur["c2"]), sk, lines(cur),
+                                                               ", live" if cur["live"] else "")
+        else:
+            head = "no current VP (%d conflict runs in the read)" % int((v or {}).get("runs", 0))
+        log("conflict VP: %s; %d previous%s" % (head, len(prev), "".join(
+            " | %s .. %s %s" % (run(q["c2"]), run(q["c1"]), lines(q)) for q in prev[:4])))
+    except Exception:
+        traceback.print_exc()
+
+
 def _newest_bloc(rows):
     """The NEWEST HLH day bloc among `rows` (the row whose candles end latest, tie on start) and how it was created
     against the one before it: {rec, prev, lo, hi, poc, dir}, or None -- "the VP" of the live Market Position fade
@@ -916,7 +988,7 @@ def on_cmd(c):
         S.bins_sent = None; S.cyc_full_needed = True; S.iimp_id = None; S.interp_id = None; S.liq_sig = None
         S.cyc_lead_sent = None; S.cyc_conf_sent = None; S.cyc_cfh_sent = None; S.cyc_cfl_sent = None
         S.lines_sig = {"cint": None, "cimp": None}
-        S.hlh_out = None; S.hlh_pics = {}; S.bp_sig = None; S.hvp_sent = None
+        S.hlh_out = None; S.hlh_pics = {}; S.bp_sig = None; S.hvp_sent = None; S.cvp_sent = None
         hello()
         log("hi from the tablet -- sending everything")
     elif k == "view":
@@ -1029,6 +1101,7 @@ def engine_tick():
             S.rev_hist = rh; S.cyc_full_needed = True
         tick_bins()
         tick_cycles(now, force=S.cyc_full_needed)
+        tick_cvp()
         tick_iimp()
         w._lines_tick(now)                      # the same crosses() read, so a memo hit
         tick_lines("cint"); tick_lines("cimp")

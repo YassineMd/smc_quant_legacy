@@ -670,6 +670,13 @@ CONTRA_BORDER_W = 2.0
 # high is above the bar's high -- looking back no further than this. One found and not the other: the other side takes
 # the same distance from the bar. Neither: the bar's own high / low.
 CONFLICT_LOOKBACK_SECS = 24 * 3600.0
+# THE CONFLICT VP (user 2026-09-26: "This indicator creates VP from the last 2 conflicts/merged conflicts"): conflict 1
+# is the newest conflict run, conflict 2 the newest run before it that is at least this many BARS (cycles) away ("the
+# ones preceeding should be at least 10 bars away from it") and shares neither its high nor its low ("if they have the
+# same high or low we skip"). The VP runs from conflict 2 to conflict 1, from the lower low to the higher high, and
+# draws the HLH VP's lines (VAH / VAL at HLH_VA_PCT, the outer value area dashed at HLH_VA2_PCT, the POC). About
+# HLH_ROWS rows of whole ticks. Tablet only (app/conflict_vp.py, android/flow_engine.py tick_cvp).
+CVP_MIN_GAP_BARS = 10
 IIMP_WALL_CHUNK = 900           # columns per request (3.75 h; ~50 KB, the Limit Orders pane's own budget)
 # THE LIVE EDGE (2026-09-23). A new cycle is only known ~20 s after it opened (FLOW_CROSS_MIN_HOLD_SECS), and its
 # wall is the column that ENDS at or before its open -- so that column has been over for 20 s or more by then.

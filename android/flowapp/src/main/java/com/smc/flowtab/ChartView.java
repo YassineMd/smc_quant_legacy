@@ -48,6 +48,8 @@ public final class ChartView extends View {
     // toggles (the hamburger's)
     public boolean showPrice = true, showFlow = true, showLiq = true, showIimp = true, showLines = true, showTakeover = true;
     public boolean showHlh = false, showBp = false;
+    public boolean showCvp = true;                   // CONFLICT VP (user 2026-09-26): drawn by drawCvp
+    public boolean showCvpPrev = false;              // ... and the PREVIOUS ones (its sub-toggle)
     public boolean bw = true;                       // Chart Style "Simple BW": white canvas, black ink, black / white candles
     private int cBg, cFg, cTitle, cGuide, cSep, cMid, cInk;
 
@@ -509,6 +511,7 @@ public final class ChartView extends View {
             s.cint = M.cint; s.cimp = M.cimp;
             s.hlhOn = M.hlhOn && showHlh; s.hlhNote = M.hlhNote; s.hlhPics = M.hlhPics; s.hlhLabels = M.hlhLabels; s.hlhDashes = M.hlhDashes;
             s.bpOn = M.bpOn && showBp; s.bpBub = M.bpBub; s.bpDia = M.bpDia; s.bpLmax = M.bpLmax;
+            s.cvpOn = M.cvpOn && showCvp; s.cvpVps = M.cvpVps; s.cvpPrev = showCvpPrev;
             s.series = new float[3][];
             if (paneOn[PANE_FLOW] && s.buy.length > 0) M.series(vx0 - 1, vx1 + 1, (int) (2 * plotR), s.series);
         }
@@ -556,6 +559,7 @@ public final class ChartView extends View {
         FlowModel.Lines cint, cimp;
         boolean hlhOn; String hlhNote; List<FlowModel.HlhPic> hlhPics; List<FlowModel.HlhLabel> hlhLabels; List<FlowModel.HlhDash> hlhDashes;
         boolean bpOn; double[][] bpBub, bpDia; int bpLmax;
+        boolean cvpOn, cvpPrev; double[][] cvpVps;
         double liveAnim;
     }
 
@@ -635,6 +639,7 @@ public final class ChartView extends View {
         // whether or not that pane is shown here.
         if (showDomPrice) drawDomBoxes(c, s, r.left, top, hgt, yl, yh, forming, fh, fl);
         if (s.hlhOn) drawHlh(c, s, r, top, hgt, yl, yh);
+        if (s.cvpOn) drawCvp(c, s, r, top, hgt, yl, yh, forming ? fte : Double.NaN);
         for (int i = i0; i < i1; i++) {
             boolean isForm = i == last && forming;
             double o = s.cO[i], cl = isForm ? fc : s.cC[i], hh = isForm ? fh : s.cH[i], ll = isForm ? fl : s.cL[i];
@@ -825,6 +830,77 @@ public final class ChartView extends View {
             pt.setTextSize(10.5f * d); float w = pt.measureText(s.hlhNote) + 12 * d;
             pf.setColor(Color.argb(140, 0, 0, 0)); c.drawRoundRect(new RectF(r.left + 8 * d, top + 6 * d, r.left + 8 * d + w, top + 24 * d), 3 * d, 3 * d, pf);
             pt.setColor(Color.rgb(255, 200, 80)); c.drawText(s.hlhNote, r.left + 14 * d, top + 19 * d, pt);
+        }
+    }
+
+    // ------------------------------------------------------------------ CONFLICT VP (the HLH VP's lines between two conflicts)
+    // The user, 2026-09-26: "This indicator creates VP from the last 2 conflicts/merged conflicts ... we will draw our
+    // conflict VP from conflict 2 to conflict 1 ... we gonna draw the same lines as HLH VP indicator". The engine picks
+    // the pairs and builds the profiles (app/conflict_vp.py); here are the HLH bloc's lines: VAH / VAL solid at an HLH
+    // bloc line's width, the POC thin and solid, the outer value area dashed with the HLH's own dash pattern -- from
+    // conflict 2's first bar to conflict 1's last (the forming candle's end while conflict 1 forms).
+    // THE PREVIOUS ONES (user 2026-09-26: "add a toggle so that I am able to see the previous ones ... each VP lines should
+    // be of different color so I differenciate between them and the VPs should NOT be overlapping"): the engine's chain
+    // never overlaps; the current VP keeps the conflict boxes' red, and each previous one takes the next colour of
+    // CVP_PREV_COLS by its place in the chain (1st previous, 2nd, ...), so two neighbours never share a colour.
+    private static final int CVP_COL = Color.RED;
+    private static final int[] CVP_PREV_COLS = {
+            Color.parseColor("#2962FF"), Color.parseColor("#00C853"), Color.parseColor("#AA00FF"), Color.parseColor("#FF6D00"),
+            Color.parseColor("#00B8D4"), Color.parseColor("#C51162"), Color.parseColor("#795548")};
+    private static final float CVP_VA_W = 2f;          // terminal px, like an HLH bloc's VAH / VAL (x d x PCPX)
+
+    private void drawCvp(Canvas c, Snap s, RectF r, float top, float hgt, double yl, double yh, double formEnd) {
+        double[][] vps = s.cvpVps;
+        if (vps == null) return;
+        int nPrev = 0;
+        for (double[] v : vps) if (v[FlowModel.CVP_CUR] < 0.5) nPrev++;
+        // the oldest first, the current one last: on top
+        int prevIdx = nPrev;
+        for (int i = vps.length - 1; i >= 0; i--) {
+            double[] v = vps[i];
+            boolean cur = v[FlowModel.CVP_CUR] > 0.5;
+            if (!cur) prevIdx--;
+            if (!cur && !s.cvpPrev) continue;
+            int col = cur ? CVP_COL : CVP_PREV_COLS[prevIdx % CVP_PREV_COLS.length];
+            double t1 = (v[FlowModel.CVP_LIVE] > 0.5 && !Double.isNaN(formEnd)) ? Math.max(v[FlowModel.CVP_T1], formEnd) : v[FlowModel.CVP_T1];
+            drawCvpOne(c, v, t1, col, r, top, hgt, yl, yh);
+        }
+    }
+
+    private void drawCvpOne(Canvas c, double[] v, double t1, int col, RectF r, float top, float hgt, double yl, double yh) {
+        double t0 = v[FlowModel.CVP_T0];
+        if (Double.isNaN(t0) || Double.isNaN(t1) || t1 < vx0 || t0 > vx1) return;
+        float x0 = Math.max(xPx(t0), r.left - 2), x1 = Math.min(xPx(t1), plotR);
+        if (x1 <= x0) return;
+        double ky = hgt / Math.max(1e-12, yh - yl);
+        pl.setColor(col);
+        pl.setStrokeWidth(Math.max(1f, CVP_VA_W * d * PCPX));
+        for (double p : new double[]{v[FlowModel.CVP_VAH], v[FlowModel.CVP_VAL]}) {
+            if (Double.isNaN(p)) continue;
+            float y = (float) (top + (yh - p) * ky);
+            if (y >= top && y <= r.bottom) c.drawLine(x0, y, x1, y, pl);
+        }
+        double poc = v[FlowModel.CVP_POC];
+        if (!Double.isNaN(poc)) {
+            float y = (float) (top + (yh - poc) * ky);
+            pl.setStrokeWidth(Math.max(1f, 1f * d * PCPX));
+            if (y >= top && y <= r.bottom) c.drawLine(x0, y, x1, y, pl);
+        }
+        // the outer value area: dashes phase-anchored at the line's own start, as drawHlh does
+        float xs0 = xPx(t0), on = 5 * d * PCPX, off = 4 * d * PCPX;
+        pl.setStrokeWidth(1 * d);
+        for (double p : new double[]{v[FlowModel.CVP_VAH2], v[FlowModel.CVP_VAL2]}) {
+            if (Double.isNaN(p)) continue;
+            float y = (float) (top + (yh - p) * ky); if (y < top || y > r.bottom) continue;
+            int k0 = (int) Math.floor((x0 - xs0) / (on + off));
+            int cnt = (int) ((x1 - xs0) / (on + off)) - k0 + 2; if (cnt <= 0) continue;
+            float[] seg = new float[cnt * 4]; int j = 0;
+            for (int k = k0; k * (on + off) + xs0 < x1; k++) {
+                float xa = xs0 + k * (on + off), xb = Math.min(xa + on, x1);
+                if (xb > x0) { seg[j++] = Math.max(xa, x0); seg[j++] = y; seg[j++] = xb; seg[j++] = y; }
+                if (j >= seg.length) break;
+            }
+            if (j > 0) c.drawLines(seg, 0, j, pl);
         }
     }
 
