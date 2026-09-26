@@ -45,9 +45,10 @@ WIRE (newline-delimited JSON; arrays are base64 of little-endian float32 unless 
              area -- below its yellow midline for a green arrow, above it for a red one -- price has not traded into
              since it ended, no time limit (the UNTESTED AREAS sub-toggle keeps only these and the current VP;
              conflict_vp.Frozen.untested). 0: tested, the current VP, or not known.
-             exp: [[x0 of its VP, side, t0, t1, low, high], ...] -- EXPECTED TEST: each VP's LINES IMPACT areas of its
-             arrow's colour (lime for green, purple for red) that start inside it; the tablet draws them on to the
-             VP's t1 (conflict_vp.expected_areas).
+             exp: [[x0 of its VP, side, t0, t1, low, high, low_cut, high_cut], ...] -- EXPECTED TEST: each VP's LINES
+             IMPACT areas of its arrow's colour (lime for green, purple for red) that start inside it, only their part
+             in its expected half (below the yellow line for green, above for red; *_cut = that edge is the half's);
+             the tablet draws them on to the VP's t1 (conflict_vp.expected_areas).
              See tick_cvp, app/conflict_vp.py
   <- hi      {}                                                             first line from the tablet
   <- view    {x0, x1, follow}                                               the tablet's x range (epoch seconds)
@@ -986,8 +987,9 @@ def tick_cvp():
     # areas, the tablet extends them to the VP's end
     exp = []
     try:
-        for k_, sd_, a0_, a1_, lo_, hi_ in _cvp.expected_areas(drawn, by, S.dom_areas or [], tol):
-            exp.append([round(float(drawn[k_][1]), 3), int(sd_), round(a0_, 3), round(a1_, 3), round(lo_, d), round(hi_, d)])
+        for k_, sd_, a0_, a1_, lo_, hi_, lc_, hc_ in _cvp.expected_areas(drawn, by, S.dom_areas or [], tol):
+            exp.append([round(float(drawn[k_][1]), 3), int(sd_), round(a0_, 3), round(a1_, 3), round(lo_, d), round(hi_, d),
+                        1 if lc_ else 0, 1 if hc_ else 0])
     except Exception:
         traceback.print_exc()
     msg = {"t": "cvp", "on": bool(rows), "vps": rows, "exp": exp}

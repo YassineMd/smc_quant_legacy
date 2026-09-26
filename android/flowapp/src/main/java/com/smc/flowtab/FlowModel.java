@@ -503,8 +503,11 @@ public final class FlowModel {
     public boolean cvpOn = false;
     public double[][] cvpVps = new double[0][];
     // EXPECTED TEST (user 2026-09-26): the engine's "exp" -- [x0 of its VP (its row's T0), side +1 lime / -1 purple,
-    // area t0, area t1, low, high] per LINES IMPACT area of a VP's arrow colour that starts inside that VP
-    public static final int EXP_VP = 0, EXP_SIDE = 1, EXP_T0 = 2, EXP_T1 = 3, EXP_LO = 4, EXP_HI = 5, EXP_N = 6;
+    // area t0, area t1, low, high, low_cut, high_cut] per LINES IMPACT area of a VP's arrow colour that starts inside
+    // that VP, only its part in the VP's expected half (below the yellow line for green, above for red); *_cut = that
+    // edge is the half's (the midline / the VP's end), not the area's own
+    public static final int EXP_VP = 0, EXP_SIDE = 1, EXP_T0 = 2, EXP_T1 = 3, EXP_LO = 4, EXP_HI = 5, EXP_LOCUT = 6,
+            EXP_HICUT = 7, EXP_N = 8;
     public double[][] cvpExp = new double[0][];
 
     public void onCvp(JSONObject m) {

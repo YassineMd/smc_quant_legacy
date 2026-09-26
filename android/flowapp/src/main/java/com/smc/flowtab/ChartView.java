@@ -953,9 +953,15 @@ public final class ChartView extends View {
      *  tested and for the down arrow VP we expect the purple areas from lines impact to be tested. / so when this
      *  indictor is toggled on it expends these areas up to the point where the conflict VP ends"). For every VP drawn
      *  (cvpShown, and the one shown alone), the engine's LINES IMPACT areas of its arrow's colour that start inside it
-     *  (conflict_vp.expected_areas) are drawn on to where the VP's lines end (its T1): the price pane's own lime /
-     *  purple box, same paint and padding. Where "Lines Impact areas on Price" already boxes the area itself, only the
-     *  extension is added (from the area's end), so the area is not painted twice. */
+     *  (conflict_vp.expected_areas) are drawn on to where the VP's lines end (its T1) -- only their part in the VP's
+     *  EXPECTED HALF ("we have the expend only the above/below yellow area depending on the expected bias": below the
+     *  yellow line for a green arrow, above it for a red one) -- in the price pane's lime / purple, lighter
+     *  ("lower their opacity but not too much": CVP_EXP_A), padded like its boxes except on an edge the half cut.
+     *  Where "Lines Impact areas on Price" already boxes the area itself, only the extension is added (from the area's
+     *  end), so the area is not painted twice. */
+    // the EXPECTED TEST boxes' alpha: lighter than the LINES IMPACT areas' own 95, "but not too much"
+    private static final int CVP_EXP_A = 60;
+
     private void drawCvpExpected(Canvas c, Snap s, double[][] vps, RectF r, float top, float hgt, double yl, double yh) {
         double[][] ex = s.cvpExp;
         if (ex == null || ex.length == 0 || !(yh > yl)) return;
@@ -970,10 +976,13 @@ public final class ChartView extends View {
             if (Double.isNaN(end) || Double.isNaN(from) || Double.isNaN(lo) || Double.isNaN(hi) || !(end > from)) continue;
             float x0 = Math.max(xPx(from), r.left), x1 = Math.min(xPx(end), plotR);
             if (x1 <= x0) continue;
-            float y0 = (float) (top + (yh - hi) / (yh - yl) * hgt) - pad;
-            float y1 = (float) (top + (yh - lo) / (yh - yl) * hgt) + pad;
+            boolean loCut = e.length > FlowModel.EXP_LOCUT && e[FlowModel.EXP_LOCUT] > 0.5;
+            boolean hiCut = e.length > FlowModel.EXP_HICUT && e[FlowModel.EXP_HICUT] > 0.5;
+            float y0 = (float) (top + (yh - hi) / (yh - yl) * hgt) - (hiCut ? 0f : pad);
+            float y1 = (float) (top + (yh - lo) / (yh - yl) * hgt) + (loCut ? 0f : pad);
             if (y1 < top || y0 > r.bottom) continue;
-            domPaint(e[FlowModel.EXP_SIDE] > 0 ? 1 : -1, true);
+            int col = e[FlowModel.EXP_SIDE] > 0 ? DOM_HI_BUY : DOM_HI_SELL;
+            pf.setColor(Color.argb(CVP_EXP_A, Color.red(col), Color.green(col), Color.blue(col)));
             c.drawRect(x0, Math.max(y0, top), x1, Math.min(y1, r.bottom), pf);
         }
     }
