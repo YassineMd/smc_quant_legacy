@@ -50,6 +50,7 @@ public final class ChartView extends View {
     public boolean showHlh = false, showBp = false;
     public boolean showCvp = true;                   // CONFLICT VP (user 2026-09-26): drawn by drawCvp
     public boolean showCvpPrev = false;              // ... and the PREVIOUS ones (its sub-toggle)
+    public boolean showCvpUt = false;                // ... and the finished VPs' UNTESTED AREAS (its other sub-toggle)
     public boolean bw = true;                       // Chart Style "Simple BW": white canvas, black ink, black / white candles
     private int cBg, cFg, cTitle, cGuide, cSep, cMid, cInk;
 
@@ -552,7 +553,7 @@ public final class ChartView extends View {
             s.cint = M.cint; s.cimp = M.cimp;
             s.hlhOn = M.hlhOn && showHlh; s.hlhNote = M.hlhNote; s.hlhPics = M.hlhPics; s.hlhLabels = M.hlhLabels; s.hlhDashes = M.hlhDashes;
             s.bpOn = M.bpOn && showBp; s.bpBub = M.bpBub; s.bpDia = M.bpDia; s.bpLmax = M.bpLmax;
-            s.cvpOn = M.cvpOn && showCvp; s.cvpVps = M.cvpVps; s.cvpPrev = showCvpPrev;
+            s.cvpOn = M.cvpOn && showCvp; s.cvpVps = M.cvpVps; s.cvpPrev = showCvpPrev; s.cvpUt = showCvpUt;
             s.series = new float[3][];
             if (paneOn[PANE_FLOW] && M.binN > 0) M.series(vx0 - 1, vx1 + 1, (int) (2 * plotR), s.series);
         }
@@ -609,7 +610,7 @@ public final class ChartView extends View {
         FlowModel.Lines cint, cimp;
         boolean hlhOn; String hlhNote; List<FlowModel.HlhPic> hlhPics; List<FlowModel.HlhLabel> hlhLabels; List<FlowModel.HlhDash> hlhDashes;
         boolean bpOn; double[][] bpBub, bpDia; int bpLmax;
-        boolean cvpOn, cvpPrev; double[][] cvpVps;
+        boolean cvpOn, cvpPrev, cvpUt; double[][] cvpVps;
         double liveAnim;
     }
 
@@ -921,19 +922,61 @@ public final class ChartView extends View {
             for (double[] v : vps) if (Math.abs(v[FlowModel.CVP_T0] - cvpSolo) < 0.5) { there = true; break; }
             if (!there) cvpSolo = Double.NaN;
         }
+        // each VP's colour by its place in the chain: the current one red, the previous ones blue, green, ... newest first
         int nPrev = 0;
         for (double[] v : vps) if (v[FlowModel.CVP_CUR] < 0.5) nPrev++;
-        // the oldest first, the current one last: on top
+        if (cvpCols.length < vps.length) cvpCols = new int[vps.length + 8];
         int prevIdx = nPrev;
+        for (int i = vps.length - 1; i >= 0; i--) {
+            boolean cur = vps[i][FlowModel.CVP_CUR] > 0.5;
+            if (!cur) prevIdx--;
+            cvpCols[i] = cur ? CVP_COL : CVP_PREV_COLS[prevIdx % CVP_PREV_COLS.length];
+        }
+        if (s.cvpUt) drawCvpAreas(c, vps, r, top, hgt, yl, yh);                    // under every VP's lines
+        // the oldest first, the current one last: on top
         for (int i = vps.length - 1; i >= 0; i--) {
             double[] v = vps[i];
             boolean cur = v[FlowModel.CVP_CUR] > 0.5;
-            if (!cur) prevIdx--;
             if (!cur && !s.cvpPrev) continue;
             if (!Double.isNaN(cvpSolo) && Math.abs(v[FlowModel.CVP_T0] - cvpSolo) >= 0.5) continue;   // shown alone: skip the rest
-            int col = cur ? CVP_COL : CVP_PREV_COLS[prevIdx % CVP_PREV_COLS.length];
             double t1 = (v[FlowModel.CVP_LIVE] > 0.5 && !Double.isNaN(formEnd)) ? Math.max(v[FlowModel.CVP_T1], formEnd) : v[FlowModel.CVP_T1];
-            drawCvpOne(c, v, t1, col, r, top, hgt, yl, yh);
+            drawCvpOne(c, v, t1, cvpCols[i], r, top, hgt, yl, yh);
+        }
+    }
+
+    private int[] cvpCols = new int[16];
+    // the UNTESTED AREAS' fill and edge: the VP's own colour, faint enough for the candles to read through it
+    private static final int CVP_AREA_FILL_A = 0x2E, CVP_AREA_EDGE_A = 0xB0;
+
+    /** THE UNTESTED AREAS (user 2026-09-26: "after every conflict VP that ends, in the future the above/below yellow area
+     *  to be tested, we are always expecting the price to come back to it ... a green arrow conflict VP ... we are
+     *  expecting the below yellow line area to be tested, and if it was a red arrow conflict VP we gonna be expecting
+     *  its above yellow area to be tested / so this indicator when toggled in checks for the below/above yellow line
+     *  areas that were not tested, and hides the one that got tested. it only checks for the conflict VPs up to 24h
+     *  maximum"). The engine decides which (conflict_vp.untested -> ut); each is drawn from where its VP ENDED (t1) to
+     *  the chart's right edge, between the yellow midline and the VP's LOW (green arrow) or HIGH (red arrow), in the
+     *  VP's own colour -- whether or not the previous VPs' lines are shown. A VP shown alone shows only its own area. */
+    private void drawCvpAreas(Canvas c, double[][] vps, RectF r, float top, float hgt, double yl, double yh) {
+        double ky = hgt / Math.max(1e-12, yh - yl);
+        for (int i = vps.length - 1; i >= 0; i--) {
+            double[] v = vps[i];
+            if (v.length <= FlowModel.CVP_UT || !(v[FlowModel.CVP_UT] > 0.5)) continue;
+            if (!Double.isNaN(cvpSolo) && Math.abs(v[FlowModel.CVP_T0] - cvpSolo) >= 0.5) continue;
+            double hi = v[FlowModel.CVP_HI], lo = v[FlowModel.CVP_LO], t1 = v[FlowModel.CVP_T1];
+            if (Double.isNaN(hi) || Double.isNaN(lo) || Double.isNaN(t1) || t1 > vx1) continue;
+            double mid = 0.5 * (hi + lo);
+            boolean below = v[FlowModel.CVP_UP] > 0.5;                 // green arrow: the area UNDER the midline
+            double a = below ? lo : mid, b = below ? mid : hi;
+            float x0 = Math.max(xPx(t1), r.left), x1 = plotR;
+            if (x1 <= x0) continue;
+            float yTop = (float) (top + (yh - b) * ky), yBot = (float) (top + (yh - a) * ky);
+            if (yBot < top || yTop > r.bottom) continue;
+            int rgb = cvpCols[i] & 0x00FFFFFF;
+            pf.setColor(rgb | (CVP_AREA_FILL_A << 24));
+            c.drawRect(x0, Math.max(yTop, top), x1, Math.min(yBot, r.bottom), pf);
+            pl.setColor(rgb | (CVP_AREA_EDGE_A << 24)); pl.setStrokeWidth(1 * d);
+            if (yTop >= top) c.drawLine(x0, yTop, x1, yTop, pl);
+            if (yBot <= r.bottom) c.drawLine(x0, yBot, x1, yBot, pl);
         }
     }
 

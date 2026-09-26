@@ -77,6 +77,7 @@ public final class MainActivity extends Activity implements EngineClient.Listene
         chart.showHlh = prefs.getBoolean("hlh", false);
         chart.showCvp = prefs.getBoolean("cvp", true);      // CONFLICT VP (user 2026-09-26), on until the user turns it off
         chart.showCvpPrev = prefs.getBoolean("cvp_prev", false);   // ... its previous ones, off until the user asks
+        chart.showCvpUt = prefs.getBoolean("cvp_ut", false);       // ... the finished ones' untested areas, likewise
         chart.showBp = prefs.getBoolean("bigplayer", false);
         bpMin = prefs.getFloat("bp_min", (float) BP_DEFAULT);
         chart.initTools(prefs, new PriceTools.Events() {
@@ -310,17 +311,22 @@ public final class MainActivity extends Activity implements EngineClient.Listene
         toggle(col, "HLH Volume Profile", "hlh", chart.showHlh, v -> { chart.showHlh = v; feed.sendToggle("hlh", v); });
         // THE PREVIOUS CONFLICT VPs (user 2026-09-26: "it should be under the conflict VP indicator, inside it so we
         // seperate it from the other indicators"): an indented sub-toggle, greyed out while the Conflict VP is off
-        CheckBox[] cvpPrev = new CheckBox[1];
+        // ... and its UNTESTED AREAS (user 2026-09-26: "we gonna add another indictor subtoggle to Conflict VP"): the
+        // same kind of sub-toggle, under it
+        CheckBox[] cvpSub = new CheckBox[2];
         toggle(col, "Conflict VP  (the last two conflict boxes)", "cvp", chart.showCvp, v -> {
             chart.showCvp = v;
-            if (cvpPrev[0] != null) cvpPrev[0].setEnabled(v);
+            for (CheckBox cb : cvpSub) if (cb != null) cb.setEnabled(v);
         });
-        cvpPrev[0] = toggle(col, "Previous Conflict VPs  (one colour each)", "cvp_prev", chart.showCvpPrev, v -> chart.showCvpPrev = v);
-        cvpPrev[0].setTextSize(13);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.leftMargin = (int) Ui.dp(this, 30);
-        cvpPrev[0].setLayoutParams(lp);
-        cvpPrev[0].setEnabled(chart.showCvp);
+        cvpSub[0] = toggle(col, "Previous Conflict VPs  (one colour each)", "cvp_prev", chart.showCvpPrev, v -> chart.showCvpPrev = v);
+        cvpSub[1] = toggle(col, "Untested Areas  (below / above the yellow line, 24 h)", "cvp_ut", chart.showCvpUt, v -> chart.showCvpUt = v);
+        for (CheckBox cb : cvpSub) {
+            cb.setTextSize(13);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.leftMargin = (int) Ui.dp(this, 30);
+            cb.setLayoutParams(lp);
+            cb.setEnabled(chart.showCvp);
+        }
         toggle(col, "Lines Impact areas on Price", "domprice", chart.showDomPrice, v -> chart.showDomPrice = v);
         section(col, "Indicator  ›  Cycle Chart");
         toggle(col, "Takeover ▲▼  (one side owns the cycle)", "takeover", chart.showTakeover, v -> { chart.showTakeover = v; feed.sendToggle("takeover", v); });

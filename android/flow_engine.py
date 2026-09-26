@@ -34,14 +34,17 @@ WIRE (newline-delimited JSON; arrays are base64 of little-endian float32 unless 
              closed candle that broke the conflict VP closed above its high / below its low (0: none); mid = the
              CURRENT conflict VP's yellow midline, (hi + lo) / 2. The tablet greys its BUY / SELL from it and its own
              live price (PriceTools.biasMask). See tick_mpb, conflict_vp.Frozen.bias
-  -> cvp     {on, vps: [[t0, t1, lo, hi, poc, vah, val, vah2, val2, live, cur, up, dn, c2t0, c2lo], ...]}   the CONFLICT VPs,
+  -> cvp     {on, vps: [[t0, t1, lo, hi, poc, vah, val, vah2, val2, live, cur, up, dn, c2t0, c2lo, ut], ...]}   the CONFLICT VPs,
              newest first, FROZEN: each drawn from its conflict 2's end (t0) to where the next newer VP begins (t1: its
              conflict 1's end, or further over conflicts it absorbed), low / high of the two boxes, the HLH VP's lines;
              cur = THE Conflict VP (the newest conflict with a VP of its own; it runs to the newest frozen
              conflict), the others the PREVIOUS ones -- the chain of conflict-2 links; live is always 0 (a forming
              conflict makes no VP); up / dn = its HIGH / its LOW was taken from its LAST conflict (conflict 1): the
              tablet's green up / red down arrow, drawn BELOW THE LOW OF CONFLICT 2 -- whose box starts at c2t0 (it ends
-             at t0) and whose frozen low is c2lo (NaN once that record is dropped). See tick_cvp, app/conflict_vp.py
+             at t0) and whose frozen low is c2lo (NaN once that record is dropped). ut = 1: a FINISHED VP (ended within
+             CVP_UNTESTED_MAX_SECS) whose expected area -- below its yellow midline for a green arrow, above it for a red
+             one -- price has not traded into since it ended (the UNTESTED AREAS sub-toggle; conflict_vp.untested).
+             See tick_cvp, app/conflict_vp.py
   <- hi      {}                                                             first line from the tablet
   <- view    {x0, x1, follow}                                               the tablet's x range (epoch seconds)
   <- mode    {v}                                                            the I x I dropdown
@@ -950,6 +953,14 @@ def tick_cvp():
     rows = []
     tol = 0.5 * float(config.TICK_SIZE)
     by = {float(x["t0"]): x for x in CVP.items}
+    # THE UNTESTED AREAS (user 2026-09-26, a sub-toggle): each FINISHED VP's expected area, until price trades into it
+    ut = {}
+    if S.cyc_base is not None:
+        try:
+            ut = _cvp.untested(drawn, S.cyc_base[0], S.cyc_base[10], S.cyc_base[11], time.time(),
+                               float(config.CVP_UNTESTED_MAX_SECS), float(config.TICK_SIZE))
+        except Exception:
+            traceback.print_exc()
     for k_, (q, x0_, x1_) in enumerate(drawn):
         v = q["vp"]
         c2 = by.get(float(q["c2"]))           # the arrow sits under ITS box (user 2026-09-26: "below the low of C2")
@@ -961,11 +972,23 @@ def tick_cvp():
         rows.append([round(x0_, 3), round(x1_, 3), round(float(v["lo"]), d), round(float(v["hi"]), d),
                      round(float(v["poc"]), d), round(float(v["vah"]), d), round(float(v["val"]), d),
                      round(float(v["vah2"]), d), round(float(v["val2"]), d), 0, 1 if k_ == 0 else 0, up, dn,
-                     round(float(c2["t0"]), 3) if c2 else None, round(float(c2["lo"]), d) if c2 else None])
+                     round(float(c2["t0"]), 3) if c2 else None, round(float(c2["lo"]), d) if c2 else None,
+                     1 if k_ in ut else 0])
     msg = {"t": "cvp", "on": bool(rows), "vps": rows}
     if msg != S.cvp_sent:
         S.cvp_sent = msg
         send(msg)
+    ukey = tuple(sorted((round(float(drawn[k][0]["t0"]), 3), a[0]) for k, a in ut.items()))
+    if ukey != getattr(S, "cvp_ut_key", None):          # an area appeared (a VP ended) or was tested: say which
+        S.cvp_ut_key = ukey
+        try:
+            hm = lambda x: time.strftime("%d %H:%M:%S", time.gmtime(float(x)))
+            log("conflict VP untested areas: %d | %s" % (len(ut), " | ".join(
+                "%s VP %s %s %.3f-%.3f since %s" % ("green" if a[0] > 0 else "red", hm(drawn[k][0]["t0"]),
+                                                 "below" if a[0] > 0 else "above", a[1], a[2], hm(a[3]))
+                for k, a in sorted(ut.items()))))
+        except Exception:
+            traceback.print_exc()
     key = tuple((q["t0"], q["c2"]) for q in chn)
     if key == S.cvp_pair:
         return

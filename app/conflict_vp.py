@@ -50,6 +50,11 @@ happened at 7am, we shouldnt have a gap", and "when a conflict VP is draw it sta
               high / low with the last one (or is under min_gap bars from it) links to an OLDER conflict, and its VP
               covers -- replaces -- the last VP (the user's own example: 100-101 skips 100-100.5), but only when it
               reaches beyond that VP (THE PRIORITY RULE).
+  UNTESTED AREAS (user 2026-09-26, a sub-toggle): "after every conflict VP that ends, in the future the above/below
+              yellow area to be tested, we are always expecting the price to come back to it ... a green arrow conflict
+              VP ... we are expecting the below yellow line area to be tested, and if it was a red arrow conflict VP we
+              gonna be expecting its above yellow area to be tested ... it only checks for the conflict VPs up to 24h
+              maximum". See untested().
   THE BIAS    (user 2026-09-26, the tablet's Market Position buttons): "detect the last break of the conflict VP ...
               a candle that closes above/below a most recent high/low of the conflict VP (the thickest lines of the
               conflict VP) / if above we have a bullish bias / if below we have a bearish bias". Frozen.bias(): every
@@ -146,6 +151,52 @@ def profile(base: int, bin_secs: float, buy, sell, pxh, pxl, t0: float, t1: floa
     return {"poc": poc, "vah": top(vHi) * tick, "val": (lo_t + vLo * k) * tick,
             "vah2": top(wHi) * tick, "val2": (lo_t + wLo * k) * tick,
             "usd": float(vp.sum()), "rows": int(rows), "k": int(k)}
+
+
+def untested(drawn, t, pxh, pxl, now: float, max_secs: float, tick: float) -> dict:
+    """THE UNTESTED AREAS of the FINISHED conflict VPs (user 2026-09-26: "after every conflict VP that ends, in the
+    future the above/below yellow area to be tested, we are always expecting the price to come back to it. for example
+    we have a green arrow conflict VP that finished because another one just got created. we are expecting the below
+    yellow line area to be tested, and if it was a red arrow conflict VP we gonna be expecting its above yellow area to
+    be tested / so this indicator when toggled in checks for the below/above yellow line areas that were not tested,
+    and hides the one that got tested. it only checks for the conflict VPs up to 24h maximum").
+
+    `drawn` = Frozen.drawn() (newest first; the first is the CURRENT VP, which has not ended). Each other VP ENDED where
+    its lines stop -- where the next newer VP begins (x1) -- and from there on:
+      GREEN arrow (its high came from its conflict 1) -> the area BELOW the yellow midline, midline .. its low, is
+          tested once any price trades AT OR UNDER the midline (a candle's low: a wick counts);
+      RED arrow (its low came from its conflict 1)   -> the area ABOVE it, midline .. its high, once any price trades at
+          or over the midline.
+    Prices = the cycle candles' highs / lows from the first candle starting at x1, the forming one included. Only VPs
+    that ended within `max_secs` of `now`. Returns {index in drawn: (side, lo, hi, x1)} of the areas NOT tested yet --
+    side +1 = the area below the midline (green arrow), -1 = above it (red arrow)."""
+    t = np.asarray(t, dtype=np.float64)
+    hs = np.asarray(pxh, dtype=np.float64)
+    ls = np.asarray(pxl, dtype=np.float64)
+    tol = 0.5 * float(tick)
+    out = {}
+    for k, (it, _x0, x1) in enumerate(drawn):
+        if k == 0 or float(now) - float(x1) > float(max_secs):
+            continue                                      # the current VP has not ended; too old
+        v = it["vp"]
+        vhi, vlo = float(v["hi"]), float(v["lo"])
+        up = abs(vhi - float(it["hi"])) < tol             # green arrow: conflict 1 made the high
+        dn = abs(vlo - float(it["lo"])) < tol             # red arrow: conflict 1 made the low
+        if up == dn:
+            continue                                      # no single arrow (never under the pair rule)
+        mid = 0.5 * (vhi + vlo)
+        i0 = int(np.searchsorted(t, float(x1) - 0.5))
+        if up:
+            seen = ls[i0:]
+            if seen.size and np.nanmin(seen) <= mid + 1e-9:
+                continue                                  # tested: price came back down to the midline
+            out[k] = (1, vlo, mid, float(x1))
+        else:
+            seen = hs[i0:]
+            if seen.size and np.nanmax(seen) >= mid - 1e-9:
+                continue                                  # tested: price came back up to the midline
+            out[k] = (-1, mid, vhi, float(x1))
+    return out
 
 
 class Frozen:

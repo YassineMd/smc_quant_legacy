@@ -683,6 +683,10 @@ CVP_MIN_GAP_BARS = 10
 CVP_FREEZE_SETTLE_SECS = 10.0
 CVP_STATE_FILE = "conflict_vp_frozen.json"
 CVP_KEEP_SECS = 4 * 86400.0
+# ... its UNTESTED AREAS sub-toggle (user 2026-09-26: "after every conflict VP that ends, in the future the above/below
+# yellow area to be tested ... it only checks for the conflict VPs up to 24h maximum"): a finished VP's expected area is
+# looked for this long after the VP ended.
+CVP_UNTESTED_MAX_SECS = 24 * 3600.0
 IIMP_WALL_CHUNK = 900           # columns per request (3.75 h; ~50 KB, the Limit Orders pane's own budget)
 # THE LIVE EDGE (2026-09-23). A new cycle is only known ~20 s after it opened (FLOW_CROSS_MIN_HOLD_SECS), and its
 # wall is the column that ENDS at or before its open -- so that column has been over for 20 s or more by then.
