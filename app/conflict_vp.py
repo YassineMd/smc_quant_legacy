@@ -13,6 +13,14 @@ happened at 7am, we shouldnt have a gap", and "when a conflict VP is draw it sta
               until it closes, and one that read "conflict" for 8 s at 11:08:02 swapped the VP there and back.
   CONFLICT 2  walking back from conflict 1: the first conflict that ends at least `min_gap` bars before conflict 1
               starts and whose high AND low both differ from conflict 1's (a shared high or low -> skipped).
+  THE PAIR RULE (user 2026-09-26: "from conflict 1 we should take either the high/low and from conflict 2 we should
+              either take the high or low") -- each conflict gives ONE end of the VP's range:
+              * conflict 1 INSIDE that conflict 2 (lower high AND higher low): conflict 1 gives neither end, so it makes
+                NO VP -- "conflict 1 had to be skipped and considered as part of the previous VP untill a conflict emerges
+                that respects the rules": the previous VP's lines run on over it (its frozen levels do not move);
+              * conflict 1 ENGULFING that conflict 2 (higher high AND lower low): that conflict 2 gives neither end -- it
+                is passed over ("engulfed") and the walk back goes on (the user's choice, 2026-09-26).
+              So every VP has exactly one end from each conflict, and exactly one arrow.
   A conflict's high / low are its RED BOX's: the reach to the closest previous lime / purple area
               (terminal._conflict_boxes), held to at least its own candles, as the tablet frames it.
   THE VP      from conflict 2's first bar to conflict 1's last, from the lower of the two lows to the higher of the
@@ -28,12 +36,13 @@ happened at 7am, we shouldnt have a gap", and "when a conflict VP is draw it sta
               and its VP's lines. Nothing recomputes them afterwards -- not late prints, not LINES IMPACT's areas
               arriving with the wall grid, not an engine restart (the store is a file). The red boxes of the frozen
               conflicts are drawn from the same record, so a VP's high / low always sit on its boxes.
-  THE CHAIN   the current VP is the newest frozen conflict's; the previous ones follow the conflict-2 links back
+  THE CHAIN   the current VP is the newest conflict's that HAS a VP; the previous ones follow the conflict-2 links back
               (each older VP's conflict 1 IS the newer one's conflict 2: no gap). A VP is DRAWN from its conflict 2's
-              END to its conflict 1's end, so the next VP begins exactly where the older one's lines stop and adding
-              a VP never moves an older one's lines. The one change the rule itself makes: a new conflict that
-              shares a high / low with the last one (or is under min_gap bars from it) links to an OLDER conflict,
-              and its VP covers -- replaces -- the last VP (the user's own example: 100-101 skips 100-100.5).
+              END up to where the next newer VP begins -- normally its own conflict 1's end, further when conflicts it
+              absorbed (no VP of their own) lie beyond it; the current VP runs to the newest frozen conflict's end. So
+              the chain never gaps or overlaps. The one change the rule itself makes: a new conflict that shares a
+              high / low with the last one (or is under min_gap bars from it) links to an OLDER conflict, and its VP
+              covers -- replaces -- the last VP (the user's own example: 100-101 skips 100-100.5).
 """
 from __future__ import annotations
 
@@ -46,6 +55,7 @@ import numpy as np
 from . import hlh_profile as H
 
 VER = 1
+RULE = 2      # the pairing rule the records were decided with: 2 = + the pair rule (inside -> no VP, engulfed -> passed)
 
 
 def runs(conf) -> List[Tuple[int, int]]:
@@ -139,6 +149,7 @@ class Frozen:
         self.path = path
         self.keep = float(keep_secs)
         self.items: List[dict] = []
+        self.rule = RULE                                  # a store without one predates the pair rule: see redecide()
         self.load()
 
     # ---------------------------------------------------------------- persistence
@@ -150,6 +161,7 @@ class Frozen:
                 d = json.load(fh)
             if int(d.get("ver", 0)) == VER:
                 self.items = sorted((dict(x) for x in (d.get("items") or [])), key=lambda x: float(x["t0"]))
+                self.rule = int(d.get("rule", 1))
         except Exception:
             self.items = []
 
@@ -158,7 +170,7 @@ class Frozen:
             return
         tmp = self.path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump({"ver": VER, "items": self.items}, fh, separators=(",", ":"))
+            json.dump({"ver": VER, "rule": self.rule, "items": self.items}, fh, separators=(",", ":"))
         os.replace(tmp, self.path)
 
     def prune(self, now: float) -> bool:
@@ -168,6 +180,82 @@ class Frozen:
 
     def newest_t0(self) -> Optional[float]:
         return float(self.items[-1]["t0"]) if self.items else None
+
+    # ---------------------------------------------------------------- deciding
+    @staticmethod
+    def _decide(before: List[dict], hi: float, lo: float, tol: float, near):
+        """Conflict 1 with box (hi, lo), walking back over the conflicts `before` it (oldest first; `near(f)` -> f ends
+        under min_gap bars before conflict 1 starts): (c2 or None, skip list, inside -- the t0 of the conflict it lies
+        inside, else None)."""
+        skip = []
+        for f in reversed(before):
+            fh_, fl_ = float(f["hi"]), float(f["lo"])
+            if near(f):
+                skip.append([f["t0"], "near"])
+                continue
+            if abs(fh_ - hi) < tol:
+                skip.append([f["t0"], "same high"])
+                continue
+            if abs(fl_ - lo) < tol:
+                skip.append([f["t0"], "same low"])
+                continue
+            if fh_ > hi and fl_ < lo:                     # INSIDE it: conflict 1 would give neither end -> no VP
+                return None, skip, f["t0"]
+            if hi > fh_ and lo < fl_:                     # ENGULFS it: it would give neither end -> walk on
+                skip.append([f["t0"], "engulfed"])
+                continue
+            return f, skip, None
+        return None, skip, None
+
+    @staticmethod
+    def _vp(c2: dict, it: dict, base: int, bin_secs: float, buy, sell, bpxh, bpxl, tick: float, rows_target: int,
+            va_pct: float, va2_pct: float) -> Optional[dict]:
+        """The frozen VP of conflict 1 `it` with conflict 2 `c2`: its lines from the bins, drawn from c2's end."""
+        lo, hi = float(it["lo"]), float(it["hi"])
+        vlo, vhi = min(lo, float(c2["lo"])), max(hi, float(c2["hi"]))
+        vp = profile(base, bin_secs, buy, sell, bpxh, bpxl, float(c2["t0"]), float(it["te"]), vlo, vhi, tick,
+                     rows_target, va_pct, va2_pct)
+        if vp is None:
+            return None
+        return {"lo": round(vlo, 6), "hi": round(vhi, 6), "poc": round(vp["poc"], 6), "vah": round(vp["vah"], 6),
+                "val": round(vp["val"], 6), "vah2": round(vp["vah2"], 6), "val2": round(vp["val2"], 6),
+                "usd": round(vp["usd"], 2), "rows": vp["rows"], "k": vp["k"], "d0": float(c2["te"]), "d1": float(it["te"])}
+
+    def redecide(self, base: int, bin_secs: float, buy, sell, bpxh, bpxl, tick: float, rows_target: int,
+                 va_pct: float, va2_pct: float) -> Tuple[int, int]:
+        """Re-decide every record's pairing with the CURRENT rule from what it RECORDED when it froze -- its box, the
+        conflicts it passed over (near / same high / same low: the new rule passes over the same ones, in the same
+        order) and the first one it did not, its old conflict 2. The new rule's walk goes on from there: inside it ->
+        no VP; engulfing it -> passed over, and on back (every older conflict is further than min_gap bars away: the
+        distance only grows going back). So no bar is counted again and the boxes never change. A record whose conflict
+        2 is unchanged keeps its VP exactly; a NEW conflict 2 gets its VP from the bins, or none when the bins no longer
+        hold its start. Returns (records changed, of them left without a VP for want of bins); the store is then
+        marked as decided by RULE."""
+        tol = 0.5 * float(tick)
+        idx = {float(x["t0"]): i for i, x in enumerate(self.items)}
+        first = float(base) * float(bin_secs)            # the oldest second the bins hold
+        changed = nobins = 0
+        for i, it in enumerate(self.items):
+            old = it.get("c2")
+            j = idx.get(float(old)) if old is not None else None
+            if j is None or j >= i:
+                continue                                  # no conflict 2 then, none now (or its own was pruned)
+            c2, more, inside = self._decide(self.items[:j + 1], float(it["hi"]), float(it["lo"]), tol, lambda f: False)
+            if c2 is not None and float(c2["t0"]) == float(old):
+                continue                                  # its pairing stands: record and VP unchanged
+            it["skip"] = list(it.get("skip") or []) + more
+            it["inside"] = inside
+            it["c2"] = c2["t0"] if c2 is not None else None
+            it["vp"] = None
+            if c2 is not None:
+                if float(c2["t0"]) >= first:
+                    it["vp"] = self._vp(c2, it, base, bin_secs, buy, sell, bpxh, bpxl, tick, rows_target, va_pct,
+                                        va2_pct)
+                else:
+                    nobins += 1
+            changed += 1
+        self.rule = RULE
+        return changed, nobins
 
     # ---------------------------------------------------------------- freezing
     def freeze_new(self, t, t_end, done, conf, cfh, cfl, pxh, pxl, now: float, settle: float, base: int,
@@ -192,34 +280,16 @@ class Frozen:
             if not (np.isfinite(hi) and np.isfinite(lo)):
                 continue
             it = {"t0": round(t0, 3), "tb": round(float(t[b]), 3), "te": round(float(t_end[b]), 3),
-                  "hi": round(hi, 6), "lo": round(lo, 6), "n": int(b - a + 1), "c2": None, "skip": [], "vp": None}
-            c2 = None
-            for f in reversed(self.items):
-                if float(f["tb"]) >= float(t[0]) - 0.5:
-                    gap = a - int(np.searchsorted(t, float(f["tb"]) - 0.5))   # bars from its last bar to our first
-                else:
-                    gap = int(min_gap)                    # older than the read: more than a read away
-                if gap < int(min_gap):
-                    it["skip"].append([f["t0"], "near"])
-                    continue
-                if abs(float(f["hi"]) - hi) < tol:
-                    it["skip"].append([f["t0"], "same high"])
-                    continue
-                if abs(float(f["lo"]) - lo) < tol:
-                    it["skip"].append([f["t0"], "same low"])
-                    continue
-                c2 = f
-                break
+                  "hi": round(hi, 6), "lo": round(lo, 6), "n": int(b - a + 1), "c2": None, "skip": [], "vp": None,
+                  "inside": None}
+            def near(f, a=a):
+                if float(f["tb"]) < float(t[0]) - 0.5:
+                    return False                          # older than the read: more than a read away
+                return a - int(np.searchsorted(t, float(f["tb"]) - 0.5)) < int(min_gap)   # bars, its last to our first
+            c2, it["skip"], it["inside"] = self._decide(self.items, hi, lo, tol, near)
             if c2 is not None:
                 it["c2"] = c2["t0"]
-                vlo, vhi = min(lo, float(c2["lo"])), max(hi, float(c2["hi"]))
-                vp = profile(base, bin_secs, buy, sell, bpxh, bpxl, float(c2["t0"]), float(t_end[b]), vlo, vhi, tick,
-                             rows_target, va_pct, va2_pct)
-                if vp is not None:
-                    it["vp"] = {"lo": round(vlo, 6), "hi": round(vhi, 6), "poc": round(vp["poc"], 6),
-                                "vah": round(vp["vah"], 6), "val": round(vp["val"], 6), "vah2": round(vp["vah2"], 6),
-                                "val2": round(vp["val2"], 6), "usd": round(vp["usd"], 2), "rows": vp["rows"],
-                                "k": vp["k"], "d0": float(c2["te"]), "d1": it["te"]}
+                it["vp"] = self._vp(c2, it, base, bin_secs, buy, sell, bpxh, bpxl, tick, rows_target, va_pct, va2_pct)
             self.items.append(it)
             last = t0
             added.append(it)
@@ -242,6 +312,22 @@ class Frozen:
             if j is None or j >= i:
                 break                                     # its conflict 2 has been dropped (older than keep)
             i = j
+        return out
+
+    def drawn(self) -> List[Tuple[dict, float, float]]:
+        """(record, x0, x1) of every VP to draw, newest first: from its conflict 2's end to where the next newer VP
+        begins -- its own conflict 1's end, or further over the conflicts it absorbed (no VP of their own); the
+        current VP (the first) runs to the newest frozen conflict's end. Never a gap, never an overlap."""
+        out = []
+        chn = self.chain()
+        for k, it in enumerate(chn):
+            v = it["vp"]
+            x1 = float(v["d1"])
+            if k == 0:
+                x1 = max(x1, float(self.items[-1]["te"]))
+            else:
+                x1 = max(x1, float(chn[k - 1]["vp"]["d0"]))
+            out.append((it, float(v["d0"]), x1))
         return out
 
     def apply(self, t, conf, cfh, cfl):

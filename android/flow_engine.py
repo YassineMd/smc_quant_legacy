@@ -34,8 +34,9 @@ WIRE (newline-delimited JSON; arrays are base64 of little-endian float32 unless 
              dir = -1 created LOWER (its POC under the previous bloc's VAL), +1 HIGHER (over its VAH), 0 neither --
              the tablet fades the Market Position BUY / SELL against it (see tick_hvp)
   -> cvp     {on, vps: [[t0, t1, lo, hi, poc, vah, val, vah2, val2, live, cur, up, dn, c2t0, c2lo], ...]}   the CONFLICT VPs,
-             newest first, FROZEN: each drawn from its conflict 2's end (t0) to its conflict 1's end (t1), low / high
-             of the two boxes, the HLH VP's lines; cur = THE Conflict VP (its conflict 1 is the newest frozen
+             newest first, FROZEN: each drawn from its conflict 2's end (t0) to where the next newer VP begins (t1: its
+             conflict 1's end, or further over conflicts it absorbed), low / high of the two boxes, the HLH VP's lines;
+             cur = THE Conflict VP (the newest conflict with a VP of its own; it runs to the newest frozen
              conflict), the others the PREVIOUS ones -- the chain of conflict-2 links; live is always 0 (a forming
              conflict makes no VP); up / dn = its HIGH / its LOW was taken from its LAST conflict (conflict 1): the
              tablet's green up / red down arrow, drawn BELOW THE LOW OF CONFLICT 2 -- whose box starts at c2t0 (it ends
@@ -626,6 +627,20 @@ def tick_cycles(now, force=False):
         # each conflict that has COMPLETED since the newest frozen one is decided now -- its box, its conflict 2, its
         # VP's lines from the store's 1 s bins (t_end: the cycles' own seconds) -- and never again
         try:
+            _hm2 = lambda x: time.strftime("%d %H:%M:%S", time.gmtime(float(x)))
+            if cvp_ready(now, t) and CVP.rule < _cvp.RULE:
+                # the PAIR RULE (user 2026-09-26: each conflict gives one end of the range) came after these records were
+                # frozen: their boxes stay, their pairings are decided again, once, from what each one recorded
+                _nch, _nob = CVP.redecide(int(st._base), float(st.bin), st._buy, st._sell, st._pxh, st._pxl,
+                                          float(config.TICK_SIZE), int(config.HLH_ROWS), float(config.HLH_VA_PCT),
+                                          float(config.HLH_VA2_PCT))
+                CVP.save()
+                log("conflict VP: re-decided %d of %d frozen conflicts with the pair rule (boxes unchanged%s)"
+                    % (_nch, len(CVP.items), "; %d without a VP: the bins no longer hold them" % _nob if _nob else ""))
+                for _it in CVP.items:
+                    if _it.get("inside"):
+                        log("conflict VP: %s %.2f-%.2f INSIDE %s: no VP, part of the previous VP" % (
+                            _hm2(_it["t0"]), _it["lo"], _it["hi"], _hm2(_it["inside"])))
             if cvp_ready(now, t):
                 _add = CVP.freeze_new(t, t_end, done, conf, cfh, cfl, pxh, pxl, now, float(config.CVP_FREEZE_SETTLE_SECS),
                                       int(st._base), float(st.bin), st._buy, st._sell, st._pxh, st._pxl,
@@ -634,7 +649,6 @@ def tick_cycles(now, force=False):
                 _pr = CVP.prune(now)
                 if _add or _pr:
                     CVP.save()
-                _hm2 = lambda x: time.strftime("%d %H:%M:%S", time.gmtime(float(x)))
                 for _it in _add[-8:]:
                     _v = _it.get("vp")
                     log("conflict frozen: %s-%s %.2f-%.2f%s -> %s" % (
@@ -642,7 +656,9 @@ def tick_cycles(now, force=False):
                         "".join(" | skipped %s (%s)" % (_hm2(k_)[3:], w_) for k_, w_ in _it["skip"][:4]),
                         ("conflict 2 %s: VP %.2f-%.2f POC %.2f VA %.2f-%.2f outer %.2f-%.2f $%.2fM" % (
                             _hm2(_it["c2"]), _v["lo"], _v["hi"], _v["poc"], _v["val"], _v["vah"], _v["val2"], _v["vah2"],
-                            _v["usd"] / 1e6)) if _v else "no conflict 2"))
+                            _v["usd"] / 1e6)) if _v else (
+                            "INSIDE %s: no VP, part of the previous VP" % _hm2(_it["inside"]) if _it.get("inside")
+                            else "no conflict 2")))
                 if len(_add) > 8:
                     log("conflict frozen: ... %d in all (the first fill of the history)" % len(_add))
         except Exception as _e:
@@ -901,23 +917,23 @@ def tick_cvp():
     gonna draw the same lines as HLH VP indicator", the PREVIOUS ones on a toggle, "when a conflict VP is draw it stays
     fix it shouldnt change"): the frozen chain, sent when it moved -- which only a newly frozen conflict can do. The
     tablet draws the lines (ChartView.drawCvp) and owns both toggles and the colours; the engine always sends."""
-    chn = CVP.chain()
-    newest = CVP.items[-1] if CVP.items else None
+    drawn = CVP.drawn()
+    chn = [q for q, _x0, _x1 in drawn]
     d = int(config.PRICE_DECIMALS) + 3
     rows = []
     tol = 0.5 * float(config.TICK_SIZE)
     by = {float(x["t0"]): x for x in CVP.items}
-    for q in chn:
+    for k_, (q, x0_, x1_) in enumerate(drawn):
         v = q["vp"]
         c2 = by.get(float(q["c2"]))           # the arrow sits under ITS box (user 2026-09-26: "below the low of C2")
         # THE ARROWS (user 2026-09-26: "down red if the low was taken from the last conflict and up green if the high
-        # was taken from the last conflict"): the VP's high / low is conflict 1's own -- the rule never pairs two
-        # conflicts sharing a high or a low, so exactly one of the two made each extreme
+        # was taken from the last conflict"): the VP's high / low is conflict 1's own -- the pair rule gives every VP
+        # one end from each conflict (never a shared high / low, never one box inside the other), so exactly one arrow
         up = 1 if abs(float(v["hi"]) - float(q["hi"])) < tol else 0
         dn = 1 if abs(float(v["lo"]) - float(q["lo"])) < tol else 0
-        rows.append([round(float(v["d0"]), 3), round(float(v["d1"]), 3), round(float(v["lo"]), d), round(float(v["hi"]), d),
+        rows.append([round(x0_, 3), round(x1_, 3), round(float(v["lo"]), d), round(float(v["hi"]), d),
                      round(float(v["poc"]), d), round(float(v["vah"]), d), round(float(v["val"]), d),
-                     round(float(v["vah2"]), d), round(float(v["val2"]), d), 0, 1 if q is newest else 0, up, dn,
+                     round(float(v["vah2"]), d), round(float(v["val2"]), d), 0, 1 if k_ == 0 else 0, up, dn,
                      round(float(c2["t0"]), 3) if c2 else None, round(float(c2["lo"]), d) if c2 else None])
     msg = {"t": "cvp", "on": bool(rows), "vps": rows}
     if msg != S.cvp_sent:
@@ -936,7 +952,7 @@ def tick_cvp():
         parts = []
         for q in chn[:5]:
             c2 = by.get(float(q["c2"]))
-            parts.append("%s%s .. %s %s" % ("CURRENT " if q is newest else "", run(c2) if c2 else "?", run(q), lines(q["vp"])))
+            parts.append("%s%s .. %s %s" % ("CURRENT " if q is chn[0] else "", run(c2) if c2 else "?", run(q), lines(q["vp"])))
         log("conflict VP chain: %d VPs over %d frozen conflicts | %s" % (len(chn), len(CVP.items), " | ".join(parts)))
     except Exception:
         traceback.print_exc()
