@@ -629,18 +629,24 @@ def tick_cycles(now, force=False):
         try:
             _hm2 = lambda x: time.strftime("%d %H:%M:%S", time.gmtime(float(x)))
             if cvp_ready(now, t) and CVP.rule < _cvp.RULE:
-                # the PAIR RULE (user 2026-09-26: each conflict gives one end of the range) came after these records were
-                # frozen: their boxes stay, their pairings are decided again, once, from what each one recorded
+                # the PAIR RULE and then the PRIORITY RULE (user 2026-09-26: each conflict gives one end of the range; a
+                # conflict passing over the current VP's conflict 1 takes over only beyond that VP's range) came after
+                # these records were frozen: their boxes stay, their pairings are decided again, once, from what each
+                # one recorded
                 _nch, _nob = CVP.redecide(int(st._base), float(st.bin), st._buy, st._sell, st._pxh, st._pxl,
                                           float(config.TICK_SIZE), int(config.HLH_ROWS), float(config.HLH_VA_PCT),
                                           float(config.HLH_VA2_PCT))
                 CVP.save()
-                log("conflict VP: re-decided %d of %d frozen conflicts with the pair rule (boxes unchanged%s)"
-                    % (_nch, len(CVP.items), "; %d without a VP: the bins no longer hold them" % _nob if _nob else ""))
+                log("conflict VP: re-decided %d of %d frozen conflicts with the rule (pair + priority; boxes "
+                    "unchanged%s)" % (_nch, len(CVP.items),
+                                      "; %d without a VP: the bins no longer hold them" % _nob if _nob else ""))
                 for _it in CVP.items:
                     if _it.get("inside"):
                         log("conflict VP: %s %.2f-%.2f INSIDE %s: no VP, part of the previous VP" % (
                             _hm2(_it["t0"]), _it["lo"], _it["hi"], _hm2(_it["inside"])))
+                    if _it.get("within"):
+                        log("conflict VP: %s %.2f-%.2f WITHIN the VP of %s: no VP, part of it (priority)" % (
+                            _hm2(_it["t0"]), _it["lo"], _it["hi"], _hm2(_it["within"])))
             if cvp_ready(now, t):
                 _add = CVP.freeze_new(t, t_end, done, conf, cfh, cfl, pxh, pxl, now, float(config.CVP_FREEZE_SETTLE_SECS),
                                       int(st._base), float(st.bin), st._buy, st._sell, st._pxh, st._pxl,
@@ -658,7 +664,8 @@ def tick_cycles(now, force=False):
                             _hm2(_it["c2"]), _v["lo"], _v["hi"], _v["poc"], _v["val"], _v["vah"], _v["val2"], _v["vah2"],
                             _v["usd"] / 1e6)) if _v else (
                             "INSIDE %s: no VP, part of the previous VP" % _hm2(_it["inside"]) if _it.get("inside")
-                            else "no conflict 2")))
+                            else "WITHIN the VP of %s: no VP, part of it (priority)" % _hm2(_it["within"])
+                            if _it.get("within") else "no conflict 2")))
                 if len(_add) > 8:
                     log("conflict frozen: ... %d in all (the first fill of the history)" % len(_add))
         except Exception as _e:

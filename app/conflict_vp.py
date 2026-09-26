@@ -21,6 +21,12 @@ happened at 7am, we shouldnt have a gap", and "when a conflict VP is draw it sta
               * conflict 1 ENGULFING that conflict 2 (higher high AND lower low): that conflict 2 gives neither end -- it
                 is passed over ("engulfed") and the walk back goes on (the user's choice, 2026-09-26).
               So every VP has exactly one end from each conflict, and exactly one arrow.
+  THE PRIORITY RULE (user 2026-09-26, on 03:13:48 against 03:18:47: "conflict 3:13 has the priority because it offers
+              a lower low than 3:19 and 3:09"; their choice "Beyond the VP") -- a new conflict whose walk PASSES OVER
+              the current VP's conflict 1 (under min_gap bars from it, or sharing its high / low) would replace that
+              VP; it may only when it offers a level BEYOND that VP's range, a lower low or a higher high. Otherwise it
+              is part of that VP ("within"): no VP of its own, the current VP's lines run on over it. Before this, the
+              newest conflict always won: 03:18:47 (low 120.46) replaced 03:13:48's VP (low 119.47).
   A conflict's high / low are its RED BOX's: the reach to the closest previous lime / purple area
               (terminal._conflict_boxes), held to at least its own candles, as the tablet frames it.
   THE VP      from conflict 2's first bar to conflict 1's last, from the lower of the two lows to the higher of the
@@ -42,7 +48,8 @@ happened at 7am, we shouldnt have a gap", and "when a conflict VP is draw it sta
               absorbed (no VP of their own) lie beyond it; the current VP runs to the newest frozen conflict's end. So
               the chain never gaps or overlaps. The one change the rule itself makes: a new conflict that shares a
               high / low with the last one (or is under min_gap bars from it) links to an OLDER conflict, and its VP
-              covers -- replaces -- the last VP (the user's own example: 100-101 skips 100-100.5).
+              covers -- replaces -- the last VP (the user's own example: 100-101 skips 100-100.5), but only when it
+              reaches beyond that VP (THE PRIORITY RULE).
 """
 from __future__ import annotations
 
@@ -55,7 +62,8 @@ import numpy as np
 from . import hlh_profile as H
 
 VER = 1
-RULE = 2      # the pairing rule the records were decided with: 2 = + the pair rule (inside -> no VP, engulfed -> passed)
+RULE = 3      # the rule the records were decided with: 2 = + the pair rule (inside -> no VP, engulfed -> passed),
+              # 3 = + the priority rule (a conflict passing over the current VP's conflict 1 within its range -> no VP)
 
 
 def runs(conf) -> List[Tuple[int, int]]:
@@ -208,6 +216,24 @@ class Frozen:
         return None, skip, None
 
     @staticmethod
+    def _within(it: dict, cur: dict, tol: float) -> bool:
+        """THE PRIORITY RULE: `it`, whose walk PASSED OVER `cur` -- the current VP's conflict 1 -- (under min_gap bars
+        from it, or sharing its high / low), would replace that VP; it may only when it offers a level BEYOND that VP's
+        range, a lower low or a higher high. True = it does not: it is part of that VP. (An engulfed pass always
+        reaches beyond: conflict 1 gives one end of its VP.)"""
+        if not any(float(k) == float(cur["t0"]) for k, _w in (it.get("skip") or [])):
+            return False
+        v = cur["vp"]
+        return float(it["lo"]) >= float(v["lo"]) - tol and float(it["hi"]) <= float(v["hi"]) + tol
+
+    def _current(self, before: Optional[int] = None) -> Optional[dict]:
+        """The current VP's record among the first `before` records (all by default): the newest with a VP."""
+        for f in reversed(self.items[:before] if before is not None else self.items):
+            if f.get("c2") is not None and f.get("vp") is not None:
+                return f
+        return None
+
+    @staticmethod
     def _vp(c2: dict, it: dict, base: int, bin_secs: float, buy, sell, bpxh, bpxl, tick: float, rows_target: int,
             va_pct: float, va2_pct: float) -> Optional[dict]:
         """The frozen VP of conflict 1 `it` with conflict 2 `c2`: its lines from the bins, drawn from c2's end."""
@@ -229,13 +255,15 @@ class Frozen:
         no VP; engulfing it -> passed over, and on back (every older conflict is further than min_gap bars away: the
         distance only grows going back). So no bar is counted again and the boxes never change. A record whose conflict
         2 is unchanged keeps its VP exactly; a NEW conflict 2 gets its VP from the bins, or none when the bins no longer
-        hold its start. Returns (records changed, of them left without a VP for want of bins); the store is then
-        marked as decided by RULE."""
+        hold its start. Then, for a store decided before THE PRIORITY RULE, oldest first: a record whose VP would
+        replace the current one without reaching beyond its range loses its VP ("within"). Returns (records changed,
+        of them left without a VP for want of bins); the store is then marked as decided by RULE."""
         tol = 0.5 * float(tick)
         idx = {float(x["t0"]): i for i, x in enumerate(self.items)}
         first = float(base) * float(bin_secs)            # the oldest second the bins hold
-        changed = nobins = 0
-        for i, it in enumerate(self.items):
+        changed = set()
+        nobins = 0
+        for i, it in enumerate(self.items if self.rule < 2 else []):
             old = it.get("c2")
             j = idx.get(float(old)) if old is not None else None
             if j is None or j >= i:
@@ -253,9 +281,20 @@ class Frozen:
                                         va2_pct)
                 else:
                     nobins += 1
-            changed += 1
+            changed.add(float(it["t0"]))
+        if self.rule < 3:
+            cur = None
+            for it in self.items:
+                if it.get("c2") is None or it.get("vp") is None:
+                    continue
+                if cur is not None and self._within(it, cur, tol):
+                    it["vp"] = None
+                    it["within"] = cur["t0"]
+                    changed.add(float(it["t0"]))
+                    continue
+                cur = it
         self.rule = RULE
-        return changed, nobins
+        return len(changed), nobins
 
     # ---------------------------------------------------------------- freezing
     def freeze_new(self, t, t_end, done, conf, cfh, cfl, pxh, pxl, now: float, settle: float, base: int,
@@ -281,7 +320,7 @@ class Frozen:
                 continue
             it = {"t0": round(t0, 3), "tb": round(float(t[b]), 3), "te": round(float(t_end[b]), 3),
                   "hi": round(hi, 6), "lo": round(lo, 6), "n": int(b - a + 1), "c2": None, "skip": [], "vp": None,
-                  "inside": None}
+                  "inside": None, "within": None}
             def near(f, a=a):
                 if float(f["tb"]) < float(t[0]) - 0.5:
                     return False                          # older than the read: more than a read away
@@ -289,7 +328,12 @@ class Frozen:
             c2, it["skip"], it["inside"] = self._decide(self.items, hi, lo, tol, near)
             if c2 is not None:
                 it["c2"] = c2["t0"]
-                it["vp"] = self._vp(c2, it, base, bin_secs, buy, sell, bpxh, bpxl, tick, rows_target, va_pct, va2_pct)
+                cur = self._current()
+                if cur is not None and self._within(it, cur, tol):
+                    it["within"] = cur["t0"]             # THE PRIORITY RULE: part of the current VP, no VP of its own
+                else:
+                    it["vp"] = self._vp(c2, it, base, bin_secs, buy, sell, bpxh, bpxl, tick, rows_target, va_pct,
+                                        va2_pct)
             self.items.append(it)
             last = t0
             added.append(it)
