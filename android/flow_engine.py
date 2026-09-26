@@ -33,12 +33,13 @@ WIRE (newline-delimited JSON; arrays are base64 of little-endian float32 unless 
   -> hvp     {on, name, lo, hi, poc, prev, dir}                             the NEWEST HLH day bloc: its low / high, and
              dir = -1 created LOWER (its POC under the previous bloc's VAL), +1 HIGHER (over its VAH), 0 neither --
              the tablet fades the Market Position BUY / SELL against it (see tick_hvp)
-  -> cvp     {on, vps: [[t0, t1, lo, hi, poc, vah, val, vah2, val2, live, cur, up, dn], ...]}   the CONFLICT VPs,
+  -> cvp     {on, vps: [[t0, t1, lo, hi, poc, vah, val, vah2, val2, live, cur, up, dn, c2t0, c2lo], ...]}   the CONFLICT VPs,
              newest first, FROZEN: each drawn from its conflict 2's end (t0) to its conflict 1's end (t1), low / high
              of the two boxes, the HLH VP's lines; cur = THE Conflict VP (its conflict 1 is the newest frozen
              conflict), the others the PREVIOUS ones -- the chain of conflict-2 links; live is always 0 (a forming
              conflict makes no VP); up / dn = its HIGH / its LOW was taken from its LAST conflict (conflict 1): the
-             tablet's green up / red down arrow at the VP's left end. See tick_cvp, app/conflict_vp.py
+             tablet's green up / red down arrow, drawn BELOW THE LOW OF CONFLICT 2 -- whose box starts at c2t0 (it ends
+             at t0) and whose frozen low is c2lo (NaN once that record is dropped). See tick_cvp, app/conflict_vp.py
   <- hi      {}                                                             first line from the tablet
   <- view    {x0, x1, follow}                                               the tablet's x range (epoch seconds)
   <- mode    {v}                                                            the I x I dropdown
@@ -905,8 +906,10 @@ def tick_cvp():
     d = int(config.PRICE_DECIMALS) + 3
     rows = []
     tol = 0.5 * float(config.TICK_SIZE)
+    by = {float(x["t0"]): x for x in CVP.items}
     for q in chn:
         v = q["vp"]
+        c2 = by.get(float(q["c2"]))           # the arrow sits under ITS box (user 2026-09-26: "below the low of C2")
         # THE ARROWS (user 2026-09-26: "down red if the low was taken from the last conflict and up green if the high
         # was taken from the last conflict"): the VP's high / low is conflict 1's own -- the rule never pairs two
         # conflicts sharing a high or a low, so exactly one of the two made each extreme
@@ -914,7 +917,8 @@ def tick_cvp():
         dn = 1 if abs(float(v["lo"]) - float(q["lo"])) < tol else 0
         rows.append([round(float(v["d0"]), 3), round(float(v["d1"]), 3), round(float(v["lo"]), d), round(float(v["hi"]), d),
                      round(float(v["poc"]), d), round(float(v["vah"]), d), round(float(v["val"]), d),
-                     round(float(v["vah2"]), d), round(float(v["val2"]), d), 0, 1 if q is newest else 0, up, dn])
+                     round(float(v["vah2"]), d), round(float(v["val2"]), d), 0, 1 if q is newest else 0, up, dn,
+                     round(float(c2["t0"]), 3) if c2 else None, round(float(c2["lo"]), d) if c2 else None])
     msg = {"t": "cvp", "on": bool(rows), "vps": rows}
     if msg != S.cvp_sent:
         S.cvp_sent = msg

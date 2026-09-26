@@ -495,7 +495,8 @@ public final class FlowModel {
     // is the newest conflict), the others the PREVIOUS ones (a chain back in time that never overlaps); live = cur's
     // conflict 1 is the forming cycle, and t1 is then its START (the lines run to the forming candle's end).
     public static final int CVP_T0 = 0, CVP_T1 = 1, CVP_LO = 2, CVP_HI = 3, CVP_POC = 4, CVP_VAH = 5, CVP_VAL = 6,
-            CVP_VAH2 = 7, CVP_VAL2 = 8, CVP_LIVE = 9, CVP_CUR = 10, CVP_UP = 11, CVP_DN = 12, CVP_N = 13;
+            CVP_VAH2 = 7, CVP_VAL2 = 8, CVP_LIVE = 9, CVP_CUR = 10, CVP_UP = 11, CVP_DN = 12, CVP_C2T0 = 13, CVP_C2LO = 14,
+            CVP_N = 15;
     public boolean cvpOn = false;
     public double[][] cvpVps = new double[0][];
 

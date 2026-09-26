@@ -870,7 +870,9 @@ public final class ChartView extends View {
         }
     }
 
-    private static final float CVP_ARROW_DX = 9f, CVP_ARROW_STEP = 14f;   // dp: first arrow's centre from the VP's left end, spacing
+    // dp: the arrow's centre below conflict 2's box ("below the low of C2"): its 16 dp clear the box's 2 dp edge and the
+    // Takeover marks (5 dp triangles 9 dp under a candle's low); two arrows side by side this far apart
+    private static final float CVP_ARROW_DY = 22f, CVP_ARROW_STEP = 14f;
 
     /** A filled arrow -- shaft and head, 16 dp tall -- centred on (x, y): the Takeover marks' green / red, but an arrow
      *  and not a triangle, so the two never read as the same mark. A thin outline in the canvas colour keeps it clear of
@@ -945,18 +947,24 @@ public final class ChartView extends View {
             }
             if (j > 0) c.drawLines(seg, 0, j, pl);
         }
-        // THE ARROWS (user 2026-09-26: "at the extreme left of the conflict VP draw an icon arrow up green or down red /
-        // down red if the low was taken from the last conflict and up green if the high was taken from the last
-        // conflict"): at the VP's own left end, on its middle line, over its lines -- only when that end is on screen.
-        // A last conflict that made both extremes shows both; one inside the older conflict's range shows none.
+        // THE ARROWS (user 2026-09-26: "down red if the low was taken from the last conflict and up green if the high was
+        // taken from the last conflict"), BELOW THE LOW OF CONFLICT 2 ("below the low of C2"): centred under its red box
+        // (its first bar's start .. its last bar's end = this VP's own start), CVP_ARROW_DY under that box's bottom
+        // edge -- clear of the Takeover marks, which sit just under a candle's low. A last conflict that made both
+        // extremes shows both side by side; one inside the older conflict's range shows none.
         boolean up = v.length > FlowModel.CVP_UP && v[FlowModel.CVP_UP] > 0.5;
         boolean dn = v.length > FlowModel.CVP_DN && v[FlowModel.CVP_DN] > 0.5;
-        if ((up || dn) && !Double.isNaN(hi) && !Double.isNaN(lo)) {
-            float xl = xPx(t0), ym = (float) (top + (yh - 0.5 * (hi + lo)) * ky);
-            if (xl >= r.left && xl <= plotR && ym >= top && ym <= r.bottom) {
-                float ax = xl + CVP_ARROW_DX * d;
-                if (up) { cvpArrow(c, ax, ym, true); ax += CVP_ARROW_STEP * d; }
-                if (dn) cvpArrow(c, ax, ym, false);
+        double c2t0 = v.length > FlowModel.CVP_C2T0 ? v[FlowModel.CVP_C2T0] : Double.NaN;
+        double c2lo = v.length > FlowModel.CVP_C2LO ? v[FlowModel.CVP_C2LO] : Double.NaN;
+        if ((up || dn) && !Double.isNaN(c2t0) && !Double.isNaN(c2lo)) {
+            float xc = 0.5f * (xPx(c2t0) + xPx(t0));
+            float yLow = (float) (top + (yh - c2lo) * ky);
+            // held inside the pane: a box whose low sits at the pane's bottom (the price scale fits the candles, not
+            // the boxes) keeps its arrow, as far below the low as the pane allows, instead of losing it off the edge
+            float ya = Math.min(yLow + CVP_ARROW_DY * d, r.bottom - 9 * d);
+            if (xc >= r.left && xc <= plotR && yLow >= top && yLow <= r.bottom) {
+                if (up && dn) { cvpArrow(c, xc - 0.5f * CVP_ARROW_STEP * d, ya, true); cvpArrow(c, xc + 0.5f * CVP_ARROW_STEP * d, ya, false); }
+                else cvpArrow(c, xc, ya, up);
             }
         }
     }
