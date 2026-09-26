@@ -286,6 +286,7 @@ public final class ChartView extends View {
     private static final int C_NORM_UP_X = 13, C_NORM_DN_X = 14;
     private static final float CONTRA_BORDER_W = 2f;   // dp: the orange / blue border (config.CONTRA_BORDER_W); others 1
     private static final float CONF_PAD = 3f;        // dp: how far a CONFLICT bar's red box stands off its body, each side
+    private static final float CONF_NUM_SIZE = 12f;  // dp: the merge number over a box of merged conflicts (on screen only)
     private static final double LN2 = Math.log(2.0);
 
     public ChartView(Context ctx, FlowModel model) {
@@ -709,40 +710,71 @@ public final class ChartView extends View {
         // the first candle's left to the last one's right (CONF_PAD beyond the bodies) and from the run's highest high
         // to its lowest low -- over the candles, so a neighbour never hides it. A run the view cuts is still measured
         // whole. The forming candle counts on its live high / low while its tapes stand there.
+        // ... and ON SCREEN ONLY (user 2026-09-26: "this is just for visual purposes ONLY / in case we have two or more
+        // conflict bars seperated only by 1 bar, we merge them but for visual purposes ONLY / and we write above the
+        // high of the conflict bar box the merge number, example , "2", "3" .... / in black"): runs with exactly ONE
+        // bar between them are drawn as ONE box -- over both runs' boxes and the bar between (so no candle pokes out of
+        // it) -- with the number of boxes merged above its high. Nothing else sees it: the engine, the frozen conflicts,
+        // the Conflict VPs and the Market Position bias all keep the runs as they are.
         if (s.cConf != null) {
-            pl.setColor(Color.RED); pl.setStrokeWidth(2 * d);
             int nC = Math.min(s.n, s.cConf.length);
             int a = Math.max(0, Math.min(i0, nC));
+            if (a > 0 && a + 1 < nC && s.cConf[a] == 0 && s.cConf[a - 1] != 0 && s.cConf[a + 1] != 0) a--;  // the bar INSIDE a group
             while (a > 0 && a < nC && s.cConf[a] != 0 && s.cConf[a - 1] != 0) a--;   // back to the start of a run the view cuts
+            while (a >= 2 && a < nC && s.cConf[a] != 0 && s.cConf[a - 1] == 0 && s.cConf[a - 2] != 0) {   // ... and of its group
+                a -= 2;
+                while (a > 0 && s.cConf[a - 1] != 0) a--;
+            }
+            float ptSize0 = pt.getTextSize();
+            pt.setTextSize(CONF_NUM_SIZE * d); pt.setFakeBoldText(true);
             for (int i = a; i < nC && i < i1; ) {
                 if (s.cConf[i] == 0) { i++; continue; }
-                int j = i;
+                int j = i, runs = 1;
                 while (j + 1 < nC && s.cConf[j + 1] != 0) j++;             // the run [i, j], past the view if need be
                 float xl = Float.MAX_VALUE, xr = -Float.MAX_VALUE;
                 double rHi = -Double.MAX_VALUE, rLo = Double.MAX_VALUE;
-                for (int k = i; k <= j; k++) {
-                    boolean isForm = k == last && forming;
-                    double hh = isForm ? fh : s.cH[k], ll = isForm ? fl : s.cL[k];
-                    if (Double.isNaN(hh) || Double.isNaN(ll)) continue;
-                    double te = isForm ? fte : s.cTe[k];
-                    double dur = Math.max(1e-9, te - s.cT[k]);
-                    float xm = xPx(s.cT[k] + dur * 0.5), hw = Math.max(0.6f * d, (float) (dur * 0.72 * 0.5 / (vx1 - vx0) * plotR));
-                    xl = Math.min(xl, xm - hw); xr = Math.max(xr, xm + hw);
-                    rHi = Math.max(rHi, hh); rLo = Math.min(rLo, ll);
+                int r0 = i;
+                while (true) {
+                    for (int k = r0; k <= j; k++) {
+                        boolean isForm = k == last && forming;
+                        double hh = isForm ? fh : s.cH[k], ll = isForm ? fl : s.cL[k];
+                        if (Double.isNaN(hh) || Double.isNaN(ll)) continue;
+                        double te = isForm ? fte : s.cTe[k];
+                        double dur = Math.max(1e-9, te - s.cT[k]);
+                        float xm = xPx(s.cT[k] + dur * 0.5), hw = Math.max(0.6f * d, (float) (dur * 0.72 * 0.5 / (vx1 - vx0) * plotR));
+                        xl = Math.min(xl, xm - hw); xr = Math.max(xr, xm + hw);
+                        rHi = Math.max(rHi, hh); rLo = Math.min(rLo, ll);
+                    }
+                    // THE BOX'S REACH (user 2026-09-25): no longer the run's own high / low -- the engine's cfh / cfl, down to
+                    // the closest previous LIME area's low below it and up to the closest previous PURPLE area's high above it
+                    // (24 h at most; one found -> the other side mirrors its distance; none -> the run's own). Held to at
+                    // least the candles, so a live wick the engine has not seen yet never pokes out of its box.
+                    float eh = (s.cCfh != null && r0 < s.cCfh.length) ? s.cCfh[r0] : Float.NaN;
+                    float el = (s.cCfl != null && r0 < s.cCfl.length) ? s.cCfl[r0] : Float.NaN;
+                    if (!Float.isNaN(eh) && !Float.isNaN(el)) { rHi = Math.max(rHi, eh); rLo = Math.min(rLo, el); }
+                    // the next run, ONE bar on: merged into this box (the bar between is inside it)
+                    if (!(j + 2 < nC && s.cConf[j + 1] == 0 && s.cConf[j + 2] != 0)) break;
+                    int g = j + 1;
+                    boolean gForm = g == last && forming;
+                    double gh = gForm ? fh : s.cH[g], gl = gForm ? fl : s.cL[g];
+                    if (!Double.isNaN(gh) && !Double.isNaN(gl)) { rHi = Math.max(rHi, gh); rLo = Math.min(rLo, gl); }
+                    r0 = j + 2; j = r0; runs++;
+                    while (j + 1 < nC && s.cConf[j + 1] != 0) j++;
                 }
-                // THE BOX'S REACH (user 2026-09-25): no longer the run's own high / low -- the engine's cfh / cfl, down to the
-                // closest previous LIME area's low below it and up to the closest previous PURPLE area's high above it
-                // (24 h at most; one found -> the other side mirrors its distance; none -> the run's own). Held to at
-                // least the candles, so a live wick the engine has not seen yet never pokes out of its box.
-                float eh = (s.cCfh != null && i < s.cCfh.length) ? s.cCfh[i] : Float.NaN;
-                float el = (s.cCfl != null && i < s.cCfl.length) ? s.cCfl[i] : Float.NaN;
-                if (!Float.isNaN(eh) && !Float.isNaN(el)) { rHi = Math.max(rHi, eh); rLo = Math.min(rLo, el); }
                 if (xr >= xl) {
                     float yhi = (float) (top + (yh - rHi) / (yh - yl) * hgt), ylo = (float) (top + (yh - rLo) / (yh - yl) * hgt);
+                    pl.setColor(Color.RED); pl.setStrokeWidth(2 * d);
                     c.drawRect(xl - CONF_PAD * d, yhi, xr + CONF_PAD * d, ylo, pl);
+                    if (runs > 1) {                                        // the merge number, above the box's high
+                        String lab = String.valueOf(runs);
+                        pt.setColor(bw ? Color.BLACK : Color.parseColor("#E6E6E6"));
+                        float ty = Math.max(top + CONF_NUM_SIZE * d, yhi - 4 * d);
+                        c.drawText(lab, 0.5f * (xl + xr) - 0.5f * pt.measureText(lab), ty, pt);
+                    }
                 }
                 i = j + 1;
             }
+            pt.setFakeBoldText(false); pt.setTextSize(ptSize0);
         }
         // the marked candle: a tap here or on its feed row
         if (!Double.isNaN(selCycle)) {
